@@ -8,12 +8,13 @@
 	<array>
 		<dict>
 			<key>CFBundleTypeName</key>
-			<string>Audio</string>
+			<string>Audio or Video</string>
 			<key>LSHandlerRank</key>
 			<string>Alternate</string>
 			<key>LSItemContentTypes</key>
 			<array>
 				<string>public.audio</string>
+				<string>public.movie</string>
 			</array>
 		</dict>
 	</array>

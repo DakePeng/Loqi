@@ -1,18 +1,34 @@
 {
   "sourceLanguage" : "en",
   "strings" : {
-    "Stop" : {
+    "This file has no audio track to transcribe." : {
       "localizations" : {
         "ja" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "停止"
+            "value" : "このファイルには文字起こしできる音声トラックがありません。"
           }
         },
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "停止"
+            "value" : "此文件没有可转写的音轨。"
+          }
+        }
+      }
+    },
+    "Couldn't read the audio from this file." : {
+      "localizations" : {
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "このファイルの音声を読み取れませんでした。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "无法读取此文件的音频。"
           }
         }
       }
@@ -1880,6 +1896,23 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "开始会话后，实时翻译字幕会显示在这里。"
+          }
+        }
+      }
+    },
+    "Stop" : {
+      "extractionState" : "stale",
+      "localizations" : {
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "停止"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "停止"
           }
         }
       }

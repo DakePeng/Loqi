@@ -42,7 +42,7 @@ struct SessionsView: View {
             }
             .fileImporter(
                 isPresented: $pickingFile,
-                allowedContentTypes: [.audio]
+                allowedContentTypes: [.audio, .movie]
             ) { result in
                 if case .success(let url) = result {
                     importURL = url

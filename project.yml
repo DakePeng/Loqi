@@ -70,10 +70,11 @@ targets:
           - UIInterfaceOrientationLandscapeRight
         UIRequiresFullScreen: true
         CFBundleDocumentTypes:
-          - CFBundleTypeName: Audio
+          - CFBundleTypeName: Audio or Video
             LSHandlerRank: Alternate
             LSItemContentTypes:
               - public.audio
+              - public.movie
     dependencies:
       - package: MLXLM
         product: MLXLLM

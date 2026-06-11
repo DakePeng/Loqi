@@ -15,6 +15,8 @@ struct ImportAudioSheet: View {
     /// Shared with the Record screen: empty = transcribe only (default).
     @AppStorage("captions.translation") private var translationRaw = ""
     @AppStorage("captions.speakerCount") private var speakerCount = 0
+    /// Same recognizer choice as live recording.
+    @AppStorage("asr.engine") private var asrEngine = "apple"
     @State private var phase: FileImportEngine.Phase?
     @State private var importError: String?
 
@@ -95,7 +97,8 @@ struct ImportAudioSheet: View {
                     url: url,
                     direction: LanguagePair(
                         source: source, target: translationTarget ?? source),
-                    speakerCount: speakerCount
+                    speakerCount: speakerCount,
+                    engine: asrEngine
                 ) { phase in
                     self.phase = phase
                 }

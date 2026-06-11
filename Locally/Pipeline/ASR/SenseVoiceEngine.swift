@@ -198,8 +198,8 @@ actor SenseVoiceEngine: SpeechEngine {
 
 /// Owns the sherpa-onnx recognizer on its own actor so a 0.3–0.8s decode
 /// never blocks `feed` — audio consumption (recording, diarization) must
-/// stay real-time.
-private actor SenseVoiceDecoder {
+/// stay real-time. Shared with `SenseVoiceFileTranscriber` for imports.
+actor SenseVoiceDecoder {
     private var recognizer: SherpaOnnxOfflineRecognizer?
     private let language: AppLanguage
 

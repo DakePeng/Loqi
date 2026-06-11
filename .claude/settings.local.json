@@ -10,7 +10,16 @@
       "Bash(git rm *)",
       "Bash(rmdir Locally/Features/Conversation Locally/Pipeline/TTS)",
       "Bash(python3 -)",
-      "Bash(swiftc -parse Locally/Pipeline/Speaker/VoiceprintService.swift Locally/Models/AppLanguage.swift Locally/Features/Settings/SettingsView.swift Locally/LocallyApp.swift)"
+      "Bash(swiftc -parse Locally/Pipeline/Speaker/VoiceprintService.swift Locally/Models/AppLanguage.swift Locally/Features/Settings/SettingsView.swift Locally/LocallyApp.swift)",
+      "Bash(curl -s --max-time 30 \"https://www.modelscope.cn/api/v1/models/mlx-community/Qwen3.5-2B-4bit/repo/files?Revision=master&Recursive=true\")",
+      "Bash(curl -s --max-time 30 -o /dev/null -D - -H \"Range: bytes=0-99\" \"https://www.modelscope.cn/models/mlx-community/Qwen3.5-2B-4bit/resolve/master/model.safetensors\")",
+      "Bash(curl -s --max-time 30 -o /tmp/api_range_test.bin -D - -H \"Range: bytes=0-99\" \"https://www.modelscope.cn/api/v1/models/mlx-community/Qwen3.5-2B-4bit/repo?Revision=master&FilePath=model.safetensors\")",
+      "Bash(curl -sL --max-time 30 -o /tmp/cdn_range.bin -D - -H \"Range: bytes=1000000-1000099\" \"https://www.modelscope.cn/models/mlx-community/Qwen3.5-2B-4bit/resolve/master/model.safetensors\")",
+      "Bash(xcodegen generate *)",
+      "Bash(xcrun simctl *)",
+      "Bash(xcodebuild test *)",
+      "Bash(grep -vE \"^$|note:|warning: Skipping\")",
+      "Bash(git commit *)"
     ]
   }
 }
