@@ -74,6 +74,12 @@ actor LLMService {
         try await task.value
     }
 
+    /// Cancel an in-flight download/load. The completed-file checkpoints stay
+    /// on disk, so a later `load()` resumes rather than restarting.
+    func cancelLoad() {
+        loadTask?.cancel()
+    }
+
     private func performLoad() async throws {
         guard available() > model.requiredHeadroom else {
             loadState = .failed("Not enough free memory to load the model")
@@ -106,6 +112,11 @@ actor LLMService {
             loadState = .ready
             ModelScopeDownloader.removeSnapshots(
                 notIn: Set(ModelCatalog.all.map(\.id)))
+        } catch is CancellationError {
+            // User stopped the download — back to a clean idle state, not an
+            // error. Checkpointed files remain for a later resume.
+            loadState = .unloaded
+            throw CancellationError()
         } catch {
             loadState = .failed(error.localizedDescription)
             throw error

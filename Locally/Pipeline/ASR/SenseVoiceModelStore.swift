@@ -42,6 +42,8 @@ final class SenseVoiceModelStore {
         let modelScopePath: String
         /// Sanity floor — a finished file smaller than this is corrupt.
         let minBytes: Int64
+        /// Real download size, used to weight progress and show a size readout.
+        let expectedBytes: Int64
 
         func path(for source: ASRModelSource) -> String {
             switch source {
@@ -56,18 +58,26 @@ final class SenseVoiceModelStore {
             name: "model.int8.onnx",
             hfPath: "csukuangfj/sherpa-onnx-sense-voice-zh-en-ja-ko-yue-2024-07-17/resolve/main/model.int8.onnx",
             modelScopePath: "models/mariolux/sherpa-onnx-sense-voice-zh-en-ja-ko-yue-2024-07-17/resolve/master/model.int8.onnx",
-            minBytes: 200_000_000),
+            minBytes: 200_000_000,
+            expectedBytes: 239_233_841),
         RemoteFile(
             name: "tokens.txt",
             hfPath: "csukuangfj/sherpa-onnx-sense-voice-zh-en-ja-ko-yue-2024-07-17/resolve/main/tokens.txt",
             modelScopePath: "models/mariolux/sherpa-onnx-sense-voice-zh-en-ja-ko-yue-2024-07-17/resolve/master/tokens.txt",
-            minBytes: 100_000),
+            minBytes: 100_000,
+            expectedBytes: 320_000),
         RemoteFile(
             name: "silero_vad.onnx",
             hfPath: "csukuangfj/vad/resolve/main/silero_vad.onnx",
             modelScopePath: "models/manyeyes/silero-vad-onnx/resolve/master/silero_vad.onnx",
-            minBytes: 1_000_000),
+            minBytes: 1_000_000,
+            expectedBytes: 1_807_522),
     ]
+
+    /// Total download size across all files, for the progress readout.
+    nonisolated static var totalExpectedBytes: Int64 {
+        files.reduce(0) { $0 + $1.expectedBytes }
+    }
 
     nonisolated static var directory: URL {
         URL.applicationSupportDirectory.appending(path: "SenseVoice", directoryHint: .isDirectory)
@@ -103,17 +113,17 @@ final class SenseVoiceModelStore {
         try? FileManager.default.createDirectory(
             at: Self.directory, withIntermediateDirectories: true)
 
-        let totalWeight = Self.files.reduce(0) { $0 + $1.minBytes }
+        let totalWeight = Self.files.reduce(0) { $0 + $1.expectedBytes }
         var doneWeight: Int64 = 0
         for file in Self.files {
             do {
                 let base = doneWeight
                 try await fetch(file, from: source) { [weak self] fileFraction in
                     let blended = Double(base) / Double(totalWeight)
-                        + fileFraction * Double(file.minBytes) / Double(totalWeight)
+                        + fileFraction * Double(file.expectedBytes) / Double(totalWeight)
                     self?.progress = min(blended, 1)
                 }
-                doneWeight += file.minBytes
+                doneWeight += file.expectedBytes
             } catch {
                 logger.error("download \(file.name) failed: \(error)")
                 lastError = String(

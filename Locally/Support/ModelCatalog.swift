@@ -50,6 +50,9 @@ struct ModelOption: Identifiable, Sendable, Equatable {
     let displayName: String
     /// Free memory required before loading, in bytes.
     let requiredHeadroom: UInt64
+    /// Approximate download size in bytes — used only to turn the
+    /// fraction-complete progress into a human-readable size/speed readout.
+    let downloadBytes: Int64
 }
 
 enum ModelCatalog {
@@ -59,21 +62,24 @@ enum ModelCatalog {
     static let qwen35_2b = ModelOption(
         id: "mlx-community/Qwen3.5-2B-4bit",
         displayName: "Qwen3.5 2B — recommended",
-        requiredHeadroom: 1_800_000_000)
+        requiredHeadroom: 1_800_000_000,
+        downloadBytes: 1_300_000_000)
 
     /// Known-good fallback if the 2B model is unavailable on the chosen
     /// source or quality regresses.
     static let qwen3_1_7b = ModelOption(
         id: "mlx-community/Qwen3-1.7B-4bit",
         displayName: "Qwen3 1.7B — fallback",
-        requiredHeadroom: 1_600_000_000)
+        requiredHeadroom: 1_600_000_000,
+        downloadBytes: 1_000_000_000)
 
     /// Lightest tier (~620MB): fastest refinements and least contention
     /// with ASR, at noticeably lower translation quality.
     static let qwen35_0_8b = ModelOption(
         id: "mlx-community/Qwen3.5-0.8B-4bit",
         displayName: "Qwen3.5 0.8B — fastest",
-        requiredHeadroom: 900_000_000)
+        requiredHeadroom: 900_000_000,
+        downloadBytes: 620_000_000)
 
     static let `default` = qwen35_2b
     static let all = [qwen35_2b, qwen3_1_7b, qwen35_0_8b]

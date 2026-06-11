@@ -14,13 +14,19 @@ struct SettingsView: View {
     @State private var senseVoiceStore = SenseVoiceModelStore()
     @State private var senseVoiceInstalled = SenseVoiceModelStore.isInstalled
     @State private var diarizerState = "—"
-    @State private var diarizerProgress: Double?
+    @State private var diarizerDownloading = false
     @State private var diarizerError: String?
+    @State private var diarizerSpeedometer = DownloadSpeedometer()
+    @State private var senseVoiceSpeedometer = DownloadSpeedometer()
     @State private var tokensPerSecond: Double?
     @State private var llmState = "—"
     @State private var availableMemory = "—"
-    @State private var downloadProgress: Double?
+    @State private var llmDownloading = false
+    @State private var llmSpeedometer = DownloadSpeedometer()
     @State private var downloadError: String?
+
+    /// FluidAudio segmentation + embedding models, ~50 MB total.
+    private static let diarizerTotalBytes: Int64 = 50_000_000
 
     var body: some View {
         NavigationStack {
@@ -44,17 +50,19 @@ struct SettingsView: View {
                                     Text(source.displayName).tag(source.rawValue)
                                 }
                             }
-                            Button("Download SenseVoice model (~230 MB)") {
-                                Task {
-                                    let source = ASRModelSource(
-                                        rawValue: asrSourceRaw) ?? .modelScope
-                                    await senseVoiceStore.download(from: source)
-                                    senseVoiceInstalled = SenseVoiceModelStore.isInstalled
-                                }
-                            }
-                            .disabled(senseVoiceStore.downloading)
                             if senseVoiceStore.downloading {
-                                ProgressView(value: senseVoiceStore.progress)
+                                DownloadProgressRow(speedometer: senseVoiceSpeedometer)
+                            } else {
+                                Button("Download SenseVoice model (~230 MB)") {
+                                    senseVoiceSpeedometer.start(
+                                        totalBytes: SenseVoiceModelStore.totalExpectedBytes)
+                                    Task {
+                                        let source = ASRModelSource(
+                                            rawValue: asrSourceRaw) ?? .modelScope
+                                        await senseVoiceStore.download(from: source)
+                                        senseVoiceInstalled = SenseVoiceModelStore.isInstalled
+                                    }
+                                }
                             }
                             if let error = senseVoiceStore.lastError {
                                 Text(error)
@@ -103,28 +111,19 @@ struct SettingsView: View {
                             }
                         }
 
-                        Button("Download model now") {
-                            Task {
-                                downloadError = nil
-                                downloadProgress = 0
-                                do {
-                                    try await pipeline.llm.load { progress in
-                                        Task { @MainActor in downloadProgress = progress }
-                                    }
-                                } catch {
-                                    downloadError = error.localizedDescription
-                                }
-                                downloadProgress = nil
-                                await refreshStats()
+                        if llmState != "Ready" {
+                            if llmDownloading {
+                                DownloadProgressRow(
+                                    speedometer: llmSpeedometer,
+                                    onStop: stopDownload)
+                            } else {
+                                Button("Download model now") { startDownload() }
                             }
-                        }
-                        if let downloadProgress {
-                            ProgressView(value: downloadProgress)
-                        }
-                        if let downloadError {
-                            Text(downloadError)
-                                .font(.footnote)
-                                .foregroundStyle(.red)
+                            if let downloadError {
+                                Text(downloadError)
+                                    .font(.footnote)
+                                    .foregroundStyle(.red)
+                            }
                         }
                     }
                     .disabled(!llmEnabled)
@@ -137,12 +136,12 @@ struct SettingsView: View {
                         }
                     }
 
-                    Button("Download speaker model") {
-                        downloadSpeakerModel()
-                    }
-                    .disabled(diarizerProgress != nil)
-                    if let diarizerProgress {
-                        ProgressView(value: diarizerProgress)
+                    if diarizerDownloading {
+                        DownloadProgressRow(speedometer: diarizerSpeedometer)
+                    } else {
+                        Button("Download speaker model") {
+                            downloadSpeakerModel()
+                        }
                     }
                     if let diarizerError {
                         Text(diarizerError)
@@ -201,6 +200,9 @@ struct SettingsView: View {
                 await refreshStats()
             }
             .refreshable { await refreshStats() }
+            .onChange(of: senseVoiceStore.progress) { _, p in
+                senseVoiceSpeedometer.update(p)
+            }
         }
     }
 
@@ -215,20 +217,44 @@ struct SettingsView: View {
     }
 
     private func downloadSpeakerModel() {
+        diarizerError = nil
+        diarizerDownloading = true
+        diarizerSpeedometer.start(totalBytes: Self.diarizerTotalBytes)
         Task {
-            diarizerError = nil
-            diarizerProgress = 0
             let source = DiarizerSource(rawValue: diarizerSourceRaw) ?? .huggingFace
             do {
                 try await pipeline.voiceprint.loadIfNeeded(source: source) { progress in
-                    Task { @MainActor in diarizerProgress = progress }
+                    Task { @MainActor in diarizerSpeedometer.update(progress) }
                 }
             } catch {
                 diarizerError = error.localizedDescription
             }
-            diarizerProgress = nil
+            diarizerDownloading = false
             await refreshStats()
         }
+    }
+
+    private func startDownload() {
+        downloadError = nil
+        llmDownloading = true
+        llmSpeedometer.start(totalBytes: ModelCatalog.option(for: modelID).downloadBytes)
+        Task {
+            do {
+                try await pipeline.llm.load { progress in
+                    Task { @MainActor in llmSpeedometer.update(progress) }
+                }
+            } catch is CancellationError {
+                // Stopped by the user — not an error.
+            } catch {
+                downloadError = error.localizedDescription
+            }
+            llmDownloading = false
+            await refreshStats()
+        }
+    }
+
+    private func stopDownload() {
+        Task { await pipeline.llm.cancelLoad() }
     }
 
     private func refreshStats() async {

@@ -106,3 +106,12 @@ targets:
           - $(SRCROOT)/ThirdParty/sherpa-onnx/sherpa-onnx.xcframework/Headers
     dependencies:
       - target: Locally
+
+schemes:
+  Locally:
+    build:
+      targets:
+        Locally: all
+    test:
+      targets:
+        - LocallyTests
