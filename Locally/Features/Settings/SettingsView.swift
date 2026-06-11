@@ -10,7 +10,7 @@ struct SettingsView: View {
     @AppStorage("diarizer.source") private var diarizerSourceRaw = DiarizerSource.huggingFace.rawValue
     @AppStorage("audio.saveRecordings") private var saveRecordings = true
     @AppStorage("asr.engine") private var asrEngine = "apple"
-    @AppStorage("asr.source") private var asrSourceRaw = ASRModelSource.huggingFace.rawValue
+    @AppStorage("asr.source") private var asrSourceRaw = ASRModelSource.modelScope.rawValue
     @State private var senseVoiceStore = SenseVoiceModelStore()
     @State private var senseVoiceInstalled = SenseVoiceModelStore.isInstalled
     @State private var diarizerState = "—"
@@ -47,7 +47,7 @@ struct SettingsView: View {
                             Button("Download SenseVoice model (~230 MB)") {
                                 Task {
                                     let source = ASRModelSource(
-                                        rawValue: asrSourceRaw) ?? .huggingFace
+                                        rawValue: asrSourceRaw) ?? .modelScope
                                     await senseVoiceStore.download(from: source)
                                     senseVoiceInstalled = SenseVoiceModelStore.isInstalled
                                 }

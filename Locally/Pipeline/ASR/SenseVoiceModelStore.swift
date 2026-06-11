@@ -2,25 +2,27 @@ import Foundation
 import Observation
 import os
 
-/// Download source for the SenseVoice recognition models. hf-mirror.com is
-/// path-compatible with huggingface.co (same repos, reachable in China).
+/// Download source for the SenseVoice recognition models. ModelScope 魔搭
+/// hosts community mirrors of the exact sherpa-onnx files (byte-identical)
+/// and is reachable in China; its `resolve/master` CDN honors Range, so the
+/// resumable downloader works unchanged.
 enum ASRModelSource: String, CaseIterable, Identifiable {
+    case modelScope
     case huggingFace
-    case hfMirror
 
     var id: String { rawValue }
 
     var displayName: String {
         switch self {
+        case .modelScope: "ModelScope 魔搭"
         case .huggingFace: "Hugging Face"
-        case .hfMirror: "HF-Mirror 镜像"
         }
     }
 
     var host: String {
         switch self {
+        case .modelScope: "www.modelscope.cn"
         case .huggingFace: "huggingface.co"
-        case .hfMirror: "hf-mirror.com"
         }
     }
 }
@@ -31,26 +33,39 @@ enum ASRModelSource: String, CaseIterable, Identifiable {
 @MainActor
 @Observable
 final class SenseVoiceModelStore {
-    /// One file the engine needs, addressed relative to a HF-style host.
+    /// One file the engine needs. The HF and ModelScope repos hold the same
+    /// bytes but differ in owner/revision, so each source has its own path
+    /// (already including the host-specific prefix).
     struct RemoteFile: Sendable {
         let name: String
-        let repoPath: String
+        let hfPath: String
+        let modelScopePath: String
         /// Sanity floor — a finished file smaller than this is corrupt.
         let minBytes: Int64
+
+        func path(for source: ASRModelSource) -> String {
+            switch source {
+            case .huggingFace: hfPath
+            case .modelScope: modelScopePath
+            }
+        }
     }
 
     nonisolated static let files: [RemoteFile] = [
         RemoteFile(
             name: "model.int8.onnx",
-            repoPath: "csukuangfj/sherpa-onnx-sense-voice-zh-en-ja-ko-yue-2024-07-17/resolve/main/model.int8.onnx",
+            hfPath: "csukuangfj/sherpa-onnx-sense-voice-zh-en-ja-ko-yue-2024-07-17/resolve/main/model.int8.onnx",
+            modelScopePath: "models/mariolux/sherpa-onnx-sense-voice-zh-en-ja-ko-yue-2024-07-17/resolve/master/model.int8.onnx",
             minBytes: 200_000_000),
         RemoteFile(
             name: "tokens.txt",
-            repoPath: "csukuangfj/sherpa-onnx-sense-voice-zh-en-ja-ko-yue-2024-07-17/resolve/main/tokens.txt",
+            hfPath: "csukuangfj/sherpa-onnx-sense-voice-zh-en-ja-ko-yue-2024-07-17/resolve/main/tokens.txt",
+            modelScopePath: "models/mariolux/sherpa-onnx-sense-voice-zh-en-ja-ko-yue-2024-07-17/resolve/master/tokens.txt",
             minBytes: 100_000),
         RemoteFile(
             name: "silero_vad.onnx",
-            repoPath: "csukuangfj/vad/resolve/main/silero_vad.onnx",
+            hfPath: "csukuangfj/vad/resolve/main/silero_vad.onnx",
+            modelScopePath: "models/manyeyes/silero-vad-onnx/resolve/master/silero_vad.onnx",
             minBytes: 1_000_000),
     ]
 
@@ -123,7 +138,7 @@ final class SenseVoiceModelStore {
             return
         }
 
-        let url = URL(string: "https://\(source.host)/\(file.repoPath)")!
+        let url = URL(string: "https://\(source.host)/\(file.path(for: source))")!
         let part = Self.directory.appending(path: "\(file.name).part")
         var attempt = 0
         while true {
