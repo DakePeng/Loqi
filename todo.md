@@ -1,4 +1,4 @@
-# Locally — TODO
+# Loqi — TODO
 
 Roadmap + completeness review. Review date: 2026-06-11; capture-first
 transformation completed same day (build green, 95 tests in 14 suites).

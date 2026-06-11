@@ -1,4 +1,4 @@
-# Locally
+# Loqi
 
 Private voice notes, transcripts and summaries that run **entirely on your iPhone** — no servers, no internet needed after setup. Live translation included as an optional lens.
 
@@ -23,9 +23,9 @@ Private voice notes, transcripts and summaries that run **entirely on your iPhon
    brew install xcodegen
    cd ~/Desktop/Locally
    xcodegen generate
-   open Locally.xcodeproj
+   open Loqi.xcodeproj
    ```
-3. **Set up signing.** In Xcode: click the blue *Locally* project icon → *Signing & Capabilities* → check *Automatically manage signing* and pick your team (your Apple ID — add it under Xcode → Settings → Accounts). A free Apple ID works for development but re-signs every 7 days; a paid developer account ($99/yr) removes that and enables TestFlight.
+3. **Set up signing.** In Xcode: click the blue *Loqi* project icon → *Signing & Capabilities* → check *Automatically manage signing* and pick your team (your Apple ID — add it under Xcode → Settings → Accounts). A free Apple ID works for development but re-signs every 7 days; a paid developer account ($99/yr) removes that and enables TestFlight.
 4. **Prepare your iPhone.** Plug it in, tap *Trust* on the phone, and enable **Developer Mode** (Settings → Privacy & Security → Developer Mode, then reboot).
 5. **Run.** Select your iPhone as the run destination (top bar) and press ⌘R.
 
@@ -34,8 +34,8 @@ First launch walks through mic permission and downloads the speech models. The L
 ## Project layout
 
 ```
-Locally/
-├── LocallyApp.swift            App entry; tabs + translation host stack
+Loqi/
+├── LoqiApp.swift            App entry; tabs + translation host stack
 ├── Features/                   SwiftUI screens
 │   ├── Captions/               Record tab: live transcript + controls
 │   ├── Sessions/               Archive: detail, playback, summaries, import
@@ -53,7 +53,7 @@ Locally/
 ├── Models/                     CaptionEntry, SessionRecord, AppLanguage
 └── Support/                    CaptionPipeline (orchestrator), CaptionStore,
                                 SessionArchive, ThermalMonitor, ModelCatalog
-LocallyTests/                   Pure-logic tests (run in the simulator)
+LoqiTests/                   Pure-logic tests (run in the simulator)
 ```
 
 ### Architecture in one paragraph
