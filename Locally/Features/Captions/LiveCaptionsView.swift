@@ -35,10 +35,33 @@ struct LiveCaptionsView: View {
         LanguagePair(source: source, target: translationTarget ?? source)
     }
 
+    @Environment(\.verticalSizeClass) private var verticalSizeClass
+
     var body: some View {
         // One filter pass per body evaluation — the helpers all share it.
         let entries = pipeline.store.entries(in: .captions)
-        return NavigationStack {
+        // Rotating to landscape turns the screen into a full-bleed caption
+        // display; rotating back restores the full Record UI.
+        if verticalSizeClass == .compact {
+            HorizontalCaptionView(pipeline: pipeline, entries: entries) {
+                toggleSession()
+            }
+            .toolbar(.hidden, for: .tabBar)
+            .alert("Couldn't start", isPresented: .init(
+                get: { errorMessage != nil },
+                set: { if !$0 { errorMessage = nil } }
+            )) {
+                Button("OK", role: .cancel) {}
+            } message: {
+                Text(errorMessage ?? "")
+            }
+        } else {
+            portrait(entries)
+        }
+    }
+
+    private func portrait(_ entries: [CaptionEntry]) -> some View {
+        NavigationStack {
             VStack(spacing: 0) {
                 transcript(entries)
                 controls
