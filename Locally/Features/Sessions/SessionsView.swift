@@ -75,6 +75,7 @@ private struct SessionDetailView: View {
     @State private var renamingSlot: Int?
     @State private var renameText = ""
     @State private var scrollTarget: UUID?
+    @State private var highlightedBlockID: UUID?
 
     private var session: SessionRecord? {
         pipeline.archive.sessions.first { $0.id == sessionID }
@@ -104,8 +105,7 @@ private struct SessionDetailView: View {
 
                 if let summary = session.summary {
                     Section("Summary") {
-                        Text(summary)
-                            .font(.callout)
+                        SummaryTextView(summary: summary)
                     }
                 }
 
@@ -157,29 +157,7 @@ private struct SessionDetailView: View {
 
                 Section("Transcript") {
                     ForEach(transcriptBlocks(session), id: \.0) { block in
-                        VStack(alignment: .leading, spacing: 6) {
-                            if let label = block.1 {
-                                Button {
-                                    startRename(block.2)
-                                } label: {
-                                    Label(label, systemImage: "person")
-                                        .font(.caption.weight(.semibold))
-                                        .foregroundStyle(.tint)
-                                }
-                            }
-                            ForEach(block.3) { entry in
-                                VStack(alignment: .leading, spacing: 2) {
-                                    Text(entry.sourceText)
-                                        .font(.caption)
-                                        .foregroundStyle(.secondary)
-                                    if let translation = entry.translation {
-                                        Text(translation)
-                                    }
-                                }
-                                .id(entry.id)
-                            }
-                        }
-                        .padding(.vertical, 2)
+                        transcriptBlockView(block)
                     }
                 }
 
@@ -240,10 +218,53 @@ private struct SessionDetailView: View {
             Button("Cancel", role: .cancel) { renamingSlot = nil }
         }
         .onChange(of: scrollTarget) {
-            guard let target = scrollTarget else { return }
-            withAnimation { proxy.scrollTo(target, anchor: .top) }
+            guard let target = scrollTarget, let session else { return }
+            // List only registers row ids with the scroll proxy, so jump to
+            // the transcript BLOCK containing the anchor entry, not the
+            // entry's nested id (which scrollTo can't reach).
+            let blockID = transcriptBlocks(session).first {
+                $0.3.contains { $0.id == target }
+            }?.0
+            withAnimation { proxy.scrollTo(blockID ?? target, anchor: .top) }
             scrollTarget = nil
+            // Flash the block so the eye lands on the right spot.
+            highlightedBlockID = blockID
+            Task {
+                try? await Task.sleep(for: .seconds(1.6))
+                withAnimation { highlightedBlockID = nil }
+            }
         }
+    }
+
+    private func transcriptBlockView(
+        _ block: (UUID, String?, Int, [SessionRecord.Entry])
+    ) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            if let label = block.1 {
+                Button {
+                    startRename(block.2)
+                } label: {
+                    Label(label, systemImage: "person")
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(.tint)
+                }
+            }
+            ForEach(block.3) { entry in
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(entry.sourceText)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                    if let translation = entry.translation {
+                        Text(translation)
+                    }
+                }
+                .id(entry.id)
+            }
+        }
+        .padding(.vertical, 2)
+        .listRowBackground(
+            block.0 == highlightedBlockID
+                ? Color.accentColor.opacity(0.14) : nil)
     }
 
     /// (block id, speaker label, slot, entries) grouped by consecutive speaker.
@@ -333,5 +354,72 @@ private struct SessionDetailView: View {
                 actionError = error.localizedDescription
             }
         }
+    }
+}
+
+/// Renders the plain-text summary (overview paragraph + "• " lines) with
+/// real typography: paragraphs read as prose, bullets get a hanging indent
+/// and breathing room, instead of one undifferentiated text blob.
+struct SummaryTextView: View {
+    let summary: String
+
+    enum Part: Equatable {
+        case paragraph(String)
+        case bullet(String)
+    }
+
+    /// Small models vary the bullet glyph; accept the common ones.
+    /// nonisolated: pure string logic, also exercised off-main in tests.
+    nonisolated static func parse(_ summary: String) -> [Part] {
+        let markers = ["•", "・", "·", "●", "-", "*"]
+        var parts: [Part] = []
+        var paragraph: [String] = []
+
+        func closeParagraph() {
+            if !paragraph.isEmpty {
+                parts.append(.paragraph(paragraph.joined(separator: " ")))
+                paragraph = []
+            }
+        }
+
+        for rawLine in summary.split(separator: "\n", omittingEmptySubsequences: false) {
+            let line = rawLine.trimmingCharacters(in: .whitespaces)
+            if line.isEmpty {
+                closeParagraph()
+            } else if let marker = markers.first(where: { line.hasPrefix($0) }) {
+                closeParagraph()
+                let text = line.dropFirst(marker.count)
+                    .trimmingCharacters(in: .whitespaces)
+                if !text.isEmpty { parts.append(.bullet(text)) }
+            } else {
+                paragraph.append(line)
+            }
+        }
+        closeParagraph()
+        return parts
+    }
+
+    var body: some View {
+        let parts = Self.parse(summary)
+        VStack(alignment: .leading, spacing: 10) {
+            ForEach(Array(parts.enumerated()), id: \.offset) { _, part in
+                switch part {
+                case .paragraph(let text):
+                    Text(text)
+                        .font(.callout)
+                case .bullet(let text):
+                    HStack(alignment: .firstTextBaseline, spacing: 9) {
+                        Circle()
+                            .fill(.tint)
+                            .frame(width: 5, height: 5)
+                            .alignmentGuide(.firstTextBaseline) { $0[VerticalAlignment.center] + 5 }
+                        Text(text)
+                            .font(.callout)
+                    }
+                }
+            }
+        }
+        .padding(.vertical, 2)
+        .textSelection(.enabled)
     }
 }

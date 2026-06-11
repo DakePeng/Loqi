@@ -205,3 +205,29 @@ struct SessionArchiveArtifactsTests {
         }
     }
 }
+
+struct SummaryTextParseTests {
+    @Test func splitsOverviewAndBullets() {
+        let parts = SummaryTextView.parse("""
+        团队确认了发布日期。预算仍待批准。
+
+        • 发布定于7月10日
+        ・王经理负责预算审批
+        - Follow-up meeting Friday
+        """)
+        #expect(parts == [
+            .paragraph("团队确认了发布日期。预算仍待批准。"),
+            .bullet("发布定于7月10日"),
+            .bullet("王经理负责预算审批"),
+            .bullet("Follow-up meeting Friday"),
+        ])
+    }
+
+    @Test func mergesWrappedParagraphLinesAndSkipsEmptyBullets() {
+        let parts = SummaryTextView.parse("Line one\nline two\n•   \n• real")
+        #expect(parts == [
+            .paragraph("Line one line two"),
+            .bullet("real"),
+        ])
+    }
+}
