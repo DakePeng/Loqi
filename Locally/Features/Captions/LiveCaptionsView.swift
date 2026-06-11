@@ -172,6 +172,10 @@ struct LiveCaptionsView: View {
             .overlay(alignment: .bottom) {
                 if !isAtLiveEdge, pipeline.isRunning {
                     Button {
+                        // Flip to live-edge immediately so the pill hides and
+                        // auto-follow re-engages — a programmatic scroll doesn't
+                        // reliably re-fire onScrollGeometryChange to settle it.
+                        isAtLiveEdge = true
                         if let last = entries.last {
                             withAnimation { proxy.scrollTo(last.id, anchor: .bottom) }
                         }
