@@ -7,7 +7,8 @@ struct LiveCaptionsView: View {
     @Bindable var pipeline: CaptionPipeline
 
     @AppStorage("captions.source") private var source: AppLanguage = .english
-    @AppStorage("captions.target") private var target: AppLanguage = .chinese
+    /// Translation is opt-in: empty = off (plain transcription, the default).
+    @AppStorage("captions.translation") private var translationRaw = ""
     @AppStorage("captions.speakerCount") private var speakerCount = 0
     @State private var errorMessage: String?
     @State private var isAtLiveEdge = true
@@ -29,7 +30,10 @@ struct LiveCaptionsView: View {
     /// Cards stay "little": cap utterances per card.
     private static let segmentMaxEntries = 4
 
-    private var direction: LanguagePair { LanguagePair(source: source, target: target) }
+    private var translationTarget: AppLanguage? { AppLanguage(rawValue: translationRaw) }
+    private var direction: LanguagePair {
+        LanguagePair(source: source, target: translationTarget ?? source)
+    }
 
     var body: some View {
         // One filter pass per body evaluation — the helpers all share it.
@@ -47,8 +51,9 @@ struct LiveCaptionsView: View {
                             showingSummarySoFar = true
                         }
                     }
-                    Button("Clear") { pipeline.store.clear(.captions) }
-                        .disabled(entries.isEmpty)
+                    if !entries.isEmpty {
+                        Button("Clear") { pipeline.store.clear(.captions) }
+                    }
                 }
             }
             .sheet(isPresented: $showingSummarySoFar) {
@@ -156,43 +161,26 @@ struct LiveCaptionsView: View {
                     ContentUnavailableView(
                         "Ready to listen",
                         systemImage: "waveform",
-                        description: Text("Start a session and live translated captions will appear here."))
+                        description: Text("Tap the mic — everything is transcribed privately on this iPhone."))
                 }
             }
             .animation(.easeInOut(duration: 0.2), value: isAtLiveEdge)
         }
     }
 
+    /// Minimal bottom bar. Idle: three compact chips (language, speakers,
+    /// optional translation) over the mic. Recording: just the mic, the
+    /// timer, and the speakers chip (the one setting that's adjustable
+    /// mid-session) — everything else gets out of the way.
     private var controls: some View {
         VStack(spacing: 14) {
             PipelineStatusBar(pipeline: pipeline)
 
-            HStack(spacing: 12) {
-                Group {
-                    languageMenu(selection: $source)
-                    Button {
-                        swap(&source, &target)
-                    } label: {
-                        Image(systemName: "arrow.left.arrow.right")
-                            .font(.footnote.weight(.semibold))
-                    }
-                    languageMenu(selection: $target)
-                }
-                .disabled(pipeline.isRunning)
-
-                // Speaker count is adjustable mid-session: the transcript
-                // re-clusters and relabels live.
-                Picker("Speakers", selection: $speakerCount) {
-                    Label("One voice", systemImage: "person").tag(0)
-                    ForEach(2...6, id: \.self) { count in
-                        Label("\(count) speakers", systemImage: "person.2").tag(count)
-                    }
-                }
-                .pickerStyle(.menu)
-                .padding(.horizontal, 6)
-                .background(Color(.secondarySystemBackground), in: Capsule())
-                .onChange(of: speakerCount) {
-                    pipeline.updateSpeakerCount(speakerCount)
+            if !pipeline.isRunning {
+                HStack(spacing: 10) {
+                    languageChip
+                    speakersChip
+                    translationChip
                 }
             }
 
@@ -201,17 +189,85 @@ struct LiveCaptionsView: View {
             }
 
             if pipeline.isRunning, let startedAt = pipeline.sessionStartedAt {
-                HStack(spacing: 10) {
+                HStack(spacing: 12) {
                     Text(startedAt, style: .timer)
                         .font(.caption.monospacedDigit())
                         .foregroundStyle(.secondary)
                     BatteryHint()
+                    speakersChip
                 }
             }
         }
         .padding(.vertical, 12)
         .frame(maxWidth: .infinity)
         .background(.bar)
+        .animation(.easeInOut(duration: 0.2), value: pipeline.isRunning)
+    }
+
+    private var languageChip: some View {
+        Menu {
+            Picker("Language", selection: $source) {
+                ForEach(AppLanguage.allCases) { language in
+                    Text(language.displayName).tag(language)
+                }
+            }
+        } label: {
+            chip(icon: "waveform", text: source.displayName)
+        }
+        .onChange(of: source) {
+            // Translating into the spoken language makes no sense.
+            if translationRaw == source.rawValue { translationRaw = "" }
+        }
+    }
+
+    /// Speaker count is adjustable mid-session: the transcript re-clusters
+    /// and relabels live.
+    private var speakersChip: some View {
+        Menu {
+            Picker("Speakers", selection: $speakerCount) {
+                Label("One voice", systemImage: "person").tag(0)
+                ForEach(2...6, id: \.self) { count in
+                    Label("\(count) speakers", systemImage: "person.2").tag(count)
+                }
+            }
+        } label: {
+            chip(
+                icon: speakerCount >= 2 ? "person.2" : "person",
+                text: speakerCount >= 2 ? "\(speakerCount)" : "1",
+                active: speakerCount >= 2)
+        }
+        .onChange(of: speakerCount) {
+            pipeline.updateSpeakerCount(speakerCount)
+        }
+    }
+
+    private var translationChip: some View {
+        Menu {
+            Picker("Translation", selection: $translationRaw) {
+                Text("Off").tag("")
+                ForEach(AppLanguage.allCases.filter { $0 != source }) { language in
+                    Text(language.displayName).tag(language.rawValue)
+                }
+            }
+        } label: {
+            chip(
+                icon: "globe",
+                text: translationTarget?.displayName ?? String(localized: "Translate"),
+                active: translationTarget != nil)
+        }
+    }
+
+    private func chip(icon: String, text: String, active: Bool = false) -> some View {
+        HStack(spacing: 5) {
+            Image(systemName: icon)
+                .font(.caption)
+            Text(text)
+                .font(.footnote.weight(.medium))
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 7)
+        .foregroundStyle(active ? AnyShapeStyle(.tint) : AnyShapeStyle(.primary))
+        .background(Color(.secondarySystemBackground), in: Capsule())
     }
 
     /// One card: speaker chip (when separating), then the segment's
@@ -265,17 +321,6 @@ struct LiveCaptionsView: View {
             }
         }
         .animation(.easeInOut(duration: 0.2), value: isLive)
-    }
-
-    private func languageMenu(selection: Binding<AppLanguage>) -> some View {
-        Picker("Language", selection: selection) {
-            ForEach(AppLanguage.allCases) { language in
-                Text(language.displayName).tag(language)
-            }
-        }
-        .pickerStyle(.menu)
-        .padding(.horizontal, 6)
-        .background(Color(.secondarySystemBackground), in: Capsule())
     }
 
     private func toggleSession() {

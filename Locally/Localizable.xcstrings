@@ -302,6 +302,7 @@
       }
     },
     "Done": {
+      "extractionState": "stale",
       "localizations": {
         "ja": {
           "stringUnit": {
@@ -487,6 +488,22 @@
         }
       }
     },
+    "Everything runs on this iPhone. Speaker separation requires the speaker model (Settings).": {
+      "localizations": {
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "すべてこの iPhone 上で実行されます。話者分離には話者モデルが必要です（設定）。"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "一切都在这台 iPhone 上运行。说话人分离需要先下载说话人模型（设置）。"
+          }
+        }
+      }
+    },
     "File": {
       "extractionState": "stale",
       "localizations": {
@@ -650,6 +667,22 @@
           "stringUnit": {
             "state": "translated",
             "value": "将每次会话的音频与文字稿一起保留。录音仅存储在此 iPhone 上，并随会话一起删除。"
+          }
+        }
+      }
+    },
+    "Language": {
+      "localizations": {
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "言語"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "语言"
           }
         }
       }
@@ -945,6 +978,22 @@
         }
       }
     },
+    "Off": {
+      "localizations": {
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "オフ"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "关闭"
+          }
+        }
+      }
+    },
     "One voice": {
       "localizations": {
         "ja": {
@@ -1029,7 +1078,7 @@
         }
       }
     },
-    "Powers speaker separation in Captions and automatic turns in Conversation. Voice data never leaves this iPhone. Use HF-Mirror if Hugging Face is unreachable — this model is not available on ModelScope.": {},
+    "Powers speaker separation for recordings and imported audio. Voice data never leaves this iPhone. Use HF-Mirror if Hugging Face is unreachable — this model is not available on ModelScope.": {},
     "Preferred form per language": {
       "localizations": {
         "ja": {
@@ -1114,6 +1163,7 @@
       }
     },
     "Real-time speech translation that never leaves your device.": {
+      "extractionState": "stale",
       "localizations": {
         "ja": {
           "stringUnit": {
@@ -1130,6 +1180,7 @@
       }
     },
     "Record": {
+      "extractionState": "stale",
       "localizations": {
         "ja": {
           "stringUnit": {
@@ -1262,6 +1313,7 @@
       }
     },
     "Save audio recordings": {
+      "extractionState": "stale",
       "localizations": {
         "ja": {
           "stringUnit": {
@@ -1564,6 +1616,7 @@
       }
     },
     "Summarizing…": {
+      "extractionState": "stale",
       "localizations": {
         "ja": {
           "stringUnit": {
@@ -1614,6 +1667,7 @@
       }
     },
     "Summary so far": {
+      "extractionState": "stale",
       "localizations": {
         "ja": {
           "stringUnit": {
@@ -1625,6 +1679,22 @@
           "stringUnit": {
             "state": "translated",
             "value": "实时摘要"
+          }
+        }
+      }
+    },
+    "Tap the mic — everything is transcribed privately on this iPhone.": {
+      "localizations": {
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "マイクをタップ — すべてこの iPhone 上でプライベートに文字起こしされます。"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "点按麦克风，所有内容都在这台 iPhone 上私密转写。"
           }
         }
       }
@@ -1746,6 +1816,22 @@
         }
       }
     },
+    "Translate": {
+      "localizations": {
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "翻訳"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "翻译"
+          }
+        }
+      }
+    },
     "Translating…": {
       "localizations": {
         "ja": {
@@ -1758,6 +1844,22 @@
           "stringUnit": {
             "state": "translated",
             "value": "正在翻译…"
+          }
+        }
+      }
+    },
+    "Translation": {
+      "localizations": {
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "翻訳"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "翻译"
           }
         }
       }

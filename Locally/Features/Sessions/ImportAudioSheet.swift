@@ -12,32 +12,37 @@ struct ImportAudioSheet: View {
     @Environment(\.dismiss) private var dismiss
 
     @AppStorage("captions.source") private var source: AppLanguage = .english
-    @AppStorage("captions.target") private var target: AppLanguage = .chinese
+    /// Shared with the Record screen: empty = transcribe only (default).
+    @AppStorage("captions.translation") private var translationRaw = ""
     @AppStorage("captions.speakerCount") private var speakerCount = 0
     @State private var phase: FileImportEngine.Phase?
     @State private var importError: String?
+
+    private var translationTarget: AppLanguage? { AppLanguage(rawValue: translationRaw) }
 
     var body: some View {
         NavigationStack {
             Form {
                 Section {
                     LabeledContent("File", value: url.lastPathComponent)
-                    Picker("Source language", selection: $source) {
+                    Picker("Language", selection: $source) {
                         ForEach(AppLanguage.allCases) { Text($0.displayName).tag($0) }
                     }
-                    Picker("Target language", selection: $target) {
-                        ForEach(AppLanguage.allCases) { Text($0.displayName).tag($0) }
+                    .onChange(of: source) {
+                        if translationRaw == source.rawValue { translationRaw = "" }
+                    }
+                    Picker("Translation", selection: $translationRaw) {
+                        Text("Off").tag("")
+                        ForEach(AppLanguage.allCases.filter { $0 != source }) {
+                            Text($0.displayName).tag($0.rawValue)
+                        }
                     }
                     Picker("Speakers", selection: $speakerCount) {
                         Text("One voice").tag(0)
                         ForEach(2...6, id: \.self) { Text("\($0) speakers").tag($0) }
                     }
                 } footer: {
-                    if source == target {
-                        Text("Same language selected: the recording will be transcribed without translation.")
-                    } else {
-                        Text("Transcription and translation run fully on-device. Speaker separation requires the speaker model (Settings).")
-                    }
+                    Text("Everything runs on this iPhone. Speaker separation requires the speaker model (Settings).")
                 }
 
                 if let phase {
@@ -88,7 +93,8 @@ struct ImportAudioSheet: View {
                     voiceprint: pipeline.voiceprint)
                 let record = try await engine.importAudio(
                     url: url,
-                    direction: LanguagePair(source: source, target: target),
+                    direction: LanguagePair(
+                        source: source, target: translationTarget ?? source),
                     speakerCount: speakerCount
                 ) { phase in
                     self.phase = phase
