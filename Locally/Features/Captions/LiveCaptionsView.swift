@@ -68,6 +68,13 @@ struct LiveCaptionsView: View {
             }
             .navigationTitle("Record")
             .toolbar {
+                ToolbarItem(placement: .topBarLeading) {
+                    // Rotation lock is common; this forces landscape
+                    // caption mode without it.
+                    Button("Landscape", systemImage: "iphone.landscape") {
+                        Self.rotate(to: .landscapeRight)
+                    }
+                }
                 ToolbarItemGroup(placement: .topBarTrailing) {
                     if pipeline.liveNotes.count >= 2 {
                         Button("Summary so far", systemImage: "sparkles") {
@@ -344,6 +351,15 @@ struct LiveCaptionsView: View {
             }
         }
         .animation(.easeInOut(duration: 0.2), value: isLive)
+    }
+
+    /// Programmatic rotation works even with the orientation lock on,
+    /// which is exactly when the button is needed.
+    static func rotate(to orientation: UIInterfaceOrientationMask) {
+        let scene = UIApplication.shared.connectedScenes
+            .compactMap { $0 as? UIWindowScene }
+            .first
+        scene?.requestGeometryUpdate(.iOS(interfaceOrientations: orientation))
     }
 
     private func toggleSession() {
