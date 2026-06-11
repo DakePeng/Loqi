@@ -39,6 +39,11 @@ struct SessionRecord: Identifiable, Codable, Sendable {
     var summary: String?
     /// Map-phase notes (outline headlines + categorized bullets).
     var chunkNotes: [ChunkNote]?
+    /// Last entry covered by live-generated chunkNotes; summarize maps only
+    /// entries after this id (prune-proof, unlike an index).
+    var liveNotesEndEntryID: UUID?
+    /// Audio recording in SessionArchive.recordingsDirectory, if saved.
+    var audioFileName: String?
 
     var title: String {
         entries.first?.sourceText.prefix(40).description ?? "Session"

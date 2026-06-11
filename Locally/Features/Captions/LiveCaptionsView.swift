@@ -13,6 +13,7 @@ struct LiveCaptionsView: View {
     @State private var isAtLiveEdge = true
     @State private var renamingSlot: Int?
     @State private var renameText = ""
+    @State private var showingSummarySoFar = false
 
     /// One card per coherent stretch of speech: same speaker, no long
     /// pause between utterances, and bounded length — an approximation of
@@ -40,10 +41,18 @@ struct LiveCaptionsView: View {
             }
             .navigationTitle("Record")
             .toolbar {
-                ToolbarItem(placement: .topBarTrailing) {
+                ToolbarItemGroup(placement: .topBarTrailing) {
+                    if pipeline.liveNotes.count >= 2 {
+                        Button("Summary so far", systemImage: "sparkles") {
+                            showingSummarySoFar = true
+                        }
+                    }
                     Button("Clear") { pipeline.store.clear(.captions) }
                         .disabled(entries.isEmpty)
                 }
+            }
+            .sheet(isPresented: $showingSummarySoFar) {
+                SummarySoFarSheet(pipeline: pipeline)
             }
             .alert("Couldn't start", isPresented: .init(
                 get: { errorMessage != nil },
@@ -283,6 +292,56 @@ struct LiveCaptionsView: View {
                 } catch {
                     errorMessage = error.localizedDescription
                 }
+            }
+        }
+    }
+}
+
+/// On-demand digest of the session so far, reduced from the live chunk
+/// notes — no transcript mapping, so it returns in one generation.
+private struct SummarySoFarSheet: View {
+    let pipeline: CaptionPipeline
+
+    @Environment(\.dismiss) private var dismiss
+    @State private var summary: String?
+    @State private var failed = false
+
+    var body: some View {
+        NavigationStack {
+            Group {
+                if let summary {
+                    ScrollView {
+                        Text(summary)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .padding()
+                    }
+                } else if failed {
+                    ContentUnavailableView(
+                        "Summary failed — try again.",
+                        systemImage: "exclamationmark.triangle")
+                } else {
+                    ProgressView("Summarizing…")
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                }
+            }
+            .navigationTitle("Summary so far")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button("Done") { dismiss() }
+                }
+            }
+        }
+        .presentationDetents([.medium, .large])
+        .task {
+            let notes = pipeline.liveNotes
+            let language = AppLanguage.devicePreferred
+                ?? pipeline.activeDirection?.target ?? .english
+            do {
+                let engine = SummaryEngine(llm: pipeline.llm)
+                summary = try await engine.reduce(notes: notes, in: language)
+            } catch {
+                failed = true
             }
         }
     }

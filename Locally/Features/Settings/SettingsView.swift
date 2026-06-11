@@ -8,6 +8,7 @@ struct SettingsView: View {
     @AppStorage("llm.enabled") private var llmEnabled = true
     @AppStorage("transcript.polish") private var transcriptPolish = true
     @AppStorage("diarizer.source") private var diarizerSourceRaw = DiarizerSource.huggingFace.rawValue
+    @AppStorage("audio.saveRecordings") private var saveRecordings = true
     @State private var diarizerState = "—"
     @State private var diarizerProgress: Double?
     @State private var diarizerError: String?
@@ -106,6 +107,14 @@ struct SettingsView: View {
                     Text("Speaker recognition")
                 } footer: {
                     Text("Powers speaker separation for recordings and imported audio. Voice data never leaves this iPhone. Use HF-Mirror if Hugging Face is unreachable — this model is not available on ModelScope.")
+                }
+
+                Section {
+                    Toggle("Save audio recordings", isOn: $saveRecordings)
+                } header: {
+                    Text("Recording")
+                } footer: {
+                    Text("Keep each session's audio alongside its transcript. Recordings are stored only on this iPhone and are deleted with their session.")
                 }
 
                 Section("Vocabulary") {

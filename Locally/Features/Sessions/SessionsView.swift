@@ -89,6 +89,19 @@ private struct SessionDetailView: View {
     private func list(proxy: ScrollViewProxy) -> some View {
         List {
             if let session {
+                if let fileName = session.audioFileName {
+                    Section {
+                        PlaybackBar(url: SessionArchive.recordingURL(fileName: fileName))
+                            .disabled(pipeline.isRunning)
+                    } header: {
+                        Text("Recording")
+                    } footer: {
+                        if let size = recordingSize(fileName) {
+                            Text(size)
+                        }
+                    }
+                }
+
                 if let summary = session.summary {
                     Section("Summary") {
                         Text(summary)
@@ -254,6 +267,13 @@ private struct SessionDetailView: View {
         return blocks
     }
 
+    private func recordingSize(_ fileName: String) -> String? {
+        let url = SessionArchive.recordingURL(fileName: fileName)
+        guard let bytes = try? url.resourceValues(forKeys: [.fileSizeKey]).fileSize
+        else { return nil }
+        return ByteCountFormatter.string(fromByteCount: Int64(bytes), countStyle: .file)
+    }
+
     private func startRename(_ slot: Int) {
         guard slot >= 0 else { return }
         renameText = session?.speakerNames[slot] ?? ""
@@ -281,6 +301,8 @@ private struct SessionDetailView: View {
                 var updated = session
                 updated.summary = result.summary
                 updated.chunkNotes = result.notes
+                // Full coverage now: future re-summarize is reduce-only.
+                updated.liveNotesEndEntryID = session.entries.last?.id
                 pipeline.archive.update(updated)
             } catch {
                 actionError = error.localizedDescription

@@ -87,6 +87,23 @@ final class CaptionPipeline {
     private var systemObservers: [NSObjectProtocol] = []
     private var backgroundUnload: Task<Void, Never>?
 
+    // Session artifacts (capture-first): audio recording + live summary notes.
+    private var sessionID: UUID?
+    private var recorder: SessionRecorder?
+    private var liveChunker = LiveChunker()
+    private var noteQueue: ChunkNoteQueue?
+    private(set) var liveNotes: [SessionRecord.ChunkNote] = []
+    private var notesEndEntryID: UUID?
+    private var liveMappingStopped = false
+    private var chunkGapTimer: Task<Void, Never>?
+
+    /// Save session audio alongside the transcript (default on).
+    var saveRecordingsEnabled: Bool {
+        UserDefaults.standard.object(forKey: "audio.saveRecordings") == nil
+            ? true
+            : UserDefaults.standard.bool(forKey: "audio.saveRecordings")
+    }
+
     /// LLM transcript polishing (defaults on; absent key must not read as
     /// false).
     var transcriptPolishEnabled: Bool {
@@ -132,6 +149,10 @@ final class CaptionPipeline {
         }
         hotwords.onChange = { [weak self] in
             self?.pushHotwordsToEngines()
+        }
+        noteQueue = ChunkNoteQueue(llm: self.llm) { [weak self] note, endEntryID in
+            self?.liveNotes.append(note)
+            self?.notesEndEntryID = endEntryID
         }
     }
 
@@ -181,6 +202,16 @@ final class CaptionPipeline {
         await translator.setDirections([direction])
         store.currentMode = sessionMode
         speakerNames.removeAll()
+        sessionID = UUID()
+        liveChunker = LiveChunker()
+        liveNotes.removeAll()
+        notesEndEntryID = nil
+        liveMappingStopped = false
+        if saveRecordingsEnabled, let sessionID {
+            let recorder = SessionRecorder()
+            self.recorder = recorder
+            await recorder.begin(sessionID: sessionID)
+        }
 
         // Diarization: cluster utterances into N voices. The model load must
         // not block session start — captions begin immediately and
@@ -214,6 +245,9 @@ final class CaptionPipeline {
         } catch {
             // Unwind everything beginSession set up, or a failed start
             // leaks state for a session that doesn't exist.
+            await recorder?.abort()
+            recorder = nil
+            sessionID = nil
             diarizationActive = false
             await voiceprint.stopDiarization()
             setStatus(.diarizer, nil)
@@ -253,16 +287,39 @@ final class CaptionPipeline {
         await voiceprint.stopDiarization()
         diarizationActive = false
 
+        // Finish artifacts BEFORE archiving: the recording's file name and
+        // the live notes ride along with the record. Stop stays instant —
+        // in-flight note generations are cancelled, their chunks fall to
+        // the post-hoc summarize path.
+        chunkGapTimer?.cancel()
+        chunkGapTimer = nil
+        _ = liveChunker.flush()
+        await noteQueue?.cancelAll()
+        let audioFileName = await recorder?.finish()
+        recorder = nil
+
         // Sessions persist automatically; trivial ones are skipped, and the
         // archive only takes entries created during THIS session.
         if let startedAt = sessionStartedAt {
-            archive.save(
+            let saved = archive.save(
                 entries: store.entries(in: sessionMode),
                 mode: sessionMode,
                 speakerNames: speakerNames,
-                startedAt: startedAt)
+                startedAt: startedAt,
+                artifacts: SessionArtifacts(
+                    sessionID: sessionID ?? UUID(),
+                    audioFileName: audioFileName,
+                    chunkNotes: liveNotes,
+                    notesEndEntryID: notesEndEntryID))
+            if saved == nil, let audioFileName {
+                try? FileManager.default.removeItem(
+                    at: SessionArchive.recordingURL(fileName: audioFileName))
+            }
         }
         sessionStartedAt = nil
+        sessionID = nil
+        liveNotes.removeAll()
+        notesEndEntryID = nil
     }
 
     // MARK: System events (interruptions, route changes, backgrounding)
@@ -428,6 +485,9 @@ final class CaptionPipeline {
                 if self.diarizationActive {
                     await voiceprint.ingest(chunk)
                 }
+                if let recorder = self.recorder {
+                    await recorder.append(chunk)
+                }
             }
         }
         levelTask = Task { [weak self] in
@@ -465,6 +525,9 @@ final class CaptionPipeline {
         levelTask = nil
 
         if let leftover = store.finalizeActiveAsIs() {
+            if let closed = liveChunker.append(leftover) {
+                await enqueueChunkNote(for: closed)
+            }
             // The analyzer never finalized this text; translate it so the
             // speaker's last words aren't lost (transcribe-only: keep as-is).
             if leftover.direction.source == leftover.direction.target {
@@ -490,11 +553,14 @@ final class CaptionPipeline {
         // VAD drives everything that must yield to live speech.
         if case .speechActivity(let active) = event {
             await refinement?.setSpeechActive(active)
+            await noteQueue?.setSpeechActive(active)
             if active {
+                chunkGapTimer?.cancel()
                 await voiceprint.beginUtterance()
             } else {
                 await voiceprint.endUtterance()
                 loadLLMIfAllowed()
+                scheduleChunkGapClose()
             }
             return
         }
@@ -524,6 +590,12 @@ final class CaptionPipeline {
                 for (entryID, slot) in result.relabels {
                     store.setSpeaker(slot, for: entryID)
                 }
+            }
+
+            // Live summary mapping: a closed chunk generates its note in
+            // the next silence gap.
+            if let closed = liveChunker.append(store.entry(for: entry.id) ?? entry) {
+                await enqueueChunkNote(for: closed)
             }
 
             // Transcribe-only sessions (source == target) skip translation
@@ -584,6 +656,44 @@ final class CaptionPipeline {
             store.setRefined(nil, for: entry.id)
             return nil
         }
+    }
+
+    /// Close the current chunk after a long silence so its note generates
+    /// during the very gap that ended it.
+    private func scheduleChunkGapClose() {
+        chunkGapTimer?.cancel()
+        chunkGapTimer = Task { [weak self] in
+            try? await Task.sleep(for: .seconds(SummaryEngine.chunkGap))
+            guard let self, !Task.isCancelled, self.isRunning else { return }
+            if let closed = self.liveChunker.closeForGap() {
+                await self.enqueueChunkNote(for: closed)
+            }
+        }
+    }
+
+    /// Hand a closed chunk to the note queue. Gating failures stop live
+    /// mapping for the rest of the session so note coverage stays a
+    /// contiguous prefix (post-hoc summarize maps the tail).
+    private func enqueueChunkNote(for chunk: [CaptionEntry]) async {
+        guard !liveMappingStopped, !chunk.isEmpty else { return }
+        guard llmEnabled, thermal.policy == .full, await llmIsReady() else {
+            liveMappingStopped = true
+            return
+        }
+        let text = chunk.map { entry in
+            let label = entry.speaker.map {
+                speakerNames[$0] ?? "Speaker \($0 + 1)"
+            }
+            return (label.map { "[\($0)] " } ?? "") + entry.sourceText
+        }.joined(separator: "\n")
+        let language = AppLanguage.devicePreferred ?? chunk[0].direction.target
+        await noteQueue?.enqueue(ChunkNoteQueue.Job(
+            chunkText: text,
+            anchorEntryID: chunk[0].id,
+            endEntryID: chunk[chunk.count - 1].id,
+            startedAt: chunk[0].createdAt,
+            fallbackHeadline: String(chunk[0].sourceText.prefix(24)),
+            language: language))
     }
 
     /// Change the speaker count, live: existing utterances are re-clustered

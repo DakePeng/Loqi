@@ -5,6 +5,10 @@ import Foundation
 /// narrow task small models do well), then write the final summary from
 /// the notes alone — the model never has to synthesize a long raw
 /// transcript, and nothing gets silently truncated.
+///
+/// Sessions with live-mapped notes resume instead of restarting: only the
+/// entries past `liveNotesEndEntryID` get mapped, then a single reduce runs
+/// over cached + new notes.
 struct SummaryEngine {
     let llm: LLMService
     private let prompts = PromptBuilder()
@@ -49,21 +53,35 @@ struct SummaryEngine {
         return chunks
     }
 
-    /// Map + reduce. `progress` reports (completedChunks, totalChunks)
-    /// during the map phase.
-    func summarize(
-        _ record: SessionRecord,
+    /// Entries not yet covered by live notes. An end-id that no longer
+    /// resolves (edited/old record) means coverage is unknowable — remap
+    /// everything rather than risk a gap.
+    static func uncoveredEntries(
+        of record: SessionRecord
+    ) -> (entries: [SessionRecord.Entry], cachedNotes: [SessionRecord.ChunkNote]) {
+        guard let endID = record.liveNotesEndEntryID,
+              let cached = record.chunkNotes, !cached.isEmpty,
+              let endIndex = record.entries.firstIndex(where: { $0.id == endID })
+        else { return (record.entries, []) }
+        return (Array(record.entries[(endIndex + 1)...]), cached)
+    }
+
+    /// Map phase over one batch of entries. `progress` reports
+    /// (completedChunks, totalChunks).
+    func makeNotes(
+        for entries: [SessionRecord.Entry],
+        speakerLabel: (Int?) -> String?,
+        fallbackDate: Date,
         in language: AppLanguage,
         progress: @MainActor @Sendable (Int, Int) -> Void
-    ) async throws -> (summary: String, notes: [SessionRecord.ChunkNote]) {
-        try await llm.load()
-        let chunks = Self.chunkEntries(record.entries)
+    ) async throws -> [SessionRecord.ChunkNote] {
+        let chunks = Self.chunkEntries(entries)
         var notes: [SessionRecord.ChunkNote] = []
 
         for (index, chunk) in chunks.enumerated() {
             await progress(index, chunks.count)
             let text = chunk.map { entry in
-                let speaker = record.speakerLabel(entry.speaker).map { "[\($0)] " } ?? ""
+                let speaker = speakerLabel(entry.speaker).map { "[\($0)] " } ?? ""
                 return speaker + entry.sourceText
             }.joined(separator: "\n")
 
@@ -83,7 +101,7 @@ struct SummaryEngine {
                 // entry: fall back to its opening words.
                 headline: parsed.headline
                     ?? String(chunk.first?.sourceText.prefix(24) ?? "…"),
-                startedAt: chunk.first?.timestamp ?? record.startedAt,
+                startedAt: chunk.first?.timestamp ?? fallbackDate,
                 anchorEntryID: chunk.first?.id,
                 facts: parsed.facts,
                 decisions: parsed.decisions,
@@ -91,7 +109,13 @@ struct SummaryEngine {
                 terms: parsed.terms))
         }
         await progress(chunks.count, chunks.count)
+        return notes
+    }
 
+    /// Reduce phase: the final summary, written from notes alone.
+    func reduce(
+        notes: [SessionRecord.ChunkNote], in language: AppLanguage
+    ) async throws -> String {
         let notesText = notes.enumerated().map { index, note in
             var lines = ["[\(index + 1)] \(note.headline)"]
             lines.append(contentsOf: note.facts.map { "fact: \($0)" })
@@ -108,6 +132,27 @@ struct SummaryEngine {
         guard !summary.isEmpty, !PromptBuilder.hasDegenerateRepetition(summary) else {
             throw SummaryError.generationFailed
         }
+        return summary
+    }
+
+    /// Map + reduce, resuming from live notes when the record has them.
+    /// Returns the merged note list (cached + newly mapped) so the caller
+    /// can persist full coverage.
+    func summarize(
+        _ record: SessionRecord,
+        in language: AppLanguage,
+        progress: @MainActor @Sendable (Int, Int) -> Void
+    ) async throws -> (summary: String, notes: [SessionRecord.ChunkNote]) {
+        try await llm.load()
+        let (uncovered, cached) = Self.uncoveredEntries(of: record)
+        let fresh = try await makeNotes(
+            for: uncovered,
+            speakerLabel: { record.speakerLabel($0) },
+            fallbackDate: record.startedAt,
+            in: language,
+            progress: progress)
+        let notes = cached + fresh
+        let summary = try await reduce(notes: notes, in: language)
         return (summary, notes)
     }
 }

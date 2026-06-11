@@ -1,7 +1,6 @@
 {
   "sourceLanguage": "en",
   "strings": {
-    "· %@": {},
     "%@ speakers": {},
     "%@/%@": {
       "localizations": {
@@ -302,6 +301,22 @@
         }
       }
     },
+    "Done": {
+      "localizations": {
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "完了"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "完成"
+          }
+        }
+      }
+    },
     "Download from": {
       "extractionState": "stale",
       "localizations": {
@@ -589,6 +604,23 @@
         }
       }
     },
+    "Import Audio": {
+      "extractionState": "stale",
+      "localizations": {
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "音声を読み込む"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "导入音频"
+          }
+        }
+      }
+    },
     "Import audio": {
       "extractionState": "stale",
       "localizations": {
@@ -606,19 +638,18 @@
         }
       }
     },
-    "Import Audio": {
-      "extractionState": "stale",
+    "Keep each session's audio alongside its transcript. Recordings are stored only on this iPhone and are deleted with their session.": {
       "localizations": {
         "ja": {
           "stringUnit": {
             "state": "translated",
-            "value": "音声を読み込む"
+            "value": "各セッションの音声を文字起こしと一緒に保存します。録音はこの iPhone のみに保存され、セッションと一緒に削除されます。"
           }
         },
         "zh-Hans": {
           "stringUnit": {
             "state": "translated",
-            "value": "导入音频"
+            "value": "将每次会话的音频与文字稿一起保留。录音仅存储在此 iPhone 上，并随会话一起删除。"
           }
         }
       }
@@ -1032,6 +1063,22 @@
         }
       }
     },
+    "Private on-device voice notes, transcripts and summaries — with live translation.": {
+      "localizations": {
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "プライベートなオンデバイス音声メモ・文字起こし・要約 — ライブ翻訳付き。"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "私密的本地语音记录、文字稿与摘要——支持实时翻译。"
+          }
+        }
+      }
+    },
     "Re-summarize": {
       "extractionState": "stale",
       "localizations": {
@@ -1078,6 +1125,54 @@
           "stringUnit": {
             "state": "translated",
             "value": "实时语音翻译，数据绝不离开你的设备。"
+          }
+        }
+      }
+    },
+    "Record": {
+      "localizations": {
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "録音"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "记录"
+          }
+        }
+      }
+    },
+    "Recording": {
+      "localizations": {
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "録音"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "录音"
+          }
+        }
+      }
+    },
+    "Recording unavailable": {
+      "localizations": {
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "録音を再生できません"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "录音不可用"
           }
         }
       }
@@ -1133,6 +1228,22 @@
         }
       }
     },
+    "Same language selected: the recording will be transcribed without translation.": {
+      "localizations": {
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "同じ言語が選択されています。録音は文字起こしのみ行われ、翻訳されません。"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "已选择相同语言：录音将仅转写，不进行翻译。"
+          }
+        }
+      }
+    },
     "Save": {
       "extractionState": "stale",
       "localizations": {
@@ -1146,6 +1257,22 @@
           "stringUnit": {
             "state": "translated",
             "value": "保存"
+          }
+        }
+      }
+    },
+    "Save audio recordings": {
+      "localizations": {
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "音声を保存"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "保存音频录音"
           }
         }
       }
@@ -1436,6 +1563,22 @@
         }
       }
     },
+    "Summarizing…": {
+      "localizations": {
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "要約を作成中…"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "正在生成摘要…"
+          }
+        }
+      }
+    },
     "Summary": {
       "extractionState": "stale",
       "localizations": {
@@ -1466,6 +1609,22 @@
           "stringUnit": {
             "state": "translated",
             "value": "摘要生成失败，请重试。"
+          }
+        }
+      }
+    },
+    "Summary so far": {
+      "localizations": {
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "ここまでの要約"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "实时摘要"
           }
         }
       }
@@ -1655,54 +1814,7 @@
         }
       }
     },
-    "Same language selected: the recording will be transcribed without translation.": {
-      "localizations": {
-        "zh-Hans": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "已选择相同语言：录音将仅转写，不进行翻译。"
-          }
-        },
-        "ja": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "同じ言語が選択されています。録音は文字起こしのみ行われ、翻訳されません。"
-          }
-        }
-      }
-    },
-    "Record": {
-      "localizations": {
-        "zh-Hans": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "记录"
-          }
-        },
-        "ja": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "録音"
-          }
-        }
-      }
-    },
-    "Private on-device voice notes, transcripts and summaries — with live translation.": {
-      "localizations": {
-        "zh-Hans": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "私密的本地语音记录、文字稿与摘要——支持实时翻译。"
-          }
-        },
-        "ja": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "プライベートなオンデバイス音声メモ・文字起こし・要約 — ライブ翻訳付き。"
-          }
-        }
-      }
-    }
+    "· %@": {}
   },
   "version": "1.0"
 }
