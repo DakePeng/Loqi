@@ -1670,6 +1670,38 @@
           }
         }
       }
+    },
+    "Record": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "记录"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "録音"
+          }
+        }
+      }
+    },
+    "Private on-device voice notes, transcripts and summaries — with live translation.": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "私密的本地语音记录、文字稿与摘要——支持实时翻译。"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "プライベートなオンデバイス音声メモ・文字起こし・要約 — ライブ翻訳付き。"
+          }
+        }
+      }
     }
   },
   "version": "1.0"

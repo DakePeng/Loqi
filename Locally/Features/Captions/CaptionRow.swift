@@ -54,7 +54,8 @@ struct CaptionRow: View {
                 Label("Translation unavailable", systemImage: "exclamationmark.triangle")
                     .font(.caption)
                     .foregroundStyle(.orange)
-            } else if entry.state != .volatile {
+            } else if entry.state != .volatile,
+                      entry.direction.source != entry.direction.target {
                 ProgressView()
                     .controlSize(.mini)
             }

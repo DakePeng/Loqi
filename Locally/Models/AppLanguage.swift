@@ -54,16 +54,6 @@ enum AppLanguage: String, CaseIterable, Identifiable, Codable, Sendable {
     /// than Latin text, so length thresholds differ.
     var usesCJKScript: Bool { self != .english }
 
-    /// Conversation-mode mic hint, shown in the speaker's own language.
-    var tapToTalkLabel: String {
-        switch self {
-        case .english: "Tap to talk"
-        case .chinese: "点按说话"
-        case .japanese: "タップして話す"
-        case .korean: "탭하여 말하기"
-        }
-    }
-
     /// The language the user's phone runs in — what summaries should be
     /// written in (a zh user wants zh summaries even of an en session).
     static var devicePreferred: AppLanguage? {
@@ -78,16 +68,6 @@ enum AppLanguage: String, CaseIterable, Identifiable, Codable, Sendable {
             }
         }
         return nil
-    }
-
-    /// Conversation-mode hint while the other side is speaking.
-    var listeningLabel: String {
-        switch self {
-        case .english: "Listening…"
-        case .chinese: "正在聆听…"
-        case .japanese: "聞き取り中…"
-        case .korean: "듣는 중…"
-        }
     }
 }
 

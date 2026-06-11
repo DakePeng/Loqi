@@ -56,7 +56,7 @@ final class TranslationCoordinator {
     /// and mounts one TranslationHostView per element.
     func setDirections(_ directions: Set<LanguagePair>) async {
         var needed: Set<LanguagePair> = []
-        for direction in directions {
+        for direction in directions where direction.source != direction.target {
             if await needsPivot(direction) {
                 pivotPairs.insert(direction)
                 needed.insert(LanguagePair(source: direction.source, target: .english))
@@ -73,7 +73,8 @@ final class TranslationCoordinator {
     /// need a direction the session was not started with). The host stack
     /// observes `requiredDirections` and mounts the new session view.
     func addDirection(_ direction: LanguagePair) async {
-        guard !requiredDirections.contains(direction),
+        guard direction.source != direction.target,
+              !requiredDirections.contains(direction),
               !pivotPairs.contains(direction) else { return }
         if await needsPivot(direction) {
             pivotPairs.insert(direction)

@@ -6,7 +6,11 @@
       "WebFetch(domain:github.com)",
       "Bash(git init *)",
       "Bash(git add *)",
-      "Bash(git commit -q -m 'Pre-transformation snapshot: translation-first app with conversation mode *)"
+      "Bash(git commit -q -m 'Pre-transformation snapshot: translation-first app with conversation mode *)",
+      "Bash(git rm *)",
+      "Bash(rmdir Locally/Features/Conversation Locally/Pipeline/TTS)",
+      "Bash(python3 -)",
+      "Bash(swiftc -parse Locally/Pipeline/Speaker/VoiceprintService.swift Locally/Models/AppLanguage.swift Locally/Features/Settings/SettingsView.swift Locally/LocallyApp.swift)"
     ]
   }
 }

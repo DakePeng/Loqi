@@ -19,10 +19,7 @@ struct RootView: View {
         Group {
             if onboardingComplete {
                 TabView {
-                    Tab("Conversation", systemImage: "bubble.left.and.bubble.right") {
-                        ConversationView(pipeline: pipeline)
-                    }
-                    Tab("Captions", systemImage: "captions.bubble") {
+                    Tab("Record", systemImage: "mic") {
                         LiveCaptionsView(pipeline: pipeline)
                     }
                     Tab("Sessions", systemImage: "clock") {

@@ -7,7 +7,6 @@ struct SettingsView: View {
     @AppStorage("model.source") private var sourceRaw: String = ModelSource.huggingFace.rawValue
     @AppStorage("llm.enabled") private var llmEnabled = true
     @AppStorage("transcript.polish") private var transcriptPolish = true
-    @AppStorage("conversation.autoTurns") private var autoTurns = false
     @AppStorage("diarizer.source") private var diarizerSourceRaw = DiarizerSource.huggingFace.rawValue
     @State private var diarizerState = "—"
     @State private var diarizerProgress: Double?
@@ -103,20 +102,10 @@ struct SettingsView: View {
                     }
                     LabeledContent("Speaker model", value: diarizerState)
 
-                    Toggle("Automatic turns (beta)", isOn: $autoTurns)
-                        .onChange(of: autoTurns) {
-                            guard autoTurns else { return }
-                            downloadSpeakerModel()
-                        }
-                    if autoTurns {
-                        Button("Reset voice profiles", role: .destructive) {
-                            Task { await pipeline.voiceprint.resetProfiles() }
-                        }
-                    }
                 } header: {
                     Text("Speaker recognition")
                 } footer: {
-                    Text("Powers speaker separation in Captions and automatic turns in Conversation. Voice data never leaves this iPhone. Use HF-Mirror if Hugging Face is unreachable — this model is not available on ModelScope.")
+                    Text("Powers speaker separation for recordings and imported audio. Voice data never leaves this iPhone. Use HF-Mirror if Hugging Face is unreachable — this model is not available on ModelScope.")
                 }
 
                 Section("Vocabulary") {

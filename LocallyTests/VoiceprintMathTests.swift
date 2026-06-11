@@ -17,34 +17,6 @@ struct VoiceprintMathTests {
         #expect(third == [3, 3])
     }
 
-    // MARK: Profile classification (conversation auto-turns)
-
-    @Test func classifyPicksClearWinner() {
-        let mine: [Float] = [1, 0, 0]
-        let theirs: [Float] = [0, 1, 0]
-        let probe: [Float] = [0.95, 0.1, 0]
-        let result = VoiceprintMath.classify(
-            probe: probe,
-            candidates: [("mine", mine), ("theirs", theirs)])
-        #expect(result == "mine")
-    }
-
-    @Test func classifyAbstainsOnAmbiguity() {
-        let a: [Float] = [1, 0.95, 0]
-        let b: [Float] = [0.95, 1, 0]
-        let probe: [Float] = [1, 1, 0]
-        let result = VoiceprintMath.classify(
-            probe: probe, candidates: [("a", a), ("b", b)])
-        #expect(result == nil)
-    }
-
-    @Test func classifyAbstainsOnWeakSimilarity() {
-        let result = VoiceprintMath.classify(
-            probe: [1, 0, 0],
-            candidates: [("a", [0, 0.1, 1]), ("b", [0, 1, 0.1])])
-        #expect(result == nil)
-    }
-
     // MARK: Diarization (agglomerative re-clustering)
 
     /// Same-voice embeddings: tight cluster around one direction.

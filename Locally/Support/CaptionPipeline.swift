@@ -14,8 +14,6 @@ enum SessionPhase: Equatable {
 }
 
 enum PauseReason: Equatable {
-    /// Conversation turn ended by silence; waiting for someone to claim one.
-    case turnReleased
     /// Phone call / Siri took the mic; remembers what to resume.
     case interrupted(resume: LanguagePair)
 }
@@ -36,7 +34,6 @@ final class CaptionPipeline {
     let thermal = ThermalMonitor()
     let hotwords = HotwordStore()
     let voiceprint = VoiceprintService()
-    let speech = SpeechOutputService()
     let archive = SessionArchive()
     let llm: LLMService
 
@@ -87,21 +84,8 @@ final class CaptionPipeline {
     private var levelTask: Task<Void, Never>?
     private var eventsTask: Task<Void, Never>?
     private var thermalWatch: Task<Void, Never>?
-    /// Both directions of a conversation session; nil in captions mode.
-    private var conversationDirections: Set<LanguagePair>?
-    private var autoTurnClassification: Task<Void, Never>?
     private var systemObservers: [NSObjectProtocol] = []
     private var backgroundUnload: Task<Void, Never>?
-    private var turnRelease: Task<Void, Never>?
-
-    var autoTurnsEnabled: Bool {
-        UserDefaults.standard.bool(forKey: "conversation.autoTurns")
-    }
-
-    /// Speak translations aloud in conversation mode.
-    var ttsEnabled: Bool {
-        UserDefaults.standard.bool(forKey: "conversation.tts")
-    }
 
     /// LLM transcript polishing (defaults on; absent key must not read as
     /// false).
@@ -126,9 +110,9 @@ final class CaptionPipeline {
 
     private var diarizationActive = false
 
-    var sessionMode: SessionMode {
-        conversationDirections == nil ? .captions : .conversation
-    }
+    /// All live sessions are captions-mode now; the enum survives for old
+    /// archived records.
+    var sessionMode: SessionMode { .captions }
 
     init(llm: LLMService? = nil) {
         // Honor persisted Settings choices even if that screen was never
@@ -182,36 +166,26 @@ final class CaptionPipeline {
 
     // MARK: Session lifecycle
 
-    /// Start listening in one direction. `allDirections` lists every
-    /// direction this session may use (conversation mode passes both),
-    /// so translation sessions and ASR assets are ready before first use.
-    func start(direction: LanguagePair, allDirections: Set<LanguagePair>? = nil) async throws {
+    /// Start a recording session.
+    func start(direction: LanguagePair) async throws {
         try await serialized { [self] in
             guard phase == .idle else { return }
-            try await beginSession(direction: direction, allDirections: allDirections)
+            try await beginSession(direction: direction)
         }
     }
 
-    private func beginSession(
-        direction: LanguagePair, allDirections: Set<LanguagePair>?
-    ) async throws {
+    private func beginSession(direction: LanguagePair) async throws {
         lastError = nil
         statusMessages.removeAll()
 
-        await translator.setDirections(allDirections ?? [direction])
-        conversationDirections = (allDirections?.count ?? 0) > 1 ? allDirections : nil
+        await translator.setDirections([direction])
         store.currentMode = sessionMode
         speakerNames.removeAll()
 
-        // Conversation + auto turns wants the voiceprint models warm.
-        if conversationDirections != nil, autoTurnsEnabled {
-            Task { try? await voiceprint.loadIfNeeded(source: diarizerSource) }
-        }
-
-        // Captions-mode diarization: cluster utterances into N voices.
-        // The model load must not block session start — captions begin
-        // immediately and attribution kicks in once the model is ready.
-        diarizationActive = conversationDirections == nil && captionSpeakerCount >= 2
+        // Diarization: cluster utterances into N voices. The model load must
+        // not block session start — captions begin immediately and
+        // attribution kicks in once the model is ready.
+        diarizationActive = captionSpeakerCount >= 2
         if diarizationActive {
             await voiceprint.startDiarization(maxSpeakers: captionSpeakerCount)
             if await voiceprint.state != .ready {
@@ -231,18 +205,15 @@ final class CaptionPipeline {
             await voiceprint.stopDiarization()
         }
 
-        let languages = Set((allDirections ?? [direction]).map(\.source))
-        for language in languages where engines[language] == nil {
-            engines[language] = TranscriptionEngine(language: language)
+        if engines[direction.source] == nil {
+            engines[direction.source] = TranscriptionEngine(language: direction.source)
         }
 
         do {
             try await beginTurn(direction: direction)
         } catch {
             // Unwind everything beginSession set up, or a failed start
-            // leaks observers and leaves sessionMode pointing at a session
-            // that doesn't exist.
-            conversationDirections = nil
+            // leaks state for a session that doesn't exist.
             diarizationActive = false
             await voiceprint.stopDiarization()
             setStatus(.diarizer, nil)
@@ -264,24 +235,6 @@ final class CaptionPipeline {
         }
     }
 
-    /// Conversation mode: finish the current speaker's turn and start
-    /// listening in the other direction. Also recovers from the released /
-    /// interrupted states (any tap claims a turn).
-    func switchDirection(to direction: LanguagePair) async throws {
-        try await serialized { [self] in
-            guard phase != .idle, activeDirection != direction else { return }
-            // An explicit claim overrides any in-flight spoken translation.
-            speech.stop()
-            await endTurn()
-            do {
-                try await beginTurn(direction: direction)
-            } catch {
-                phase = .paused(.turnReleased)
-                throw error
-            }
-        }
-    }
-
     func stop() async {
         try? await serialized { [self] in
             await endSession()
@@ -291,7 +244,6 @@ final class CaptionPipeline {
     private func endSession() async {
         guard phase != .idle else { return }
         await endTurn()
-        speech.stop()
         phase = .idle
         UIApplication.shared.isIdleTimerDisabled = false
         thermalWatch?.cancel()
@@ -311,7 +263,6 @@ final class CaptionPipeline {
                 startedAt: startedAt)
         }
         sessionStartedAt = nil
-        conversationDirections = nil
     }
 
     // MARK: System events (interruptions, route changes, backgrounding)
@@ -392,8 +343,8 @@ final class CaptionPipeline {
                 setStatus(.interruption, nil)
                 guard shouldResume else {
                     lastError = String(
-                        localized: "Session paused by an interruption. Tap the mic to continue.")
-                    phase = .paused(.turnReleased)
+                        localized: "Session ended by an interruption.")
+                    await endSession()
                     return
                 }
                 logger.info("interruption ended; resuming \(resume.source.rawValue)")
@@ -401,7 +352,7 @@ final class CaptionPipeline {
                     try await beginTurn(direction: resume)
                 } catch {
                     lastError = error.localizedDescription
-                    phase = .paused(.turnReleased)
+                    await endSession()
                 }
             }
         }
@@ -417,7 +368,7 @@ final class CaptionPipeline {
                     try await beginTurn(direction: direction)
                 } catch {
                     lastError = error.localizedDescription
-                    phase = .paused(.turnReleased)
+                    await endSession()
                 }
             }
         }
@@ -471,13 +422,10 @@ final class CaptionPipeline {
         feedTask = Task { [weak self, voiceprint] in
             for await chunk in buffers {
                 guard let self else { return }
-                // Don't transcribe the phone's own TTS voice.
-                if self.speech.isSpeaking { continue }
                 await engine.feed(chunk)
                 // Checked live (not captured): the speaker-count picker can
                 // enable diarization mid-turn and the tee must follow.
-                if self.diarizationActive
-                    || (self.conversationDirections != nil && self.autoTurnsEnabled) {
+                if self.diarizationActive {
                     await voiceprint.ingest(chunk)
                 }
             }
@@ -505,11 +453,6 @@ final class CaptionPipeline {
     /// volatile entry so the next turn can never adopt and overwrite it.
     /// Callers set the next phase afterwards.
     private func endTurn() async {
-        autoTurnClassification?.cancel()
-        autoTurnClassification = nil
-        turnRelease?.cancel()
-        turnRelease = nil
-
         audio.stop()  // finishes the buffer + level streams
         if case .listening(let direction) = phase {
             await engines[direction.source]?.stop()  // flushes + finishes events
@@ -520,16 +463,13 @@ final class CaptionPipeline {
         eventsTask = nil
         await levelTask?.value
         levelTask = nil
-        // Drained events may have rescheduled these.
-        autoTurnClassification?.cancel()
-        autoTurnClassification = nil
-        turnRelease?.cancel()
-        turnRelease = nil
 
         if let leftover = store.finalizeActiveAsIs() {
             // The analyzer never finalized this text; translate it so the
-            // speaker's last words aren't lost.
-            if await produceDraft(for: leftover) != nil {
+            // speaker's last words aren't lost (transcribe-only: keep as-is).
+            if leftover.direction.source == leftover.direction.target {
+                store.setRefined(nil, for: leftover.id)
+            } else if await produceDraft(for: leftover) != nil {
                 store.setRefined(nil, for: leftover.id)
             }
         }
@@ -551,14 +491,10 @@ final class CaptionPipeline {
         if case .speechActivity(let active) = event {
             await refinement?.setSpeechActive(active)
             if active {
-                turnRelease?.cancel()
                 await voiceprint.beginUtterance()
-                scheduleAutoTurnClassification()
             } else {
-                autoTurnClassification?.cancel()
                 await voiceprint.endUtterance()
                 loadLLMIfAllowed()
-                scheduleTurnRelease()
             }
             return
         }
@@ -568,16 +504,12 @@ final class CaptionPipeline {
         switch output.kind {
         case .volatileUpdate:
             let entryID = store.applyVolatile(text: output.text, direction: direction)
-            translator.draftDebounced(
-                output.text, direction: direction, entryID: entryID, store: store)
-
-        case .finalized(let refine):
-            // Each finalized utterance with a known turn owner teaches that
-            // speaker's voice profile (bootstrap for automatic turns).
-            if conversationDirections != nil {
-                await voiceprint.learnCurrentWindow(as: direction.source)
+            if direction.source != direction.target {
+                translator.draftDebounced(
+                    output.text, direction: direction, entryID: entryID, store: store)
             }
 
+        case .finalized(let refine):
             // Tier-0: deterministically restore near-miss hotwords before
             // anything else sees the text — the draft benefits too.
             let matcher = hotwords.matcher
@@ -594,20 +526,30 @@ final class CaptionPipeline {
                 }
             }
 
-            guard let draft = await produceDraft(for: entry) else { return }
+            // Transcribe-only sessions (source == target) skip translation
+            // but still get LLM transcript polish.
+            let translationEnabled = direction.source != direction.target
+            var draft = ""
+            if translationEnabled {
+                guard let produced = await produceDraft(for: entry) else { return }
+                draft = produced
+            }
 
             // Hotword near-misses force refinement even for short
             // utterances — names usually appear in exactly those.
-            let wantsRefinement = refine
-                || matcher.shouldForceRefine(text, language: direction.source)
+            let wantsRefinement = translationEnabled
+                ? (refine || matcher.shouldForceRefine(text, language: direction.source))
+                : transcriptPolishEnabled
             if wantsRefinement, llmEnabled, thermal.policy == .full, await llmIsReady() {
                 store.markRefining(entry.id)
-                let history = store.recentHistory(limit: 6).map {
-                    PromptBuilder.HistoryTurn(
-                        sourceLanguage: $0.direction.source,
-                        sourceText: $0.sourceText,
-                        translation: $0.displayTranslation ?? "")
-                }
+                let history = translationEnabled
+                    ? store.recentHistory(limit: 6).map {
+                        PromptBuilder.HistoryTurn(
+                            sourceLanguage: $0.direction.source,
+                            sourceText: $0.sourceText,
+                            translation: $0.displayTranslation ?? "")
+                    }
+                    : []
                 await refinement?.enqueue(RefinementQueue.Job(
                     entryID: entry.id,
                     source: text,
@@ -635,9 +577,6 @@ final class CaptionPipeline {
             let draft = try await translator.draft(
                 entry.sourceText, direction: entry.direction)
             store.setDraft(draft, for: entry.id)
-            if sessionMode == .conversation, ttsEnabled {
-                speech.speak(draft, language: entry.direction.target)
-            }
             return draft
         } catch {
             logger.warning("draft translation failed: \(error)")
@@ -647,38 +586,12 @@ final class CaptionPipeline {
         }
     }
 
-    /// Conversation flow: after sustained silence the speaker's turn ends,
-    /// freeing the other side to talk without anyone tapping "switch".
-    /// (Voiceprint auto mode handles the switch itself; this is the manual
-    /// mode courtesy.) Waits for any spoken translation to finish first.
-    private func scheduleTurnRelease() {
-        guard conversationDirections != nil, !autoTurnsEnabled,
-              case .listening = phase else { return }
-        turnRelease?.cancel()
-        turnRelease = Task { [weak self] in
-            try? await Task.sleep(for: .seconds(2.5))
-            guard let self, !Task.isCancelled else { return }
-            // Closing the audio session mid-TTS would cut the spoken
-            // translation off; wait it out.
-            while self.speech.isSpeaking, !Task.isCancelled {
-                try? await Task.sleep(for: .milliseconds(200))
-            }
-            guard !Task.isCancelled else { return }
-            try? await self.serialized { [self] in
-                guard case .listening = phase else { return }
-                logger.info("silence: releasing conversation turn")
-                await endTurn()
-                phase = .paused(.turnReleased)
-            }
-        }
-    }
-
-    /// Change the captions speaker count, live: existing utterances are
-    /// re-clustered into the new count and relabeled on screen. The audio
-    /// tee follows automatically (checked per-chunk in the feed loop).
+    /// Change the speaker count, live: existing utterances are re-clustered
+    /// into the new count and relabeled on screen. The audio tee follows
+    /// automatically (checked per-chunk in the feed loop).
     func updateSpeakerCount(_ count: Int) {
         UserDefaults.standard.set(count, forKey: "captions.speakerCount")
-        guard isRunning, sessionMode == .captions else { return }
+        guard isRunning else { return }
         diarizationActive = count >= 2
         Task { [weak self] in
             guard let self else { return }
@@ -695,33 +608,6 @@ final class CaptionPipeline {
             } else {
                 await self.voiceprint.stopDiarization()
             }
-        }
-    }
-
-    // MARK: Automatic turns (voiceprint)
-
-    /// ~1.5s into an utterance, identify the speaker and switch the turn if
-    /// it's the other side talking. Manual taps always win — this task is
-    /// cancelled whenever the turn changes by hand (endTurn cancels tasks).
-    private func scheduleAutoTurnClassification() {
-        autoTurnClassification?.cancel()
-        guard autoTurnsEnabled,
-              let directions = conversationDirections,
-              let active = activeDirection else { return }
-        let languages = Set(directions.map(\.source))
-
-        autoTurnClassification = Task { [weak self] in
-            try? await Task.sleep(for: .milliseconds(1500))
-            guard let self, !Task.isCancelled else { return }
-            guard await self.voiceprint.profilesReady(for: languages) else { return }
-            guard let speaker = await self.voiceprint.classifyCurrentWindow(among: languages),
-                  speaker != active.source,
-                  let newDirection = directions.first(where: { $0.source == speaker }),
-                  self.activeDirection == active
-            else { return }
-            self.logger.info("auto turn: \(active.source.rawValue) → \(speaker.rawValue)")
-            Haptics.turnSwitch()
-            try? await self.switchDirection(to: newDirection)
         }
     }
 

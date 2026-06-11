@@ -34,7 +34,7 @@ struct OnboardingView: View {
                 .foregroundStyle(.tint)
             Text("Locally")
                 .font(.largeTitle.bold())
-            Text("Real-time speech translation that never leaves your device.")
+            Text("Private on-device voice notes, transcripts and summaries — with live translation.")
                 .multilineTextAlignment(.center)
                 .foregroundStyle(.secondary)
                 .padding(.horizontal, 32)

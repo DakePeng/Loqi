@@ -41,6 +41,18 @@ struct PromptBuilder: Sendable {
         """
     }
 
+    /// Transcribe-only sessions still get LLM cleanup of the transcript,
+    /// just with no translation to produce.
+    func polishSystemPrompt(language: AppLanguage) -> String {
+        """
+        You clean up speech-recognition transcripts in \(language.promptName). \
+        Fix obvious recognition errors and punctuation. Keep the speaker's \
+        wording and meaning; when unsure, keep it unchanged. \
+        Output exactly one line and nothing else:
+        S: <cleaned sentence>
+        """
+    }
+
     /// Parse the two-line refinement output. Tolerates fullwidth colons and
     /// missing tags (untagged output is treated as the translation, so the
     /// single-line prompt remains compatible).

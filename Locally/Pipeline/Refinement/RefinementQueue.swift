@@ -101,18 +101,29 @@ actor RefinementQueue {
 
             var outcome = Outcome()
             do {
-                let raw = try await llm.generate(
-                    system: prompts.systemPrompt(
-                        direction: job.direction, cleanSource: job.cleanSource),
-                    user: prompts.userPrompt(
-                        source: job.source,
-                        draft: job.draft,
-                        direction: job.direction,
-                        history: job.history,
-                        glossary: job.glossary),
-                    maxTokens: job.cleanSource ? 220 : 120)
+                // Transcribe-only sessions enqueue with an empty draft:
+                // polish the transcript, no translation to refine.
+                let polishOnly = job.draft.isEmpty && job.cleanSource
+                let raw: String
+                if polishOnly {
+                    raw = try await llm.generate(
+                        system: prompts.polishSystemPrompt(language: job.direction.source),
+                        user: "Sentence: \(job.source)",
+                        maxTokens: 120)
+                } else {
+                    raw = try await llm.generate(
+                        system: prompts.systemPrompt(
+                            direction: job.direction, cleanSource: job.cleanSource),
+                        user: prompts.userPrompt(
+                            source: job.source,
+                            draft: job.draft,
+                            direction: job.direction,
+                            history: job.history,
+                            glossary: job.glossary),
+                        maxTokens: job.cleanSource ? 220 : 120)
+                }
                 let parsed = prompts.parseRefinement(raw)
-                if let translation = parsed.translation,
+                if !polishOnly, let translation = parsed.translation,
                    prompts.isAcceptable(translation, draft: job.draft) {
                     outcome.translation = translation
                 }

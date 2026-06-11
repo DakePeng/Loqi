@@ -3,15 +3,9 @@ import FluidAudio
 import Foundation
 import os
 
-/// Speaker identification for automatic turn-taking in conversation mode.
-///
-/// No explicit enrollment: while turns are claimed manually, each finalized
-/// utterance teaches the active speaker's profile. Once both sides have
-/// enough samples, utterance starts can be classified and the turn switched
-/// automatically.
-///
-/// Profiles are biometric data: they live only in this app's container and
-/// can be wiped from Settings.
+/// Speaker embeddings for diarization: live captions and audio import group
+/// utterances into voices entirely on-device, per session — nothing is
+/// enrolled or persisted.
 actor VoiceprintService {
     enum State: Sendable, Equatable {
         case unloaded
@@ -21,14 +15,8 @@ actor VoiceprintService {
         case failed(String)
     }
 
-    struct Profile: Codable, Sendable {
-        var centroid: [Float]
-        var sampleCount: Int
-    }
-
     private(set) var state: State = .unloaded
     private var diarizer: DiarizerManager?
-    private var profiles: [AppLanguage: Profile] = [:]
 
     /// Rolling window of the current utterance (16kHz mono samples).
     private var window: [Float] = []
@@ -36,21 +24,7 @@ actor VoiceprintService {
     /// Minimum audio for a usable embedding.
     private let minWindowSamples = 16_000
 
-    /// Profiles need this many utterances per side before auto mode engages.
-    private let minSamplesPerProfile = 5
-
     private let logger = Logger(subsystem: "com.kunzhipeng.locally", category: "voiceprint")
-
-    private static var profilesURL: URL {
-        URL.applicationSupportDirectory.appending(path: "voiceprints.json")
-    }
-
-    init() {
-        if let data = try? Data(contentsOf: Self.profilesURL),
-           let decoded = try? JSONDecoder().decode([AppLanguage: Profile].self, from: data) {
-            profiles = decoded
-        }
-    }
 
     // MARK: Model lifecycle
 
@@ -204,55 +178,14 @@ actor VoiceprintService {
         }
     }
 
-    // MARK: Profiles
-
     /// The cleanest single-speaker audio available: the VAD speech-end
-    /// snapshot when valid, else the live rolling window. All embedding
-    /// consumers must use this — embedding the live window at ASR-finalize
-    /// time picks up the next speaker's opening words.
+    /// snapshot when valid, else the live rolling window — embedding the
+    /// live window at ASR-finalize time can pick up the next speaker.
     private var currentUtteranceSamples: [Float] {
         utteranceSnapshot.count >= minWindowSamples ? utteranceSnapshot : window
     }
 
-    /// Teach the active side's profile from the current utterance (called
-    /// on finalized utterances while the turn owner is known).
-    func learnCurrentWindow(as language: AppLanguage) {
-        guard let embedding = embed(currentUtteranceSamples) else { return }
-        if let existing = profiles[language] {
-            profiles[language] = Profile(
-                centroid: VoiceprintMath.updatedCentroid(
-                    existing.centroid, count: existing.sampleCount, adding: embedding),
-                sampleCount: existing.sampleCount + 1)
-        } else {
-            profiles[language] = Profile(centroid: embedding, sampleCount: 1)
-        }
-        persistProfiles()
-    }
-
-    func profilesReady(for languages: Set<AppLanguage>) -> Bool {
-        languages.allSatisfy { (profiles[$0]?.sampleCount ?? 0) >= minSamplesPerProfile }
-    }
-
-    /// Identify the speaker of the current window among `languages`.
-    /// Nil = not confident enough; leave the turn alone.
-    func classifyCurrentWindow(among languages: Set<AppLanguage>) -> AppLanguage? {
-        guard profilesReady(for: languages),
-              let probe = embed(currentUtteranceSamples) else { return nil }
-        let candidates = languages.compactMap { language -> (String, [Float])? in
-            guard let profile = profiles[language] else { return nil }
-            return (language.rawValue, profile.centroid)
-        }
-        guard let id = VoiceprintMath.classify(probe: probe, candidates: candidates)
-        else { return nil }
-        return AppLanguage(rawValue: id)
-    }
-
-    func resetProfiles() {
-        profiles.removeAll()
-        try? FileManager.default.removeItem(at: Self.profilesURL)
-    }
-
-    // MARK: Diarization (captions mode)
+    // MARK: Diarization
 
     /// Session-scoped diarization state; not persisted — each captions
     /// session diarizes from scratch. Every utterance's embedding is
@@ -355,13 +288,6 @@ actor VoiceprintService {
         }
     }
 
-    private func persistProfiles() {
-        try? FileManager.default.createDirectory(
-            at: URL.applicationSupportDirectory, withIntermediateDirectories: true)
-        if let data = try? JSONEncoder().encode(profiles) {
-            try? data.write(to: Self.profilesURL)
-        }
-    }
 }
 
 enum VoiceprintError: LocalizedError {

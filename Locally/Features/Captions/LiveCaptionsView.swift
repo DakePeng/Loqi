@@ -38,7 +38,7 @@ struct LiveCaptionsView: View {
                 transcript(entries)
                 controls
             }
-            .navigationTitle("Live Captions")
+            .navigationTitle("Record")
             .toolbar {
                 ToolbarItem(placement: .topBarTrailing) {
                     Button("Clear") { pipeline.store.clear(.captions) }
@@ -274,10 +274,6 @@ struct LiveCaptionsView: View {
             if pipeline.isRunning {
                 await pipeline.stop()
             } else {
-                guard source != target else {
-                    errorMessage = "Choose two different languages."
-                    return
-                }
                 guard await AudioCaptureService.requestPermission() else {
                     errorMessage = "Microphone access is required. Enable it in Settings."
                     return
