@@ -4,7 +4,8 @@ Private voice notes, transcripts and summaries that run **entirely on your iPhon
 
 - **Main line:** Record → live transcript (with speakers) → instant summary → searchable archive. Pick the same language for both sides and the app is a pure recorder/transcriber; pick different ones and live translation appears alongside.
 - **Languages (v1):** Chinese ↔ English ↔ Japanese (+ Korean).
-- **How it works:** Apple's `SpeechAnalyzer` streams the transcript → an on-device LLM (Qwen3.5-2B via MLX, ~1.3 GB) polishes lines, maps the conversation into outline notes as you speak, and writes the summary the moment you stop. When translating, the system Translation framework shows an instant draft that the LLM quietly upgrades using context.
+- **How it works:** speech is transcribed live → an on-device LLM (Qwen3.5-2B via MLX, ~1.3 GB) polishes lines, maps the conversation into outline notes as you speak, and writes the summary the moment you stop. When translating, the system Translation framework shows an instant draft that the LLM quietly upgrades using context.
+- **Two recognition engines** (Settings → Speech recognition): Apple `SpeechAnalyzer` (instant, word-by-word, zero download) or **SenseVoice-small** via sherpa-onnx (~230 MB, much higher zh/ja/ko/en accuracy, captions update in ~1s pulses). SenseVoice frameworks: run `Scripts/fetch-sherpa-onnx.sh` once before generating the project.
 - **Audio recording:** each session's audio is kept (AAC, ~14 MB/hour) and playable from the session detail — toggle off in Settings.
 - **Live summary mapping:** chunk notes generate during silences while you record, so "Summarize" after a long meeting is near-instant, and a "Summary so far" digest is available mid-session.
 - **Speaker separation:** tell the app how many people are talking (2–6) and the transcript groups into color-coded speaker blocks, clustered by voice on-device per session (FluidAudio embeddings, ~50MB). Rename speakers any time.

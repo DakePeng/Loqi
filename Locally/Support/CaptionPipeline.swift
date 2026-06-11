@@ -55,7 +55,7 @@ final class CaptionPipeline {
     /// never by comparing display strings, and subsystems can't clobber each
     /// other. Rendered by PipelineStatusBar in both modes.
     enum StatusKey: Int, Comparable, Hashable {
-        case interruption = 0, memory, thermal, llm, diarizer
+        case interruption = 0, memory, thermal, llm, diarizer, asr
         static func < (lhs: Self, rhs: Self) -> Bool { lhs.rawValue < rhs.rawValue }
     }
     private(set) var statusMessages: [StatusKey: String] = [:]
@@ -78,7 +78,10 @@ final class CaptionPipeline {
 
     private let audio = AudioCaptureService()
     private let segmenter = TranscriptSegmenter()
-    private var engines: [AppLanguage: TranscriptionEngine] = [:]
+    private var engines: [AppLanguage: any SpeechEngine] = [:]
+    /// Which backend the cached engines were built for; a Settings change
+    /// invalidates them.
+    private var enginesKind = ""
     private var refinement: RefinementQueue?
     private var feedTask: Task<Void, Never>?
     private var levelTask: Task<Void, Never>?
@@ -236,9 +239,7 @@ final class CaptionPipeline {
             await voiceprint.stopDiarization()
         }
 
-        if engines[direction.source] == nil {
-            engines[direction.source] = TranscriptionEngine(language: direction.source)
-        }
+        ensureEngine(for: direction.source)
 
         do {
             try await beginTurn(direction: direction)
@@ -453,12 +454,37 @@ final class CaptionPipeline {
 
     // MARK: Turn plumbing
 
+    /// Engine selection: "asr.engine" == "sensevoice" uses the SenseVoice
+    /// backend when its model is installed, falling back to Apple with a
+    /// status pill otherwise. Changing the setting invalidates cached
+    /// engines (they are rebuilt per session via prepare anyway).
+    private func ensureEngine(for language: AppLanguage) {
+        let wantsSenseVoice = UserDefaults.standard.string(forKey: "asr.engine") == "sensevoice"
+        let kind: String
+        if wantsSenseVoice, SenseVoiceModelStore.isInstalled {
+            kind = "sensevoice"
+            setStatus(.asr, nil)
+        } else {
+            kind = "apple"
+            setStatus(.asr, wantsSenseVoice
+                ? String(localized: "SenseVoice model not downloaded — using Apple recognition.")
+                : nil)
+        }
+        if enginesKind != kind {
+            engines.removeAll()
+            enginesKind = kind
+        }
+        if engines[language] == nil {
+            engines[language] = kind == "sensevoice"
+                ? SenseVoiceEngine(language: language)
+                : TranscriptionEngine(language: language)
+        }
+    }
+
     private func beginTurn(direction: LanguagePair) async throws {
         // Self-heal: a turn can ask for a direction the session was not
         // started with. Build whatever is missing on demand.
-        if engines[direction.source] == nil {
-            engines[direction.source] = TranscriptionEngine(language: direction.source)
-        }
+        ensureEngine(for: direction.source)
         await translator.addDirection(direction)
         guard let engine = engines[direction.source] else {
             throw TranscriptionError.assetsUnavailable(direction.source)

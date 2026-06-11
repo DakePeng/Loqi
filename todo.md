@@ -32,6 +32,15 @@ private capture + summarization is the differentiated product.
 
 ## Device verification queue (needs the physical iPhone)
 
+- [ ] **SenseVoice accuracy spike** — Settings → Speech recognition →
+  SenseVoice → download (~230 MB, HF-Mirror if needed) → record the same
+  speech with both engines and compare. Watch: decode latency per pulse
+  (console "sensevoice" category), thermal behavior alongside the LLM, and
+  whether 0.5s minSilence segments feel right. If accuracy disappoints on
+  real audio, the WhisperKit fallback plan applies.
+- [ ] **SenseVoice + import** — imports still use Apple ASR
+  (FileImportEngine); port to the selected engine as a follow-up.
+
 - [ ] **AAC recording path** — analyzer-format buffers → AVAudioFile encode is
   simulator-unverifiable. Record 2 min, stop, play back from detail; toggle
   the Settings kill-switch and confirm no Recording section.

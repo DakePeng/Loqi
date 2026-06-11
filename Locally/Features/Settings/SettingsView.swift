@@ -9,6 +9,10 @@ struct SettingsView: View {
     @AppStorage("transcript.polish") private var transcriptPolish = true
     @AppStorage("diarizer.source") private var diarizerSourceRaw = DiarizerSource.huggingFace.rawValue
     @AppStorage("audio.saveRecordings") private var saveRecordings = true
+    @AppStorage("asr.engine") private var asrEngine = "apple"
+    @AppStorage("asr.source") private var asrSourceRaw = ASRModelSource.huggingFace.rawValue
+    @State private var senseVoiceStore = SenseVoiceModelStore()
+    @State private var senseVoiceInstalled = SenseVoiceModelStore.isInstalled
     @State private var diarizerState = "—"
     @State private var diarizerProgress: Double?
     @State private var diarizerError: String?
@@ -21,6 +25,50 @@ struct SettingsView: View {
     var body: some View {
         NavigationStack {
             Form {
+                Section {
+                    Picker("Engine", selection: $asrEngine) {
+                        Text("Apple (instant)").tag("apple")
+                        Text("SenseVoice (accurate)").tag("sensevoice")
+                    }
+
+                    if asrEngine == "sensevoice" {
+                        LabeledContent(
+                            "Recognition model",
+                            value: senseVoiceInstalled
+                                ? String(localized: "Downloaded")
+                                : String(localized: "Not downloaded"))
+
+                        if !senseVoiceInstalled {
+                            Picker("Download from", selection: $asrSourceRaw) {
+                                ForEach(ASRModelSource.allCases) { source in
+                                    Text(source.displayName).tag(source.rawValue)
+                                }
+                            }
+                            Button("Download SenseVoice model (~230 MB)") {
+                                Task {
+                                    let source = ASRModelSource(
+                                        rawValue: asrSourceRaw) ?? .huggingFace
+                                    await senseVoiceStore.download(from: source)
+                                    senseVoiceInstalled = SenseVoiceModelStore.isInstalled
+                                }
+                            }
+                            .disabled(senseVoiceStore.downloading)
+                            if senseVoiceStore.downloading {
+                                ProgressView(value: senseVoiceStore.progress)
+                            }
+                            if let error = senseVoiceStore.lastError {
+                                Text(error)
+                                    .font(.footnote)
+                                    .foregroundStyle(.red)
+                            }
+                        }
+                    }
+                } header: {
+                    Text("Speech recognition")
+                } footer: {
+                    Text("SenseVoice recognizes 中文, English, 日本語 and 한국어 with much higher accuracy — captions update in ~1-second pulses instead of word-by-word. Runs fully on this iPhone.")
+                }
+
                 Section("Enhanced translation model") {
                     Toggle("Enhanced translation (LLM)", isOn: $llmEnabled)
                         .onChange(of: llmEnabled) {

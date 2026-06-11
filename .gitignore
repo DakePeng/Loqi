@@ -10,3 +10,6 @@ DerivedData/
 
 # macOS
 .DS_Store
+
+# Prebuilt sherpa-onnx binaries (Scripts/fetch-sherpa-onnx.sh)
+ThirdParty/

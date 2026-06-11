@@ -3,12 +3,27 @@ import Foundation
 import Speech
 import os
 
+/// Common surface for live recognition backends. The pipeline drives a
+/// session through this; which implementation it gets is a Settings choice
+/// (Apple SpeechAnalyzer = instant word-by-word, SenseVoice = higher
+/// accuracy in ~1s pulses).
+protocol SpeechEngine: Actor {
+    nonisolated var language: AppLanguage { get }
+    /// Build the recognition stack; returns the audio format to feed.
+    func prepare(contextualStrings: [String]) async throws -> AVAudioFormat
+    func start() async throws -> AsyncStream<TranscriptionEvent>
+    func feed(_ chunk: AudioCaptureService.AudioChunk)
+    /// Flushes pending audio into final results, then finishes the stream.
+    func stop() async
+    func applyContextualStrings(_ strings: [String]) async throws
+}
+
 /// Wraps SpeechAnalyzer/SpeechTranscriber for one locale.
 /// Feed it converted audio buffers; consume the event stream from start().
 ///
 /// A fresh analyzer/transcriber stack is built for every session: a finished
 /// SpeechAnalyzer cannot be restarted, so prepare() always rebuilds.
-actor TranscriptionEngine {
+actor TranscriptionEngine: SpeechEngine {
     let language: AppLanguage
 
     private var analyzer: SpeechAnalyzer?
