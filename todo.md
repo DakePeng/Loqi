@@ -38,8 +38,10 @@ private capture + summarization is the differentiated product.
   (console "sensevoice" category), thermal behavior alongside the LLM, and
   whether 0.5s minSilence segments feel right. If accuracy disappoints on
   real audio, the WhisperKit fallback plan applies.
-- [ ] **SenseVoice + import** — imports still use Apple ASR
-  (FileImportEngine); port to the selected engine as a follow-up.
+- [x] **SenseVoice + import** — imports now honor the `asr.engine`
+  setting (offline VAD+decode via SenseVoiceFileTranscriber) and accept
+  video files (audio extracted via AVAssetExportSession). Device check:
+  import the same clip on both engines + an mp4/mov.
 
 - [ ] **AAC recording path** — analyzer-format buffers → AVAudioFile encode is
   simulator-unverifiable. Record 2 min, stop, play back from detail; toggle
