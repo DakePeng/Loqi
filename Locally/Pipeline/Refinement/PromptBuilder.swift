@@ -156,19 +156,6 @@ struct PromptBuilder: Sendable {
 
     // MARK: Session-level prompts
 
-    /// Summarize a finished session in the reader's language.
-    func summaryPrompt(transcript: String, in language: AppLanguage) -> (system: String, user: String) {
-        let system = """
-        You summarize meeting/conversation transcripts. Write entirely in \
-        \(language.promptName). PLAIN TEXT ONLY: no markdown, no asterisks, \
-        no headings. Output a 2-4 sentence summary paragraph, then up to 5 \
-        lines each starting with "• " containing key facts, decisions, or \
-        action items. Refer to speakers by their labels once, without \
-        repeating the label in parentheses. Be concrete. No preamble.
-        """
-        return (system, "Transcript:\n\(transcript)")
-    }
-
     /// Map phase of map-reduce summarization: narrow tagged extraction from
     /// one transcript chunk — the task shape small models are good at.
     func chunkNotePrompt(
@@ -215,18 +202,96 @@ struct PromptBuilder: Sendable {
 
     /// Reduce phase: the model sees only the per-chunk notes — never the
     /// raw transcript — keeping the input inside a small model's competence.
+    /// Tagged-line output (the shape small models handle reliably);
+    /// `renderSummaryMarkdown` synthesizes the stored markdown from it.
     func reduceSummaryPrompt(
         notes: String, in language: AppLanguage
     ) -> (system: String, user: String) {
         let system = """
         You combine sectioned meeting notes into one final summary. Write \
-        entirely in \(language.promptName). PLAIN TEXT ONLY: no markdown, no \
-        asterisks, no headings. Output a 2-4 sentence overview paragraph, \
-        then up to 6 lines each starting with "• " covering the most \
-        important facts, decisions, and action items (keep who does what). \
-        Merge duplicates. No preamble.
+        entirely in \(language.promptName). Plain text, no markdown. Output \
+        ONLY tagged lines: first 1-3 lines "O: <overview sentence>", then \
+        up to 4 lines "T: <main topic>", up to 4 lines "D: <decision>", \
+        up to 5 lines "A: <action item, keep who does what>". Skip \
+        categories with nothing to report. Merge duplicates. No other text.
         """
         return (system, "Notes:\n\(notes)")
+    }
+
+    struct ParsedStructuredSummary {
+        var overview: [String] = []
+        var topics: [String] = []
+        var decisions: [String] = []
+        var actions: [String] = []
+
+        var isEmpty: Bool {
+            overview.isEmpty && topics.isEmpty && decisions.isEmpty && actions.isEmpty
+        }
+
+        /// All content with no markdown scaffolding — what repetition
+        /// validation should look at.
+        var joinedValues: String {
+            (overview + topics + decisions + actions).joined(separator: "\n")
+        }
+    }
+
+    /// Parse the reduce model's tagged lines. Lines that don't parse (or
+    /// degenerate into repetition) are dropped; an entirely untagged response
+    /// returns `.isEmpty` so the caller can fall back to plain text.
+    func parseStructuredSummary(_ raw: String) -> ParsedStructuredSummary {
+        var summary = ParsedStructuredSummary()
+        for line in cleanResponse(raw).split(separator: "\n") {
+            let trimmed = line.trimmingCharacters(in: .whitespaces)
+                .replacingOccurrences(of: "**", with: "")
+                .replacingOccurrences(of: "##", with: "")
+            guard !Self.hasDegenerateRepetition(trimmed) else { continue }
+            if let value = tagged(trimmed, "O"), summary.overview.count < 3 {
+                summary.overview.append(value)
+            } else if let value = tagged(trimmed, "T"), summary.topics.count < 4 {
+                summary.topics.append(value)
+            } else if let value = tagged(trimmed, "D"), summary.decisions.count < 4 {
+                summary.decisions.append(value)
+            } else if let value = tagged(trimmed, "A"), summary.actions.count < 5 {
+                summary.actions.append(value)
+            }
+        }
+        return summary
+    }
+
+    /// Section headings baked into the stored summary in the summary's own
+    /// language (generation language is independent of UI locale, so this
+    /// is a code table, not xcstrings). The renderer treats any "## " line
+    /// as a heading and never keys on these words.
+    static func summaryHeadings(
+        for language: AppLanguage
+    ) -> (topics: String, decisions: String, actions: String) {
+        switch language {
+        case .english: ("Topics", "Decisions", "Action Items")
+        case .chinese: ("主题", "决定", "待办事项")
+        case .japanese: ("トピック", "決定事項", "アクションアイテム")
+        case .korean: ("주제", "결정 사항", "액션 아이템")
+        }
+    }
+
+    /// Deterministic markdown synthesis: overview paragraph, then one
+    /// "## Heading" + "- " bullet section per non-empty category.
+    func renderSummaryMarkdown(
+        _ parsed: ParsedStructuredSummary, in language: AppLanguage
+    ) -> String {
+        let headings = Self.summaryHeadings(for: language)
+        var blocks: [String] = []
+        if !parsed.overview.isEmpty {
+            blocks.append(parsed.overview.joined(separator: " "))
+        }
+        for (heading, items) in [
+            (headings.topics, parsed.topics),
+            (headings.decisions, parsed.decisions),
+            (headings.actions, parsed.actions),
+        ] where !items.isEmpty {
+            let bullets = items.map { "- \($0)" }.joined(separator: "\n")
+            blocks.append("## \(heading)\n\(bullets)")
+        }
+        return blocks.joined(separator: "\n\n")
     }
 
     /// Summaries render in a plain Text view; stray markdown reads as

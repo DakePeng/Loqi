@@ -230,4 +230,42 @@ struct SummaryTextParseTests {
             .bullet("real"),
         ])
     }
+
+    @Test func parsesSectionHeadings() {
+        let parts = SummaryTextView.parse("""
+        团队确认了发布日期。
+
+        ## 主题
+        - 发布定于7月10日
+        - 预算仍待批准
+
+        ## Action Items
+        - 王经理负责预算审批
+        """)
+        #expect(parts == [
+            .paragraph("团队确认了发布日期。"),
+            .heading("主题"),
+            .bullet("发布定于7月10日"),
+            .bullet("预算仍待批准"),
+            .heading("Action Items"),
+            .bullet("王经理负责预算审批"),
+        ])
+    }
+
+    @Test func toleratesDeeperHeadingsAndSkipsEmptyOnes() {
+        let parts = SummaryTextView.parse("### Deep\n##\nBody text")
+        #expect(parts == [
+            .heading("Deep"),
+            .paragraph("Body text"),
+        ])
+    }
+
+    @Test func headingClosesOpenParagraph() {
+        let parts = SummaryTextView.parse("One\ntwo\n## Topics\n- a")
+        #expect(parts == [
+            .paragraph("One two"),
+            .heading("Topics"),
+            .bullet("a"),
+        ])
+    }
 }

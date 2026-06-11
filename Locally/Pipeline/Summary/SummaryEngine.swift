@@ -128,11 +128,21 @@ struct SummaryEngine {
         let raw = try await llm.generate(
             system: reducePrompt.system, user: reducePrompt.user,
             maxTokens: 320, temperature: 0.3)
-        let summary = prompts.cleanSummary(raw)
-        guard !summary.isEmpty, !PromptBuilder.hasDegenerateRepetition(summary) else {
+        let parsed = prompts.parseStructuredSummary(raw)
+        if parsed.isEmpty {
+            // Model ignored the tags — keep the cleaned plain text, which
+            // the renderer's legacy paragraph/bullet path handles.
+            let summary = prompts.cleanSummary(raw)
+            guard !summary.isEmpty, !PromptBuilder.hasDegenerateRepetition(summary) else {
+                throw SummaryError.generationFailed
+            }
+            return summary
+        }
+        // Validate the content, not the synthesized "## "/"- " scaffolding.
+        guard !PromptBuilder.hasDegenerateRepetition(parsed.joinedValues) else {
             throw SummaryError.generationFailed
         }
-        return summary
+        return prompts.renderSummaryMarkdown(parsed, in: language)
     }
 
     /// Map + reduce, resuming from live notes when the record has them.

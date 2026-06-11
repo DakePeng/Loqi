@@ -94,4 +94,45 @@ struct PromptBuilderTests {
         #expect(prompt.contains("Zhipeng → 志鹏"))
         #expect(prompt.contains("Glossary"))
     }
+
+    @Test func parsesStructuredSummaryTags() {
+        let parsed = builder.parseStructuredSummary("""
+        O: 团队确认了发布日期。
+        O：预算仍待批准。
+        T: **发布计划**
+        D: 定于7月10日发布
+        A: 王经理周五前提交预算
+        chatter the model added
+        """)
+        #expect(parsed.overview == ["团队确认了发布日期。", "预算仍待批准。"])
+        #expect(parsed.topics == ["发布计划"])   // fullwidth colon + ** stripped
+        #expect(parsed.decisions == ["定于7月10日发布"])
+        #expect(parsed.actions == ["王经理周五前提交预算"])
+        #expect(!parsed.isEmpty)
+    }
+
+    @Test func structuredSummaryCapsAndUntaggedFallback() {
+        let overflowing = (1...6).map { "T: topic number \($0)" }.joined(separator: "\n")
+        #expect(builder.parseStructuredSummary(overflowing).topics.count == 4)
+
+        let untagged = builder.parseStructuredSummary(
+            "A plain paragraph with no tags at all.\n• and a bullet")
+        #expect(untagged.isEmpty)
+    }
+
+    @Test func rendersSummaryMarkdownSkippingEmptySections() {
+        var parsed = PromptBuilder.ParsedStructuredSummary()
+        parsed.overview = ["First sentence.", "Second sentence."]
+        parsed.topics = ["发布计划"]
+        parsed.actions = ["王经理提交预算"]
+        let markdown = builder.renderSummaryMarkdown(parsed, in: .chinese)
+        #expect(markdown.hasPrefix("First sentence. Second sentence."))
+        #expect(markdown.contains("## 主题\n- 发布计划"))
+        #expect(markdown.contains("## 待办事项\n- 王经理提交预算"))
+        #expect(!markdown.contains("## 决定"))   // empty section hidden
+
+        let english = builder.renderSummaryMarkdown(parsed, in: .english)
+        #expect(english.contains("## Topics"))
+        #expect(english.contains("## Action Items"))
+    }
 }

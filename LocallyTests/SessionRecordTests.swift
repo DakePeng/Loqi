@@ -48,6 +48,39 @@ struct SessionRecordTests {
         #expect(md.contains("A lecture about translation."))
     }
 
+    @Test func markdownDemotesSummarySectionHeadings() {
+        var record = makeRecord()
+        record.summary = "Overview here.\n\n## Topics\n- one\n\n## Action Items\n- two"
+        record.chunkNotes = [
+            .init(headline: "Intro", startedAt: .now),
+            .init(headline: "Q&A", startedAt: .now),
+        ]
+        let md = record.markdown()
+        #expect(md.contains("### Topics"))
+        #expect(md.contains("### Action Items"))
+        #expect(!md.contains("\n## Topics"))
+        #expect(md.contains("## Timeline"))
+        #expect(!md.contains("## Outline"))
+    }
+
+    @Test func decodesRecordWithoutSummaryEditedFlag() throws {
+        // Files written before the flag existed must keep loading.
+        let record = makeRecord()
+        let encoder = JSONEncoder()
+        encoder.dateEncodingStrategy = .iso8601
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        let decoded = try decoder.decode(
+            SessionRecord.self, from: encoder.encode(record))
+        #expect(decoded.summaryEdited == nil)
+
+        var edited = record
+        edited.summaryEdited = true
+        let roundTripped = try decoder.decode(
+            SessionRecord.self, from: encoder.encode(edited))
+        #expect(roundTripped.summaryEdited == true)
+    }
+
     @Test func plainTranscriptIsCappedFromTheEnd() {
         var record = makeRecord()
         record.entries = (0..<500).map { i in

@@ -395,7 +395,7 @@ private struct SummarySoFarSheet: View {
             Group {
                 if let summary {
                     ScrollView {
-                        Text(summary)
+                        SummaryTextView(summary: summary)
                             .frame(maxWidth: .infinity, alignment: .leading)
                             .padding()
                     }

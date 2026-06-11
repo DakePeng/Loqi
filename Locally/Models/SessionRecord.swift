@@ -35,8 +35,11 @@ struct SessionRecord: Identifiable, Codable, Sendable {
     var entries: [Entry]
     /// User-assigned names for diarization slots ("Speaker 1" → "王经理").
     var speakerNames: [Int: String] = [:]
-    /// On-device LLM summary, cached once generated.
+    /// On-device LLM summary, cached once generated. Lightweight markdown:
+    /// overview paragraph, then "## Heading" sections of "- " bullets.
     var summary: String?
+    /// True when the user hand-edited the summary; regenerate warns first.
+    var summaryEdited: Bool?
     /// Map-phase notes (outline headlines + categorized bullets).
     var chunkNotes: [ChunkNote]?
     /// Last entry covered by live-generated chunkNotes; summarize maps only
@@ -72,13 +75,18 @@ struct SessionRecord: Identifiable, Codable, Sendable {
         if let summary {
             lines.append("## Summary")
             lines.append("")
-            lines.append(summary)
+            // Section headings inside the summary nest one level down.
+            let demoted = summary
+                .split(separator: "\n", omittingEmptySubsequences: false)
+                .map { $0.hasPrefix("## ") ? "#\($0)" : String($0) }
+                .joined(separator: "\n")
+            lines.append(demoted)
             lines.append("")
         }
         if let chunkNotes, chunkNotes.count > 1 {
             let formatter = DateFormatter()
             formatter.timeStyle = .short
-            lines.append("## Outline")
+            lines.append("## Timeline")
             lines.append("")
             for note in chunkNotes {
                 lines.append("- \(formatter.string(from: note.startedAt)) — \(note.headline)")

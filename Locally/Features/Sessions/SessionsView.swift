@@ -76,6 +76,10 @@ private struct SessionDetailView: View {
     @State private var renameText = ""
     @State private var scrollTarget: UUID?
     @State private var highlightedBlockID: UUID?
+    @State private var isEditingSummary = false
+    @State private var summaryDraft = ""
+    @State private var confirmRegenerate = false
+    @State private var timelineExpanded = false
 
     private var session: SessionRecord? {
         pipeline.archive.sessions.first { $0.id == sessionID }
@@ -104,29 +108,55 @@ private struct SessionDetailView: View {
                 }
 
                 if let summary = session.summary {
-                    Section("Summary") {
-                        SummaryTextView(summary: summary)
+                    Section {
+                        if isEditingSummary {
+                            TextEditor(text: $summaryDraft)
+                                .font(.callout)
+                                .frame(minHeight: 180)
+                        } else {
+                            SummaryTextView(summary: summary)
+                        }
+                    } header: {
+                        HStack {
+                            Text("Summary")
+                            Spacer()
+                            Button(isEditingSummary ? "Done" : "Edit") {
+                                if isEditingSummary {
+                                    saveSummaryEdit()
+                                } else {
+                                    summaryDraft = summary
+                                    isEditingSummary = true
+                                }
+                            }
+                            .font(.footnote)
+                            .textCase(nil)
+                            .disabled(summarizing)
+                        }
                     }
                 }
 
                 if let notes = session.chunkNotes, notes.count > 1 {
-                    Section("Outline") {
-                        ForEach(notes) { note in
-                            Button {
-                                if let anchor = note.anchorEntryID {
-                                    scrollTarget = anchor
-                                }
-                            } label: {
-                                HStack {
-                                    Text(note.headline)
-                                        .foregroundStyle(.primary)
-                                        .lineLimit(1)
-                                    Spacer()
-                                    Text(note.startedAt, style: .time)
-                                        .font(.caption)
-                                        .foregroundStyle(.secondary)
+                    Section {
+                        DisclosureGroup(isExpanded: $timelineExpanded) {
+                            ForEach(notes) { note in
+                                Button {
+                                    if let anchor = note.anchorEntryID {
+                                        scrollTarget = anchor
+                                    }
+                                } label: {
+                                    HStack {
+                                        Text(note.headline)
+                                            .foregroundStyle(.primary)
+                                            .lineLimit(1)
+                                        Spacer()
+                                        Text(note.startedAt, style: .time)
+                                            .font(.caption)
+                                            .foregroundStyle(.secondary)
+                                    }
                                 }
                             }
+                        } label: {
+                            Text("Timeline")
                         }
                     }
                 }
@@ -179,12 +209,16 @@ private struct SessionDetailView: View {
                 }
                 Menu {
                     Button {
-                        summarize()
+                        if session?.summaryEdited == true {
+                            confirmRegenerate = true
+                        } else {
+                            summarize()
+                        }
                     } label: {
                         Label(session?.summary == nil ? "Summarize" : "Re-summarize",
                               systemImage: "sparkles")
                     }
-                    .disabled(summarizing)
+                    .disabled(summarizing || isEditingSummary)
                     Button {
                         suggestHotwords()
                     } label: {
@@ -216,6 +250,16 @@ private struct SessionDetailView: View {
                 renamingSlot = nil
             }
             Button("Cancel", role: .cancel) { renamingSlot = nil }
+        }
+        .confirmationDialog(
+            "Replace edited summary?",
+            isPresented: $confirmRegenerate,
+            titleVisibility: .visible
+        ) {
+            Button("Replace", role: .destructive) { summarize() }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("You edited this summary. Summarizing again will replace your changes.")
         }
         .onChange(of: scrollTarget) {
             guard let target = scrollTarget, let session else { return }
@@ -301,6 +345,17 @@ private struct SessionDetailView: View {
         renamingSlot = slot
     }
 
+    private func saveSummaryEdit() {
+        defer { isEditingSummary = false }
+        guard var updated = session else { return }
+        let text = summaryDraft.trimmingCharacters(in: .whitespacesAndNewlines)
+        // Empty or unchanged edits revert rather than clearing the summary.
+        guard !text.isEmpty, text != updated.summary else { return }
+        updated.summary = text
+        updated.summaryEdited = true
+        pipeline.archive.update(updated)
+    }
+
     private func summarize() {
         guard let session else { return }
         summarizing = true
@@ -321,6 +376,7 @@ private struct SessionDetailView: View {
                 }
                 var updated = session
                 updated.summary = result.summary
+                updated.summaryEdited = nil
                 updated.chunkNotes = result.notes
                 // Full coverage now: future re-summarize is reduce-only.
                 updated.liveNotesEndEntryID = session.entries.last?.id
@@ -357,18 +413,22 @@ private struct SessionDetailView: View {
     }
 }
 
-/// Renders the plain-text summary (overview paragraph + "• " lines) with
-/// real typography: paragraphs read as prose, bullets get a hanging indent
-/// and breathing room, instead of one undifferentiated text blob.
+/// Renders the summary markdown (overview paragraph, "## " section headings,
+/// bullet lines) with real typography: paragraphs read as prose, headings
+/// separate sections, bullets get a hanging indent and breathing room.
+/// Legacy plain-text summaries (no headings) render as before.
 struct SummaryTextView: View {
     let summary: String
 
     enum Part: Equatable {
+        case heading(String)
         case paragraph(String)
         case bullet(String)
     }
 
-    /// Small models vary the bullet glyph; accept the common ones.
+    /// Small models vary the bullet glyph; accept the common ones. Any line
+    /// of leading "#"s is a heading regardless of its text — rendering never
+    /// keys on heading words, so hand-edits can't break it.
     /// nonisolated: pure string logic, also exercised off-main in tests.
     nonisolated static func parse(_ summary: String) -> [Part] {
         let markers = ["•", "・", "·", "●", "-", "*"]
@@ -386,6 +446,11 @@ struct SummaryTextView: View {
             let line = rawLine.trimmingCharacters(in: .whitespaces)
             if line.isEmpty {
                 closeParagraph()
+            } else if line.hasPrefix("#") {
+                closeParagraph()
+                let text = line.drop(while: { $0 == "#" })
+                    .trimmingCharacters(in: .whitespaces)
+                if !text.isEmpty { parts.append(.heading(text)) }
             } else if let marker = markers.first(where: { line.hasPrefix($0) }) {
                 closeParagraph()
                 let text = line.dropFirst(marker.count)
@@ -404,6 +469,11 @@ struct SummaryTextView: View {
         VStack(alignment: .leading, spacing: 10) {
             ForEach(Array(parts.enumerated()), id: \.offset) { _, part in
                 switch part {
+                case .heading(let text):
+                    Text(text)
+                        .font(.subheadline.weight(.semibold))
+                        .foregroundStyle(.secondary)
+                        .padding(.top, 4)
                 case .paragraph(let text):
                     Text(text)
                         .font(.callout)
