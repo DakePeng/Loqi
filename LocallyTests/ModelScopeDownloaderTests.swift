@@ -2,9 +2,8 @@ import Foundation
 import Testing
 @testable import Locally
 
-/// Tests the downloader's pure logic: pattern filtering, manifest-based
-/// snapshot validation, and the tail() primitive used by overlap-verified
-/// resume. Network paths are exercised on-device.
+/// Tests the downloader's pure logic: pattern filtering and manifest-based
+/// snapshot validation. Network paths are exercised on-device.
 struct ModelScopeDownloaderTests {
     let downloader = ModelScopeDownloader()
 
@@ -59,18 +58,5 @@ struct ModelScopeDownloaderTests {
         let dir = try makeTempDir()
         defer { try? FileManager.default.removeItem(at: dir) }
         #expect(!downloader.isValidSnapshot(dir))
-    }
-
-    @Test func tailReadsLastBytes() throws {
-        let dir = try makeTempDir()
-        defer { try? FileManager.default.removeItem(at: dir) }
-
-        let file = dir.appending(path: "data.bin")
-        try Data("0123456789".utf8).write(to: file)
-        let tail = try downloader.tail(of: file, count: 4)
-        #expect(tail == Data("6789".utf8))
-        // Requesting more than exists returns the whole file.
-        let all = try downloader.tail(of: file, count: 100)
-        #expect(all == Data("0123456789".utf8))
     }
 }

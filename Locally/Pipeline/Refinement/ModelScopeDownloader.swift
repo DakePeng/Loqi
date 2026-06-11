@@ -9,6 +9,9 @@ import MLXLMCommon
 /// API shape (public models, no auth):
 ///   list:     GET /api/v1/models/{id}/repo/files?Revision={rev}&Recursive=true
 ///   download: GET /api/v1/models/{id}/repo?Revision={rev}&FilePath={path}
+///             (302s to the LFS CDN, which honors bounded Range requests —
+///             large files go through SegmentedDownloader's parallel
+///             connections instead of one throttled stream)
 struct ModelScopeDownloader: Downloader {
     var endpoint = URL(string: "https://modelscope.cn")!
 
@@ -64,11 +67,21 @@ struct ModelScopeDownloader: Downloader {
                 URLQueryItem(name: "FilePath", value: file.path),
             ]
             let base = completedBytes
-            try await fetchWithRetry(
-                components.url!, to: target, expectedSize: file.size
-            ) { fileBytes in
-                progress.completedUnitCount = base + fileBytes
+            try await SegmentedDownloader().download(
+                url: components.url!, to: target,
+                expectedBytes: file.size, sha256: file.sha256
+            ) { bytes in
+                progress.completedUnitCount = base + min(bytes, file.size)
                 progressHandler(progress)
+            }
+            if file.size > 0 {
+                let size = Int64(
+                    (try? target.resourceValues(forKeys: [.fileSizeKey]).fileSize) ?? 0)
+                guard size == file.size else {
+                    try? FileManager.default.removeItem(at: target)
+                    throw ModelScopeError.downloadFailed(
+                        "\(file.path) (size \(size) != \(file.size))")
+                }
             }
             completedBytes += file.size
             progress.completedUnitCount = completedBytes
@@ -113,6 +126,8 @@ struct ModelScopeDownloader: Downloader {
     struct FileEntry: Sendable {
         var path: String
         var size: Int64
+        /// From the list API; verified after segmented downloads.
+        var sha256: String? = nil
     }
 
     private func listFiles(id: String, revision: String) async throws -> [FileEntry] {
@@ -141,158 +156,8 @@ struct ModelScopeDownloader: Downloader {
             guard (raw["Type"] as? String) != "tree",
                   let path = raw["Path"] as? String else { return nil }
             let size = (raw["Size"] as? NSNumber)?.int64Value ?? 0
-            return FileEntry(path: path, size: size)
+            return FileEntry(path: path, size: size, sha256: raw["Sha256"] as? String)
         }
-    }
-
-    /// Download one file with retry and checkpointing. Partial data lives in
-    /// a `.part` file next to the target — it survives both retries and app
-    /// restarts, so an interrupted 1GB download resumes instead of starting
-    /// over. `onBytes` reports total bytes on disk for this file.
-    private func fetchWithRetry(
-        _ url: URL,
-        to target: URL,
-        expectedSize: Int64,
-        maxAttempts: Int = 4,
-        onBytes: @Sendable (Int64) -> Void
-    ) async throws {
-        let part = target.appendingPathExtension("part")
-        var attempt = 0
-        while true {
-            do {
-                try await resumeDownload(
-                    url, into: part, expectedSize: expectedSize, onBytes: onBytes)
-                if expectedSize > 0 {
-                    let size = Int64(
-                        (try? part.resourceValues(forKeys: [.fileSizeKey]).fileSize) ?? 0)
-                    guard size == expectedSize else {
-                        try? FileManager.default.removeItem(at: part)
-                        throw ModelScopeError.downloadFailed(
-                            "\(url.absoluteString) (size \(size) != \(expectedSize))")
-                    }
-                }
-                try? FileManager.default.removeItem(at: target)
-                try FileManager.default.moveItem(at: part, to: target)
-                return
-            } catch is CancellationError {
-                throw CancellationError()
-            } catch {
-                attempt += 1
-                guard attempt < maxAttempts else { throw error }
-                // 2s, 4s, 8s — long enough for a flaky connection to recover.
-                try await Task.sleep(for: .seconds(Double(1 << attempt)))
-            }
-        }
-    }
-
-    /// Streams `url` into `part`, resuming from its current size via an HTTP
-    /// Range request.
-    ///
-    /// ModelScope's servers honor Range requests but answer with status 200
-    /// and the FULL Content-Length even for a partial body, so headers can't
-    /// distinguish "remainder" from "started over". Instead the request asks
-    /// for a 64KB overlap and compares it against the tail of the partial
-    /// file: a match proves the stream continues our data (append); a
-    /// mismatch proves a full-body restart (rebuild from scratch).
-    private func resumeDownload(
-        _ url: URL,
-        into part: URL,
-        expectedSize: Int64,
-        onBytes: @Sendable (Int64) -> Void
-    ) async throws {
-        let fm = FileManager.default
-        var written = Int64((try? part.resourceValues(forKeys: [.fileSizeKey]).fileSize) ?? 0)
-        // Resume needs a trustworthy expected size; oversized partials are junk.
-        if written > 0, expectedSize <= 0 || written >= expectedSize {
-            if written == expectedSize { return }
-            try? fm.removeItem(at: part)
-            written = 0
-        }
-
-        let overlap = written > 0 ? min(Int64(1 << 16), written) : 0
-        var request = URLRequest(url: url)
-        if written > 0 {
-            request.setValue("bytes=\(written - overlap)-", forHTTPHeaderField: "Range")
-        }
-
-        let (bytes, response) = try await URLSession.shared.bytes(for: request)
-        guard let http = response as? HTTPURLResponse,
-              http.statusCode == 200 || http.statusCode == 206 else {
-            throw ModelScopeError.downloadFailed(url.absoluteString)
-        }
-        var iterator = bytes.makeAsyncIterator()
-
-        if written > 0 {
-            var prefix = Data(capacity: Int(overlap))
-            while prefix.count < Int(overlap), let byte = try await iterator.next() {
-                prefix.append(byte)
-            }
-            guard prefix.count == Int(overlap) else {
-                throw ModelScopeError.downloadFailed("\(url.absoluteString) (interrupted)")
-            }
-
-            if prefix == (try tail(of: part, count: overlap)) {
-                // Remainder stream: append directly; an interruption leaves
-                // a longer valid partial to resume from next attempt.
-                let handle = try FileHandle(forWritingTo: part)
-                defer { try? handle.close() }
-                try handle.seekToEnd()
-                try await pump(&iterator, into: handle) { onBytes(written + $0) }
-            } else {
-                // Full-body restart: rebuild into a side file, swap when done.
-                let segment = part.appendingPathExtension("seg")
-                try? fm.removeItem(at: segment)
-                fm.createFile(atPath: segment.path, contents: nil)
-                let handle = try FileHandle(forWritingTo: segment)
-                defer { try? handle.close() }
-                try handle.write(contentsOf: prefix)
-                try await pump(&iterator, into: handle) { onBytes(overlap + $0) }
-                try handle.close()
-                try? fm.removeItem(at: part)
-                try fm.moveItem(at: segment, to: part)
-            }
-            return
-        }
-
-        // Fresh download, straight into the partial file.
-        try? fm.removeItem(at: part)
-        fm.createFile(atPath: part.path, contents: nil)
-        let handle = try FileHandle(forWritingTo: part)
-        defer { try? handle.close() }
-        try await pump(&iterator, into: handle) { onBytes($0) }
-    }
-
-    /// Drain the byte stream into `handle` with 1MB buffered writes,
-    /// reporting cumulative bytes written.
-    private func pump(
-        _ iterator: inout URLSession.AsyncBytes.AsyncIterator,
-        into handle: FileHandle,
-        onBytes: (Int64) -> Void
-    ) async throws {
-        var received: Int64 = 0
-        var buffer = Data(capacity: 1 << 20)
-        while let byte = try await iterator.next() {
-            buffer.append(byte)
-            if buffer.count >= 1 << 20 {
-                try handle.write(contentsOf: buffer)
-                received += Int64(buffer.count)
-                onBytes(received)
-                buffer.removeAll(keepingCapacity: true)
-            }
-        }
-        if !buffer.isEmpty {
-            try handle.write(contentsOf: buffer)
-            received += Int64(buffer.count)
-            onBytes(received)
-        }
-    }
-
-    func tail(of file: URL, count: Int64) throws -> Data {
-        let handle = try FileHandle(forReadingFrom: file)
-        defer { try? handle.close() }
-        let size = Int64((try? file.resourceValues(forKeys: [.fileSizeKey]).fileSize) ?? 0)
-        try handle.seek(toOffset: UInt64(max(0, size - count)))
-        return try handle.read(upToCount: Int(count)) ?? Data()
     }
 
     /// Reclaim disk from cached snapshots of models the app no longer
@@ -313,11 +178,13 @@ struct ModelScopeDownloader: Downloader {
         }
     }
 
-    /// Reclaim disk from orphaned partials once their snapshot completed.
+    /// Reclaim disk from orphaned partials and resume ledgers once their
+    /// snapshot completed.
     private func removeStalePartials(in directory: URL) {
         guard let enumerator = FileManager.default.enumerator(
             at: directory, includingPropertiesForKeys: nil) else { return }
-        for case let file as URL in enumerator where file.pathExtension == "part" {
+        for case let file as URL in enumerator
+        where ["part", "meta"].contains(file.pathExtension) {
             try? FileManager.default.removeItem(at: file)
         }
     }

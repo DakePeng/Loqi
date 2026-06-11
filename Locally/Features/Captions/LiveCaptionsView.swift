@@ -202,40 +202,70 @@ struct LiveCaptionsView: View {
         }
     }
 
-    /// Minimal bottom bar. Idle: three compact chips (language, speakers,
-    /// optional translation) over the mic. Recording: just the mic, the
-    /// timer, and the speakers chip (the one setting that's adjustable
-    /// mid-session) — everything else gets out of the way.
+    /// Bottom controls. Idle: three compact chips (language, speakers,
+    /// optional translation) over the mic. Recording: collapse to a slim
+    /// bar so the transcript dominates — critical status pills still show
+    /// above it. Stays a single `controls` so the animation crossfades the
+    /// two states.
     private var controls: some View {
-        VStack(spacing: 14) {
+        VStack(spacing: 12) {
             PipelineStatusBar(pipeline: pipeline)
 
-            if !pipeline.isRunning {
-                HStack(spacing: 10) {
-                    languageChip
-                    speakersChip
-                    translationChip
-                }
-            }
-
-            LiveLevelMicButton(pipeline: pipeline, isLive: pipeline.isRunning) {
-                toggleSession()
-            }
-
-            if pipeline.isRunning, let startedAt = pipeline.sessionStartedAt {
-                HStack(spacing: 12) {
-                    Text(startedAt, style: .timer)
-                        .font(.caption.monospacedDigit())
-                        .foregroundStyle(.secondary)
-                    BatteryHint()
-                    speakersChip
-                }
+            if pipeline.isRunning {
+                recordingBar
+            } else {
+                idleControls
             }
         }
         .padding(.vertical, 12)
         .frame(maxWidth: .infinity)
         .background(.bar)
         .animation(.easeInOut(duration: 0.2), value: pipeline.isRunning)
+    }
+
+    private var idleControls: some View {
+        VStack(spacing: 14) {
+            HStack(spacing: 10) {
+                languageChip
+                speakersChip
+                translationChip
+            }
+            LiveLevelMicButton(pipeline: pipeline, isLive: false) {
+                toggleSession()
+            }
+        }
+    }
+
+    /// Slim recording bar: pulsing dot + timer, the (still-adjustable)
+    /// speakers chip, and a compact stop button.
+    private var recordingBar: some View {
+        HStack(spacing: 12) {
+            Image(systemName: "circle.fill")
+                .font(.system(size: 9))
+                .foregroundStyle(.red)
+                .symbolEffect(.pulse, options: .repeating)
+            if let startedAt = pipeline.sessionStartedAt {
+                Text(startedAt, style: .timer)
+                    .font(.callout.monospacedDigit())
+                    .foregroundStyle(.primary)
+            }
+
+            Spacer()
+            speakersChip
+            BatteryHint()
+            Spacer()
+
+            Button(role: .destructive) {
+                toggleSession()
+            } label: {
+                Label("Stop", systemImage: "stop.fill")
+                    .font(.subheadline.weight(.semibold))
+            }
+            .buttonStyle(.borderedProminent)
+            .tint(.red)
+            .controlSize(.small)
+        }
+        .padding(.horizontal, 16)
     }
 
     private var languageChip: some View {

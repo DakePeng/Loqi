@@ -1,82 +1,18 @@
 {
   "sourceLanguage" : "en",
   "strings" : {
-    "Edit" : {
+    "Stop" : {
       "localizations" : {
         "ja" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "編集"
+            "value" : "停止"
           }
         },
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "编辑"
-          }
-        }
-      }
-    },
-    "Replace" : {
-      "localizations" : {
-        "ja" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "置き換える"
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "替换"
-          }
-        }
-      }
-    },
-    "Replace edited summary?" : {
-      "localizations" : {
-        "ja" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "編集した要約を置き換えますか？"
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "替换已编辑的摘要？"
-          }
-        }
-      }
-    },
-    "Timeline" : {
-      "localizations" : {
-        "ja" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "タイムライン"
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "时间线"
-          }
-        }
-      }
-    },
-    "You edited this summary. Summarizing again will replace your changes." : {
-      "localizations" : {
-        "ja" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "この要約は編集されています。再度要約すると変更内容が置き換えられます。"
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "您编辑过此摘要。再次总结将替换您的修改。"
+            "value" : "停止"
           }
         }
       }
@@ -536,6 +472,23 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "已下载"
+          }
+        }
+      }
+    },
+    "Edit" : {
+      "extractionState" : "stale",
+      "localizations" : {
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "編集"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "编辑"
           }
         }
       }
@@ -1511,6 +1464,40 @@
         }
       }
     },
+    "Replace" : {
+      "extractionState" : "stale",
+      "localizations" : {
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "置き換える"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "替换"
+          }
+        }
+      }
+    },
+    "Replace edited summary?" : {
+      "extractionState" : "stale",
+      "localizations" : {
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "編集した要約を置き換えますか？"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "替换已编辑的摘要？"
+          }
+        }
+      }
+    },
     "Reset voice profiles" : {
       "extractionState" : "stale",
       "localizations" : {
@@ -1966,7 +1953,6 @@
       }
     },
     "Summary" : {
-      "extractionState" : "stale",
       "localizations" : {
         "ja" : {
           "stringUnit" : {
@@ -2096,6 +2082,22 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "对方说"
+          }
+        }
+      }
+    },
+    "Timeline" : {
+      "localizations" : {
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "タイムライン"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "时间线"
           }
         }
       }
@@ -2250,6 +2252,22 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "正在准备增强翻译…"
+          }
+        }
+      }
+    },
+    "You edited this summary. Summarizing again will replace your changes." : {
+      "localizations" : {
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "この要約は編集されています。再度要約すると変更内容が置き換えられます。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "您编辑过此摘要。再次总结将替换您的修改。"
           }
         }
       }
