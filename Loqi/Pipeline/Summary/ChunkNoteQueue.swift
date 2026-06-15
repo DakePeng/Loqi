@@ -15,16 +15,24 @@ actor ChunkNoteQueue {
         var startedAt: Date
         var fallbackHeadline: String
         var language: AppLanguage
+        /// Hotword glossary lines scored against this chunk at enqueue
+        /// time, so notes keep the correct spellings of known terms.
+        var vocabulary: [String] = []
         var retries = 0
+        /// Plain generation failures, counted apart from cancellation
+        /// retries — pause-forgiveness resets only the latter.
+        var errorRetries = 0
     }
 
     private let llm: LLMService
     private let prompts = PromptBuilder()
     private var pending: [Job] = []
     private var speechActive = false
+    private var paused = false
     private var worker: Task<Void, Never>?
     private var generation: Task<String, Error>?
     private let maxRetries = 3
+    private let maxErrorRetries = 1
 
     private let logger = Logger(subsystem: "com.kunzhipeng.loqi", category: "livenotes")
 
@@ -54,6 +62,21 @@ actor ChunkNoteQueue {
         }
     }
 
+    /// Backgrounded sessions HOLD jobs instead of generating: Metal work
+    /// from the background risks process termination. Unlike speech-active,
+    /// pause can last minutes — so unpausing forgives accumulated retries,
+    /// or a few lock/unlock cycles would burn a chunk's whole retry budget
+    /// and deliver a fallback note for a generation that never failed.
+    func setPaused(_ value: Bool) {
+        paused = value
+        if value {
+            generation?.cancel()
+        } else {
+            for index in pending.indices { pending[index].retries = 0 }
+            ensureWorker()
+        }
+    }
+
     func cancelAll() {
         pending.removeAll()
         generation?.cancel()
@@ -70,9 +93,9 @@ actor ChunkNoteQueue {
 
     private func drain() async {
         while !pending.isEmpty {
-            // Notes only run in silence; no holdoff override (unlike
-            // refinement) — a chunk can always wait.
-            while speechActive {
+            // Notes only run in silence (and never while backgrounded); no
+            // holdoff override (unlike refinement) — a chunk can always wait.
+            while speechActive || paused {
                 if Task.isCancelled { worker = nil; return }
                 try? await Task.sleep(for: .milliseconds(250))
             }
@@ -80,11 +103,13 @@ actor ChunkNoteQueue {
             pending.removeFirst()
 
             let prompt = prompts.chunkNotePrompt(
-                chunkText: job.chunkText, in: job.language)
+                chunkText: job.chunkText, vocabulary: job.vocabulary,
+                in: job.language)
             let task = Task { [llm] in
                 try await llm.generate(
                     system: prompt.system, user: prompt.user,
-                    maxTokens: 170, temperature: 0.3)
+                    maxTokens: SummaryEngine.chunkNoteMaxTokens,
+                    temperature: 0.3)
             }
             generation = task
             do {
@@ -101,9 +126,15 @@ actor ChunkNoteQueue {
                 }
             } catch {
                 generation = nil
-                logger.warning("chunk note failed: \(error)")
-                // Fallback note preserves contiguous coverage.
-                deliverNote(parsed: PromptBuilder.ParsedChunkNote(), job: job)
+                job.errorRetries += 1
+                if job.errorRetries <= maxErrorRetries {
+                    logger.warning("chunk note failed, retrying: \(error)")
+                    pending.insert(job, at: 0)  // keep chunk order
+                } else {
+                    logger.warning("chunk note failed: \(error)")
+                    // Fallback note preserves contiguous coverage.
+                    deliverNote(parsed: PromptBuilder.ParsedChunkNote(), job: job)
+                }
             }
         }
         worker = nil
@@ -117,7 +148,8 @@ actor ChunkNoteQueue {
             facts: parsed.facts,
             decisions: parsed.decisions,
             actions: parsed.actions,
-            terms: parsed.terms)
+            terms: parsed.terms,
+            isFallback: parsed.isEmpty ? true : nil)
         let endID = job.endEntryID
         Task { @MainActor [deliver] in deliver(note, endID) }
     }

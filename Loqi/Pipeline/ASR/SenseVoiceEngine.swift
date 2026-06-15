@@ -32,6 +32,9 @@ actor SenseVoiceEngine: SpeechEngine {
     /// FIFO chain for final decodes: finalized events must be emitted in
     /// segment order even though decoding is async.
     private var finalTail: Task<Void, Never>?
+    /// Forces a segment split when steady noise keeps the VAD open past
+    /// what the partial cap already shows (see SpeechRunLimiter).
+    private var runLimiter = SpeechRunLimiter(limit: maxUtteranceSamples)
 
     private static let sampleRate = 16_000
     private static let partialInterval = 11_200      // 0.7s
@@ -50,11 +53,18 @@ actor SenseVoiceEngine: SpeechEngine {
         }
         decoder = SenseVoiceDecoder(language: language)
 
+        // Threshold + hangover follow the user's pickup preset: far-field
+        // speech is reverb-smeared (lower probability, soft tails that a
+        // short hangover chops), close-up wants strict gating so background
+        // voices stay out. FarFieldGain fixes the level upstream; this
+        // tolerates the smear. Preset changes mid-session restart the turn,
+        // so prepare() always sees the current choice.
+        let sensitivity = MicSensitivity.current
         var vadConfig = sherpaOnnxVadModelConfig(
             sileroVad: sherpaOnnxSileroVadModelConfig(
                 model: SenseVoiceModelStore.fileURL("silero_vad.onnx").path,
-                threshold: 0.5,
-                minSilenceDuration: 0.5,
+                threshold: sensitivity.sileroThreshold,
+                minSilenceDuration: sensitivity.sileroMinSilence,
                 minSpeechDuration: 0.25,
                 windowSize: 512,
                 // Force a finalized segment mid-monologue so long speech
@@ -86,6 +96,7 @@ actor SenseVoiceEngine: SpeechEngine {
         speaking = false
         generation = 0
         samplesSincePartial = 0
+        runLimiter = SpeechRunLimiter(limit: Self.maxUtteranceSamples)
         return events
     }
 
@@ -97,6 +108,16 @@ actor SenseVoiceEngine: SpeechEngine {
         guard !samples.isEmpty else { return }
 
         vad.acceptWaveform(samples: samples)
+
+        // Hard split: flush closes the open segment at the current tail
+        // (max_speech_duration alone never closes one in steady noise and
+        // the VAD buffer grows unbounded). The segment drains below like a
+        // natural pause; speech re-detects on the very next window.
+        if runLimiter.shouldSplit(
+            isSpeech: vad.isSpeechDetected(), samples: samples.count) {
+            logger.warning("speech run hit \(Self.maxUtteranceSamples) samples; forcing VAD flush")
+            vad.flush()
+        }
 
         let nowSpeaking = vad.isSpeechDetected()
         if nowSpeaking != speaking {
@@ -202,9 +223,14 @@ actor SenseVoiceEngine: SpeechEngine {
 actor SenseVoiceDecoder {
     private var recognizer: SherpaOnnxOfflineRecognizer?
     private let language: AppLanguage
+    private let numThreads: Int
 
-    init(language: AppLanguage) {
+    /// `numThreads` defaults to the live engine's 2; the offline file pass
+    /// raises it (a batch decode owns the device) so each segment finishes
+    /// sooner. The file transcriber sizes it against the decode-pool count.
+    init(language: AppLanguage, numThreads: Int = 2) {
         self.language = language
+        self.numThreads = numThreads
     }
 
     func decode(_ samples: [Float]) -> String {
@@ -213,7 +239,7 @@ actor SenseVoiceDecoder {
                 featConfig: sherpaOnnxFeatureConfig(),
                 modelConfig: sherpaOnnxOfflineModelConfig(
                     tokens: SenseVoiceModelStore.fileURL("tokens.txt").path,
-                    numThreads: 2,
+                    numThreads: numThreads,
                     senseVoice: sherpaOnnxOfflineSenseVoiceModelConfig(
                         model: SenseVoiceModelStore.fileURL("model.int8.onnx").path,
                         language: language.senseVoiceCode,

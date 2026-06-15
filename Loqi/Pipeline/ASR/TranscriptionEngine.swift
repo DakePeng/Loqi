@@ -53,8 +53,17 @@ actor TranscriptionEngine: SpeechEngine {
         self.transcriber = transcriber
         // VAD rides in the same analyzer: it gates LLM work off live speech
         // and marks utterance boundaries for voiceprint classification.
+        // Sensitivity follows the pickup preset — high reaches for the
+        // faint, reverberant speech of far talkers; low keeps background
+        // voices out in close-up use.
+        let detectorOptions: SpeechDetector.DetectionOptions =
+            switch MicSensitivity.current {
+            case .near: .init(sensitivityLevel: .low)
+            case .balanced: .init(sensitivityLevel: .medium)
+            case .far: .init(sensitivityLevel: .high)
+            }
         let detector = SpeechDetector(
-            detectionOptions: .init(sensitivityLevel: .medium),
+            detectionOptions: detectorOptions,
             reportResults: true)
         self.detector = detector
         // High priority + retained models: live captions are the app's whole

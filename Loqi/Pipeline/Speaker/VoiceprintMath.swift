@@ -35,18 +35,23 @@ enum VoiceprintMath {
     /// continues (best pair first) until the cap is satisfied. One voice in
     /// the room yields one cluster no matter what N the user picked.
     ///
-    /// Returns one slot per embedding, numbered by first appearance so
-    /// speaker labels stay stable as the session grows.
-    /// `singletonFloor`: a cluster holding a single utterance is weak
-    /// evidence for a distinct speaker — absorb it into its nearest cluster
-    /// unless it is drastically dissimilar. A real new voice splits out as
-    /// soon as its second utterance arrives (the two pair with each other
-    /// first), but one odd-sounding sentence can't mint a speaker.
+    /// Returns one label per embedding, numbered by first appearance.
+    /// `singletonFloor`: a weak cluster is poor evidence for a distinct
+    /// speaker — absorb it into its nearest cluster unless it is drastically
+    /// dissimilar. Weak means a single utterance, or a pair of utterances
+    /// that are both short (`durations` below `anchorSeconds`): embeddings
+    /// from clips that short are noisy enough that two of them agreeing is
+    /// still coincidence, so a short-spoken new voice needs a third
+    /// corroborating utterance, while one utterance of `anchorSeconds`
+    /// anchors a new speaker on the spot. Pass `durations: nil` to treat
+    /// every utterance as anchored (singleton absorption only).
     static func agglomerativeLabels(
         embeddings: [[Float]],
         maxClusters: Int,
         mergeThreshold: Double = 0.30,
-        singletonFloor: Double = 0.15
+        singletonFloor: Double = 0.15,
+        durations: [Double]? = nil,
+        anchorSeconds: Double = 2.0
     ) -> [Int] {
         guard !embeddings.isEmpty else { return [] }
         let count = embeddings.count
@@ -92,12 +97,18 @@ enum VoiceprintMath {
             clusters.remove(at: bestPair.1)
         }
 
-        // Corroboration pass: absorb singleton clusters that aren't
-        // clearly a different voice.
+        // Corroboration pass: absorb weak clusters that aren't clearly a
+        // different voice.
+        func isWeak(_ members: [Int]) -> Bool {
+            if members.count == 1 { return true }
+            guard let durations else { return false }
+            return members.count == 2
+                && members.allSatisfy { durations[$0] < anchorSeconds }
+        }
         var absorbed = true
         while absorbed, clusters.count > 1 {
             absorbed = false
-            for index in clusters.indices where clusters[index].count == 1 {
+            for index in clusters.indices where isWeak(clusters[index]) {
                 var bestOther = -1
                 var bestScore = -Double.infinity
                 for other in clusters.indices where other != index {
@@ -123,6 +134,59 @@ enum VoiceprintMath {
             for member in members { labels[member] = slot }
         }
         return labels
+    }
+
+    /// Element-wise mean of embeddings — cosine similarity ignores scale,
+    /// so no normalization is needed.
+    static func meanEmbedding(_ embeddings: [[Float]]) -> [Float] {
+        guard let first = embeddings.first else { return [] }
+        var sum = [Float](repeating: 0, count: first.count)
+        for embedding in embeddings where embedding.count == sum.count {
+            for i in sum.indices { sum[i] += embedding[i] }
+        }
+        let n = Float(embeddings.count)
+        return sum.map { $0 / n }
+    }
+
+    /// Give each cluster a stable slot number by matching its centroid
+    /// against the slots' remembered centroids (greedy best pair first,
+    /// each slot used once). Clusters that match nothing — similarity
+    /// below `minSimilarity`, or all slots taken — mint new slots numbered
+    /// `slots.count`, `slots.count + 1`, … in cluster order.
+    ///
+    /// This is what keeps "Speaker 2" meaning the same voice for a whole
+    /// session: cluster indices from a fresh clustering pass are arbitrary,
+    /// and a voice whose utterances all aged out of memory must reclaim its
+    /// old number when it speaks again instead of being minted as new.
+    static func matchClustersToSlots(
+        clusters: [[Float]],
+        slots: [[Float]],
+        minSimilarity: Double = 0.20
+    ) -> [Int] {
+        var pairs: [(cluster: Int, slot: Int, score: Double)] = []
+        for c in clusters.indices {
+            for s in slots.indices {
+                let score = cosineSimilarity(clusters[c], slots[s])
+                if score >= minSimilarity {
+                    pairs.append((c, s, score))
+                }
+            }
+        }
+        pairs.sort { $0.score > $1.score }
+
+        var slotForCluster = [Int](repeating: -1, count: clusters.count)
+        var usedSlots = Set<Int>()
+        for pair in pairs
+        where slotForCluster[pair.cluster] == -1 && !usedSlots.contains(pair.slot) {
+            slotForCluster[pair.cluster] = pair.slot
+            usedSlots.insert(pair.slot)
+        }
+        var nextSlot = slots.count
+        for c in slotForCluster.indices where slotForCluster[c] == -1 {
+            slotForCluster[c] = nextSlot
+            nextSlot += 1
+        }
+        return slotForCluster
     }
 
     /// Decide which of two profiles a probe embedding belongs to.

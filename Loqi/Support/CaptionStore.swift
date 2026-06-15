@@ -4,8 +4,10 @@ import Observation
 /// Single source of truth for the transcript the UI renders.
 /// All pipeline stages funnel their mutations through here on the main actor.
 /// Entries are tagged by SessionMode so Captions and Conversation never leak
-/// into each other's UI, and old entries are pruned so day-long sessions
-/// can't grow memory without bound.
+/// into each other's UI, and the render window is bounded so day-long
+/// sessions can't grow the re-grouping cost (or memory) without bound —
+/// entries pushed out of the window are handed to `onEvict` first, so the
+/// owner can retain them for archival rather than losing the transcript.
 @MainActor
 @Observable
 final class CaptionStore {
@@ -17,9 +19,16 @@ final class CaptionStore {
     /// Mode stamped onto new entries; the pipeline sets this per session.
     var currentMode: SessionMode = .captions
 
-    /// Pruning bounds: when entries exceed `maxEntries`, the oldest are
-    /// dropped down to `prunedEntries`. Saved-sessions (roadmap) should
-    /// persist before pruning.
+    /// Delivered the finalized entries pruning drops from the render window,
+    /// oldest-first, BEFORE they leave the store — the owner (CaptionPipeline)
+    /// retains them so the archived transcript and crash journal stay complete
+    /// on sessions longer than `maxEntries` utterances. Infrastructure, not
+    /// rendered state.
+    @ObservationIgnored var onEvict: (([CaptionEntry]) -> Void)?
+
+    /// Render-window bounds: when entries exceed `maxEntries`, the oldest are
+    /// dropped down to `prunedEntries`. Dropped entries are handed to
+    /// `onEvict` so they're persisted, never silently lost.
     private let maxEntries = 600
     private let prunedEntries = 500
 
@@ -97,16 +106,6 @@ final class CaptionStore {
         entries[index].draftFailed = true
     }
 
-    /// LLM transcript polish: replace the displayed source, preserving the
-    /// raw ASR text for fidelity.
-    func applyCleanedSource(_ cleaned: String, for id: UUID) {
-        guard let index = index(of: id), entries[index].sourceText != cleaned else { return }
-        if entries[index].rawSourceText == nil {
-            entries[index].rawSourceText = entries[index].sourceText
-        }
-        entries[index].sourceText = cleaned
-    }
-
     func setSpeaker(_ speaker: Int, for id: UUID) {
         guard let index = index(of: id) else { return }
         entries[index].speaker = speaker
@@ -150,7 +149,13 @@ final class CaptionStore {
 
     private func prune() {
         guard entries.count > maxEntries else { return }
-        entries.removeFirst(entries.count - prunedEntries)
+        let dropCount = entries.count - prunedEntries
+        // Hand the evicted (always-finalized; the volatile entry is newest)
+        // transcript to the owner before dropping it, or long sessions lose
+        // their opening on archive.
+        let evicted = Array(entries.prefix(dropCount))
+        entries.removeFirst(dropCount)
+        onEvict?(evicted)
     }
 
     private func index(of id: UUID) -> Int? {

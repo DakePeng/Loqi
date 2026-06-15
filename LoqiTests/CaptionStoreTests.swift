@@ -102,6 +102,24 @@ struct CaptionStoreTests {
         #expect(store.entries.first?.sourceText != "line 0")
     }
 
+    /// Pruning must hand the dropped entries to `onEvict` so the owner can
+    /// keep them — a session longer than the render window archives its whole
+    /// transcript, not just the tail still on screen.
+    @Test func evictionDeliversDroppedEntriesForArchival() {
+        let store = CaptionStore()
+        var evicted: [CaptionEntry] = []
+        store.onEvict = { evicted.append(contentsOf: $0) }
+        for i in 0..<700 {
+            store.applyVolatile(text: "line \(i)", direction: enToZh)
+            store.finalizeActive(text: "line \(i)", direction: enToZh)
+        }
+        // Something was actually pushed out of the window…
+        #expect(!evicted.isEmpty)
+        // …and evicted + on-screen reconstructs every line, in order, once.
+        let reconstructed = (evicted + store.entries(in: .captions)).map(\.sourceText)
+        #expect(reconstructed == (0..<700).map { "line \($0)" })
+    }
+
     @Test func finalizeActiveAsIsFreezesLeftoverVolatile() {
         let store = CaptionStore()
         let id = store.applyVolatile(text: "interrupted mid-sentence", direction: enToZh)

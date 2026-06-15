@@ -2,6 +2,7 @@ import AVFoundation
 import Foundation
 import Observation
 import UIKit
+import WidgetKit
 import os
 
 /// Explicit session lifecycle. nil-checks on activeDirection used to encode
@@ -29,6 +30,11 @@ enum PauseReason: Equatable {
 @MainActor
 @Observable
 final class CaptionPipeline {
+    /// The one pipeline instance. App Intents (Action Button, Siri, the
+    /// Live Activity stop button, the Control Center toggle) execute in
+    /// the app process and must reach the same pipeline the UI drives.
+    static let shared = CaptionPipeline()
+
     let store = CaptionStore()
     let translator = TranslationCoordinator()
     let thermal = ThermalMonitor()
@@ -36,16 +42,54 @@ final class CaptionPipeline {
     let voiceprint = VoiceprintService()
     let archive = SessionArchive()
     let llm: LLMService
+    /// Post-hoc LLM jobs (summarize / re-transcribe): shared so progress
+    /// and dedupe don't depend on which screen started a job. IUO because
+    /// its `isRecording` closure needs `self` (set at the end of init).
+    private(set) var jobs: SummaryJobCenter!
 
     /// User-assigned names for this session's diarization slots.
     var speakerNames: [Int: String] = [:]
     private(set) var sessionStartedAt: Date?
+    /// The session just archived by stop(), driving the post-recording
+    /// card (summarize / discard audio). Cleared when the next session
+    /// starts or the user dismisses the card.
+    private(set) var lastFinishedSessionID: UUID?
+    /// True when `lastFinishedSessionID` was recovered from the crash
+    /// journal rather than a clean stop — the post-stop page says so.
+    private(set) var lastFinishedWasInterrupted = false
 
     private(set) var phase: SessionPhase = .idle
     var isRunning: Bool { phase != .idle }
+    /// Mic lost to a call/Siri; the recording bar and landscape view swap
+    /// their live indicators for a paused one.
+    var isPaused: Bool {
+        if case .paused = phase { return true }
+        return false
+    }
     var activeDirection: LanguagePair? {
         if case .listening(let direction) = phase { return direction }
         return nil
+    }
+
+    /// Whether the active model's weights are on disk — gates every UI
+    /// entry point that would otherwise trigger a multi-GB download.
+    var llmDownloaded: Bool {
+        LLMService.isDownloaded(model: ModelCatalog.current)
+    }
+
+    /// Short-lived, self-clearing message for outcomes that have no other
+    /// surface (e.g. "nothing captured"). Rendered by PipelineStatusBar.
+    private(set) var transientNotice: String?
+    private var noticeTask: Task<Void, Never>?
+
+    func showNotice(_ text: String, for seconds: Double = 5) {
+        transientNotice = text
+        noticeTask?.cancel()
+        noticeTask = Task { [weak self] in
+            try? await Task.sleep(for: .seconds(seconds))
+            guard !Task.isCancelled else { return }
+            self?.transientNotice = nil
+        }
     }
 
     /// Mic level in [0, 1] for meters.
@@ -89,13 +133,44 @@ final class CaptionPipeline {
     private var thermalWatch: Task<Void, Never>?
     private var systemObservers: [NSObjectProtocol] = []
     private var backgroundUnload: Task<Void, Never>?
+    /// Fires on critical system memory pressure, foreground or background.
+    private var memoryPressureSource: DispatchSourceMemoryPressure?
+    private var lastMemoryShed: ContinuousClock.Instant?
+    /// Serializes crash-journal writes off the main actor, coalescing the
+    /// per-utterance snapshots so encoding + disk I/O never blocks captions.
+    private let journalWriter = JournalWriter()
+    /// Scene is in the background. While true, no LLM work may start (no
+    /// loads, no refinement, no note generation) — captions and the
+    /// recorder run alone.
+    private(set) var isBackgrounded = false
+
+    /// Lock screen / Dynamic Island presence while recording.
+    private let liveActivity = RecordingActivityController()
 
     // Session artifacts (capture-first): audio recording + live summary notes.
     private var sessionID: UUID?
     private var recorder: SessionRecorder?
+    /// One anchor per turn start: wall date ↔ audio seconds written, so
+    /// archived entries get audio offsets that survive interruption gaps.
+    private var audioAnchors: [AudioTimeline.Anchor] = []
+    /// Finalized entries the store pruned out of its render window, retained
+    /// so the archived transcript and crash journal stay complete on long
+    /// sessions (the store bounds only what the UI re-groups). Reset per
+    /// session; chronological — eviction always drops the oldest first.
+    private var evictedEntries: [CaptionEntry] = []
+    /// The full session transcript for archival: entries evicted from the
+    /// live render window followed by what's still on screen.
+    private var archivableEntries: [CaptionEntry] {
+        evictedEntries + store.entries(in: sessionMode)
+    }
     private var liveChunker = LiveChunker()
     private var noteQueue: ChunkNoteQueue?
     private(set) var liveNotes: [SessionRecord.ChunkNote] = []
+    /// Photos attached to the running session; ride into the archive via
+    /// SessionArtifacts. OCR fills in asynchronously.
+    private(set) var liveAttachments: [SessionRecord.Attachment] = []
+    /// VLM photo descriptions (vision tier only) — yields like note jobs.
+    private var describeQueue: AttachmentDescribeQueue?
     private var notesEndEntryID: UUID?
     private var liveMappingStopped = false
     private var chunkGapTimer: Task<Void, Never>?
@@ -107,26 +182,15 @@ final class CaptionPipeline {
             : UserDefaults.standard.bool(forKey: "audio.saveRecordings")
     }
 
-    /// LLM transcript polishing (defaults on; absent key must not read as
-    /// false).
-    var transcriptPolishEnabled: Bool {
-        UserDefaults.standard.object(forKey: "transcript.polish") == nil
-            ? true
-            : UserDefaults.standard.bool(forKey: "transcript.polish")
-    }
-
-    /// Captions-mode speaker count; 0/1 = diarization off.
+    /// Captions-mode speaker picker value; 0/1 = diarization off, -1 =
+    /// Auto, 2+ = hard cap (see VoiceprintService.clusterCap).
     var captionSpeakerCount: Int {
         UserDefaults.standard.integer(forKey: "captions.speakerCount")
     }
 
     /// Persisted download source for the speaker model (Settings key
     /// matches SettingsView's @AppStorage).
-    var diarizerSource: DiarizerSource {
-        DiarizerSource(
-            rawValue: UserDefaults.standard.string(forKey: "diarizer.source") ?? ""
-        ) ?? .huggingFace
-    }
+    var diarizerSource: DiarizerSource { .current }
 
     private var diarizationActive = false
 
@@ -138,6 +202,8 @@ final class CaptionPipeline {
         // Honor persisted Settings choices even if that screen was never
         // opened this launch (the keys match SettingsView's @AppStorage).
         let defaults = UserDefaults.standard
+        // Selections pointing at removed tiers snap back to the default.
+        ModelCatalog.normalizeStoredSelection(defaults)
         let model = ModelCatalog.option(
             for: defaults.string(forKey: "model.id") ?? ModelCatalog.default.id)
         let source = ModelSource(
@@ -146,16 +212,119 @@ final class CaptionPipeline {
         let store = self.store
         refinement = RefinementQueue(llm: self.llm) { [weak store] entryID, outcome in
             store?.setRefined(outcome.translation, for: entryID)
-            if let cleaned = outcome.cleanedSource {
-                store?.applyCleanedSource(cleaned, for: entryID)
-            }
         }
         hotwords.onChange = { [weak self] in
             self?.pushHotwordsToEngines()
         }
+        // Entries pruned from the live render window are retained for archival
+        // instead of dropped, so a session longer than the store's window
+        // keeps its opening in the saved transcript and the crash journal.
+        store.onEvict = { [weak self] evicted in
+            self?.evictedEntries.append(contentsOf: evicted)
+        }
         noteQueue = ChunkNoteQueue(llm: self.llm) { [weak self] note, endEntryID in
             self?.liveNotes.append(note)
             self?.notesEndEntryID = endEntryID
+            self?.writeJournal()
+        }
+        describeQueue = AttachmentDescribeQueue(llm: self.llm) { [weak self] text, attachmentID, sessionID in
+            self?.updateAttachment(attachmentID, sessionID: sessionID) {
+                $0.vlmDescription = text
+            }
+        }
+        jobs = SummaryJobCenter(
+            llm: self.llm,
+            archive: archive,
+            hotwords: hotwords,
+            translator: translator,
+            voiceprint: voiceprint
+        ) { [weak self] in
+            self?.isRunning ?? false
+        }
+
+        // A journal on disk means the last process died mid-recording —
+        // recover BEFORE the orphan sweep, which would otherwise delete
+        // the very audio recovery exists to save.
+        recoverInterruptedSession()
+        archive.sweepOrphans()
+
+        // UIKit's memory warning only arrives in the foreground; a
+        // dispatch source also fires while recording with the screen
+        // locked — exactly where jetsam was killing long sessions.
+        //
+        // BUT the source reports SYSTEM-WIDE pressure, which sits at
+        // critical chronically on 6GB devices — reacting to every event
+        // shed-thrashed the LLM (unload → silence-gap reload → pressure →
+        // unload…) and killed in-flight summaries. Only shed when OUR
+        // headroom is actually gone.
+        let pressure = DispatchSource.makeMemoryPressureSource(
+            eventMask: .critical, queue: .main)
+        pressure.setEventHandler { [weak self] in
+            MainActor.assumeIsolated {
+                guard os_proc_available_memory() < Self.memoryShedFloor else { return }
+                self?.handleMemoryWarning()
+            }
+        }
+        pressure.activate()
+        memoryPressureSource = pressure
+    }
+
+    /// Per-app free-memory floor under which a critical system-pressure
+    /// event triggers model shedding. Above it, global pressure is someone
+    /// else's problem and our models keep working.
+    private static let memoryShedFloor: UInt64 = 400_000_000
+
+    // MARK: Crash recovery
+
+    /// Rebuild and archive the session a dead process left behind: the
+    /// journal snapshot plus its crash-tolerant CAF audio. The Record tab
+    /// then opens on the post-stop page in "interrupted" framing, one tap
+    /// from reviewing the session or starting a new recording.
+    private func recoverInterruptedSession() {
+        guard var record = SessionJournal.read() else { return }
+        SessionJournal.clear()
+        defer {
+            // The crashed process never reset the widget state; without
+            // this the Control Center toggle keeps claiming "recording".
+            RecordingSharedState.write(.init(isRunning: false, startedAt: nil))
+            ControlCenter.shared.reloadControls(ofKind: RecordingSharedState.controlKind)
+        }
+        // The crash may have raced the clean shutdown's journal clear.
+        guard !archive.sessions.contains(where: { $0.id == record.id }) else { return }
+
+        // Claim the audio if the recorder got far enough to be worth it
+        // (CAF stays playable up to the last written chunk).
+        if let fileName = record.audioFileName {
+            let url = SessionArchive.recordingURL(fileName: fileName)
+            let bytes = (try? url.resourceValues(forKeys: [.fileSizeKey]).fileSize) ?? 0
+            if bytes < 8_192 {
+                try? FileManager.default.removeItem(at: url)
+                record.audioFileName = nil
+            }
+        }
+
+        let duration = record.endedAt.timeIntervalSince(record.startedAt)
+        guard SessionArchive.shouldArchive(
+            entryCount: record.entries.count,
+            hasAudio: record.audioFileName != nil,
+            duration: duration)
+        else {
+            if let fileName = record.audioFileName {
+                try? FileManager.default.removeItem(
+                    at: SessionArchive.recordingURL(fileName: fileName))
+            }
+            return
+        }
+
+        archive.add(record)
+        logger.info("recovered interrupted session: \(record.entries.count) entries, audio: \(record.audioFileName != nil)")
+        if record.entries.isEmpty {
+            showNotice(String(
+                localized: "A recording was interrupted — its audio is saved in Sessions."),
+                for: 8)
+        } else {
+            lastFinishedSessionID = record.id
+            lastFinishedWasInterrupted = true
         }
     }
 
@@ -204,24 +373,35 @@ final class CaptionPipeline {
 
         await translator.setDirections([direction])
         store.currentMode = sessionMode
+        // Fresh page per session: the previous session's transcript (already
+        // archived — or deliberately discarded) must not lead the new one,
+        // on screen or in refinement history.
+        store.clear(sessionMode)
+        jobs.yieldToRecording()
         speakerNames.removeAll()
         sessionID = UUID()
+        lastFinishedSessionID = nil
         liveChunker = LiveChunker()
         liveNotes.removeAll()
         notesEndEntryID = nil
         liveMappingStopped = false
+        audioAnchors.removeAll()
+        evictedEntries.removeAll()
+        liveAttachments.removeAll()
         if saveRecordingsEnabled, let sessionID {
             let recorder = SessionRecorder()
             self.recorder = recorder
             await recorder.begin(sessionID: sessionID)
         }
 
-        // Diarization: cluster utterances into N voices. The model load must
+        // Diarization: cluster utterances into N voices ("Auto" = a generous
+        // cap with the count discovered by similarity). The model load must
         // not block session start — captions begin immediately and
         // attribution kicks in once the model is ready.
-        diarizationActive = captionSpeakerCount >= 2
-        if diarizationActive {
-            await voiceprint.startDiarization(maxSpeakers: captionSpeakerCount)
+        let speakerCap = VoiceprintService.clusterCap(forPickerValue: captionSpeakerCount)
+        diarizationActive = speakerCap != nil
+        if let speakerCap {
+            await voiceprint.startDiarization(maxSpeakers: speakerCap)
             if await voiceprint.state != .ready {
                 setStatus(.diarizer, String(localized: "Preparing speaker separation…"))
                 Task { [weak self] in
@@ -257,6 +437,10 @@ final class CaptionPipeline {
         }
 
         sessionStartedAt = .now
+        // First journal heartbeat: from here on, a dead process leaves
+        // enough on disk to recover the session.
+        writeJournal()
+        publishSessionStarted(direction: direction)
         installSystemObservers()
         UIApplication.shared.isIdleTimerDisabled = true
         watchThermalPolicy()
@@ -274,6 +458,139 @@ final class CaptionPipeline {
         try? await serialized { [self] in
             await endSession()
         }
+    }
+
+    /// Dismiss the post-recording card.
+    func clearLastFinishedSession() {
+        lastFinishedSessionID = nil
+        lastFinishedWasInterrupted = false
+    }
+
+    /// Attach a photo to the running session: stored beside recordings,
+    /// OCR'd in the background (Vision — no MLX contention), anchored to
+    /// the last finalized entry so it lands in the right transcript spot.
+    func attachImage(_ image: UIImage) {
+        guard isRunning, let sessionID,
+              let data = ImageTextExtractor.jpegData(for: image) else { return }
+        let fileName = "\(UUID().uuidString).jpg"
+        try? FileManager.default.createDirectory(
+            at: SessionArchive.attachmentsDirectory, withIntermediateDirectories: true)
+        guard (try? data.write(
+            to: SessionArchive.attachmentURL(fileName: fileName),
+            options: .atomic)) != nil else { return }
+        let attachment = SessionRecord.Attachment(
+            fileName: fileName,
+            timestamp: .now,
+            anchorEntryID: store.entries(in: sessionMode)
+                .last { $0.state != .volatile }?.id)
+        liveAttachments.append(attachment)
+        writeJournal()
+        // OCR off the hot path. Skipped only under the heaviest thermal
+        // shedding — it's deferrable work; a missing result just means the
+        // photo contributes no text.
+        guard thermal.policy != .llmUnloaded else { return }
+        let attachmentID = attachment.id
+        Task { [weak self] in
+            let text = await ImageTextExtractor.recognizeText(in: image)
+            guard let text else { return }
+            self?.applyAttachmentText(text, attachmentID: attachmentID, sessionID: sessionID)
+        }
+        Task { [weak self] in
+            await self?.enqueueAttachmentDescription(attachment, sessionID: sessionID)
+        }
+    }
+
+    /// Attach a photo to a saved session (detail view). Unanchored — it
+    /// renders in the Photos section and trails the markdown export.
+    func attachImage(_ image: UIImage, to recordID: UUID) {
+        guard var record = archive.sessions.first(where: { $0.id == recordID }),
+              let data = ImageTextExtractor.jpegData(for: image) else { return }
+        let fileName = "\(UUID().uuidString).jpg"
+        try? FileManager.default.createDirectory(
+            at: SessionArchive.attachmentsDirectory, withIntermediateDirectories: true)
+        guard (try? data.write(
+            to: SessionArchive.attachmentURL(fileName: fileName),
+            options: .atomic)) != nil else { return }
+        let attachment = SessionRecord.Attachment(fileName: fileName, timestamp: .now)
+        record.attachments = (record.attachments ?? []) + [attachment]
+        archive.update(record)
+        Task { [weak self] in
+            let text = await ImageTextExtractor.recognizeText(in: image)
+            guard let text else { return }
+            self?.applyAttachmentText(text, attachmentID: attachment.id, sessionID: recordID)
+        }
+        Task { [weak self] in
+            await self?.enqueueAttachmentDescription(attachment, sessionID: recordID)
+        }
+    }
+
+    /// Deliver an OCR result to wherever the attachment lives now: the
+    /// live session if it's still running, the archived record otherwise.
+    private func applyAttachmentText(
+        _ text: String, attachmentID: UUID, sessionID: UUID
+    ) {
+        updateAttachment(attachmentID, sessionID: sessionID) { $0.ocrText = text }
+    }
+
+    /// Mutate an attachment wherever it lives now: the running session's
+    /// live list, or the archived record (OCR/descriptions can land after
+    /// the session stopped, or for post-hoc photos).
+    private func updateAttachment(
+        _ attachmentID: UUID, sessionID: UUID,
+        mutate: (inout SessionRecord.Attachment) -> Void
+    ) {
+        if self.sessionID == sessionID,
+           let index = liveAttachments.firstIndex(where: { $0.id == attachmentID }) {
+            mutate(&liveAttachments[index])
+        } else if var record = archive.sessions.first(where: { $0.id == sessionID }),
+                  let index = record.attachments?.firstIndex(where: { $0.id == attachmentID }) {
+            mutate(&record.attachments![index])
+            archive.update(record)
+        }
+    }
+
+    /// Queue a VLM description when the active model can read images.
+    /// Admission mirrors `enqueueChunkNote`: never start LLM work that
+    /// live speech or thermal pressure would have to fight.
+    private func enqueueAttachmentDescription(
+        _ attachment: SessionRecord.Attachment, sessionID: UUID
+    ) async {
+        guard llmEnabled, thermal.policy == .full,
+              await llm.model.supportsVision, await llmIsReady() else { return }
+        let language = AppLanguage.devicePreferred
+            ?? activeDirection?.target ?? .english
+        await describeQueue?.enqueue(AttachmentDescribeQueue.Job(
+            attachmentID: attachment.id,
+            sessionID: sessionID,
+            fileURL: SessionArchive.attachmentURL(fileName: attachment.fileName),
+            language: language))
+    }
+
+    /// Snapshot the running session to the crash journal: a ready-to-archive
+    /// record mirroring exactly what a clean stop would save right now.
+    /// Called at utterance cadence — a small atomic JSON write.
+    private func writeJournal() {
+        guard let sessionID, let startedAt = sessionStartedAt else { return }
+        var record = SessionRecord(
+            id: sessionID,
+            mode: sessionMode,
+            startedAt: startedAt,
+            endedAt: .now,
+            entries: SessionArchive.mappedEntries(
+                from: archivableEntries,
+                startedAt: startedAt,
+                timeline: audioAnchors.isEmpty ? nil : AudioTimeline(anchors: audioAnchors)),
+            speakerNames: speakerNames)
+        if recorder != nil {
+            record.audioFileName = SessionRecorder.fileName(for: sessionID)
+        }
+        if !liveNotes.isEmpty {
+            record.chunkNotes = liveNotes
+            record.liveNotesEndEntryID = notesEndEntryID
+        }
+        if !liveAttachments.isEmpty { record.attachments = liveAttachments }
+        let snapshot = record
+        Task { await journalWriter.write(snapshot) }
     }
 
     private func endSession() async {
@@ -303,7 +620,7 @@ final class CaptionPipeline {
         // archive only takes entries created during THIS session.
         if let startedAt = sessionStartedAt {
             let saved = archive.save(
-                entries: store.entries(in: sessionMode),
+                entries: archivableEntries,
                 mode: sessionMode,
                 speakerNames: speakerNames,
                 startedAt: startedAt,
@@ -311,16 +628,70 @@ final class CaptionPipeline {
                     sessionID: sessionID ?? UUID(),
                     audioFileName: audioFileName,
                     chunkNotes: liveNotes,
-                    notesEndEntryID: notesEndEntryID))
-            if saved == nil, let audioFileName {
-                try? FileManager.default.removeItem(
-                    at: SessionArchive.recordingURL(fileName: audioFileName))
+                    notesEndEntryID: notesEndEntryID,
+                    timeline: audioFileName != nil && !audioAnchors.isEmpty
+                        ? AudioTimeline(anchors: audioAnchors) : nil,
+                    attachments: liveAttachments))
+            if saved == nil {
+                if let audioFileName {
+                    try? FileManager.default.removeItem(
+                        at: SessionArchive.recordingURL(fileName: audioFileName))
+                }
+                for attachment in liveAttachments {
+                    try? FileManager.default.removeItem(
+                        at: SessionArchive.attachmentURL(fileName: attachment.fileName))
+                }
+                // Never delete a recording in silence: say why it vanished.
+                showNotice(String(
+                    localized: "Nothing was captured, so the session wasn't saved."))
             }
+            if let saved, saved.entries.isEmpty {
+                // Audio-only save (speech never transcribed): nothing to
+                // summarize, so skip the scenario card but confirm the save.
+                showNotice(String(
+                    localized: "Recording saved to Sessions — no speech was transcribed."))
+            }
+            lastFinishedSessionID = saved.flatMap {
+                $0.entries.isEmpty ? nil : $0.id
+            }
+            lastFinishedWasInterrupted = false
         }
+        let savedLabel = liveNotes.first?.headline
+        // Stop further journal snapshots before clearing: writeJournal guards
+        // on a non-nil sessionID, so any stray call during the await below
+        // early-returns and can't resurrect the file.
         sessionStartedAt = nil
         sessionID = nil
+        // Clean shutdown: the archive (not the journal) owns the session now.
+        // Awaiting the serial writer drops any queued snapshot and removes the
+        // file, so an in-flight per-utterance write can't resurrect the journal.
+        await journalWriter.clear()
+        audioAnchors.removeAll()
+        evictedEntries.removeAll()
+        liveAttachments.removeAll()
         liveNotes.removeAll()
         notesEndEntryID = nil
+        publishSessionEnded(label: savedLabel)
+        jobs.resumeAfterRecording()
+    }
+
+    /// Mirror session state to the lock screen (Live Activity) and the
+    /// widget extension (Control Center toggle reads the app group).
+    private func publishSessionStarted(direction: LanguagePair) {
+        let title = direction.source == direction.target
+            ? direction.source.displayName
+            : direction.displayName
+        liveActivity.start(startedAt: sessionStartedAt ?? .now, title: title)
+        RecordingSharedState.write(.init(isRunning: true, startedAt: sessionStartedAt))
+        ControlCenter.shared.reloadControls(ofKind: RecordingSharedState.controlKind)
+    }
+
+    /// `label` lets the "Saved" state show the session's first note
+    /// headline when live mapping produced one — content beats boilerplate.
+    private func publishSessionEnded(label: String? = nil) {
+        liveActivity.end(finalLabel: label ?? String(localized: "Saved"))
+        RecordingSharedState.write(.init(isRunning: false, startedAt: nil))
+        ControlCenter.shared.reloadControls(ofKind: RecordingSharedState.controlKind)
     }
 
     // MARK: System events (interruptions, route changes, backgrounding)
@@ -364,7 +735,7 @@ final class CaptionPipeline {
                 // Mic hardware changed (AirPods on/off, cable mic): the tap
                 // format is stale — rebind by restarting the current turn.
                 if reason == .oldDeviceUnavailable || reason == .newDeviceAvailable {
-                    self.restartCurrentTurn()
+                    self.restartCurrentTurn(reason: "audio route changed; rebinding microphone")
                 }
             }
         })
@@ -388,6 +759,8 @@ final class CaptionPipeline {
                 phase = .paused(.interrupted(resume: direction))
                 setStatus(.interruption, String(
                     localized: "Paused — another app is using the microphone"))
+                liveActivity.update(
+                    statusLabel: String(localized: "Paused"), isPaused: true)
             }
         }
     }
@@ -408,6 +781,8 @@ final class CaptionPipeline {
                 logger.info("interruption ended; resuming \(resume.source.rawValue)")
                 do {
                     try await beginTurn(direction: resume)
+                    liveActivity.update(
+                        statusLabel: String(localized: "Recording"), isPaused: false)
                 } catch {
                     lastError = error.localizedDescription
                     await endSession()
@@ -416,11 +791,11 @@ final class CaptionPipeline {
         }
     }
 
-    private func restartCurrentTurn() {
+    private func restartCurrentTurn(reason: String) {
         Task {
             try? await self.serialized { [self] in
                 guard case .listening(let direction) = phase else { return }
-                logger.info("audio route changed; rebinding microphone")
+                logger.info("restarting turn: \(reason)")
                 await endTurn()
                 do {
                     try await beginTurn(direction: direction)
@@ -432,24 +807,79 @@ final class CaptionPipeline {
         }
     }
 
-    /// Scene went to background: the mic stops; say so instead of dying
-    /// silently, and free the big models if the user stays away.
+    /// Scene went to background. A running session keeps capturing — the
+    /// audio background mode keeps ASR, the AAC recorder, and diarization
+    /// alive with the screen locked — but ALL LLM work pauses: submitting
+    /// Metal work from the background risks process termination, so this
+    /// is a hard requirement, not a battery preference. Refinement jobs
+    /// fall back to their drafts; note jobs are held for foreground
+    /// catch-up. Idle in background frees the big models instead.
     func handleBackground() {
+        isBackgrounded = true
+        // No Metal work may run in the background — it aborts the process
+        // uncatchably. Park new generations at the model, and cancel any
+        // post-hoc LLM job already mid-generation (summarize / a
+        // re-transcribe's summary phase). Imports and ASR keep running under
+        // their grace — they never touch Metal — and park if they reach the
+        // LLM. This is the post-hoc twin of the live-session pausing below.
+        Task { [llm] in await llm.setBackgrounded(true) }
+        jobs.setBackgrounded(true)
+        // Photo descriptions pause in BOTH branches: post-hoc jobs can be
+        // mid-generation with no session running.
+        Task { [describeQueue] in await describeQueue?.setPaused(true) }
         if isRunning {
-            Task { await stop() }
-            lastError = String(localized: "Session ended when the app went to the background.")
-        }
-        backgroundUnload = Task { [llm, voiceprint] in
-            try? await Task.sleep(for: .seconds(120))
-            guard !Task.isCancelled else { return }
-            await llm.unload()
-            await voiceprint.unload()
+            Task { [refinement, noteQueue, llm] in
+                await refinement?.setPaused(true)
+                await noteQueue?.setPaused(true)
+                // All LLM work is paused back here, so the loaded weights
+                // are pure dead weight — and the single largest jetsam
+                // target during long locked-screen recordings. Drop them;
+                // handleForeground reloads and the queues catch up.
+                await llm.unload()
+            }
+        } else {
+            backgroundUnload = Task { [llm, voiceprint, weak self] in
+                try? await Task.sleep(for: .seconds(120))
+                guard !Task.isCancelled else { return }
+                // A background import/re-transcribe may still be running in
+                // its grace window — unloading voiceprint would race its
+                // diarization. The job's own teardown frees memory instead.
+                guard self?.jobs.hasActiveWork != true else { return }
+                await llm.unload()
+                await voiceprint.unload()
+            }
         }
     }
 
     func handleForeground() {
+        isBackgrounded = false
+        // Un-park the model and restart any LLM job background cancelled.
+        Task { [llm] in await llm.setBackgrounded(false) }
+        jobs.setBackgrounded(false)
         backgroundUnload?.cancel()
         backgroundUnload = nil
+        if os_proc_available_memory() >= Self.memoryShedFloor {
+            lastMemoryShed = nil
+            // Drop the "paused (low memory)" banner once headroom is back —
+            // outside a live session nothing else clears it.
+            setStatus(.memory, nil)
+        }
+        Task { [describeQueue] in await describeQueue?.setPaused(false) }
+        guard isRunning else { return }
+        Task { [weak self] in
+            guard let self else { return }
+            if await self.llmIsReady() {
+                // Held note jobs catch up in the coming silence gaps.
+                if self.thermal.policy == .full {
+                    await self.refinement?.setPaused(false)
+                }
+                await self.noteQueue?.setPaused(false)
+            } else {
+                // A background memory warning may have unloaded the LLM;
+                // the load's success path unpauses both queues.
+                self.loadLLMIfAllowed()
+            }
+        }
     }
 
     // MARK: Turn plumbing
@@ -501,6 +931,13 @@ final class CaptionPipeline {
             throw error
         }
         phase = .listening(direction)
+
+        // Anchor the audio timeline before buffers start flowing: audio
+        // written so far ↔ now. Skipped without a recorder (no file to map).
+        if let recorder {
+            audioAnchors.append(
+                AudioTimeline.Anchor(wall: .now, audio: await recorder.secondsWritten))
+        }
 
         feedTask = Task { [weak self, voiceprint] in
             for await chunk in buffers {
@@ -561,6 +998,9 @@ final class CaptionPipeline {
             } else if await produceDraft(for: leftover) != nil {
                 store.setRefined(nil, for: leftover.id)
             }
+            // Interruption pauses come through here; the journal must hold
+            // the frozen text in case the process never comes back.
+            writeJournal()
         }
         level = 0
     }
@@ -580,6 +1020,7 @@ final class CaptionPipeline {
         if case .speechActivity(let active) = event {
             await refinement?.setSpeechActive(active)
             await noteQueue?.setSpeechActive(active)
+            await describeQueue?.setSpeechActive(active)
             if active {
                 chunkGapTimer?.cancel()
                 await voiceprint.beginUtterance()
@@ -624,30 +1065,37 @@ final class CaptionPipeline {
                 await enqueueChunkNote(for: closed)
             }
 
-            // Transcribe-only sessions (source == target) skip translation
-            // but still get LLM transcript polish.
+            // Heartbeat the crash journal with the newly finalized text
+            // before the (slow) translation/refinement work below.
+            writeJournal()
+
+            // Transcribe-only sessions (source == target) have nothing to
+            // refine: the transcript IS the record of what was said, and
+            // LLM rewriting of it was removed — only the deterministic
+            // hotword fixup (already applied above) touches source text.
             let translationEnabled = direction.source != direction.target
-            var draft = ""
-            if translationEnabled {
-                guard let produced = await produceDraft(for: entry) else { return }
-                draft = produced
+            guard translationEnabled else {
+                store.setRefined(nil, for: entry.id)
+                return
             }
+            guard let draft = await produceDraft(for: entry) else { return }
 
             // Hotword near-misses force refinement even for short
             // utterances — names usually appear in exactly those.
-            let wantsRefinement = translationEnabled
-                ? (refine || matcher.shouldForceRefine(text, language: direction.source))
-                : transcriptPolishEnabled
-            if wantsRefinement, llmEnabled, thermal.policy == .full, await llmIsReady() {
+            let wantsRefinement = refine
+                || matcher.shouldForceRefine(text, language: direction.source)
+            // !isBackgrounded: the paused queue silently DROPS enqueued
+            // jobs — a backgrounded entry marked refining would spin
+            // forever. It takes the draft path instead.
+            if wantsRefinement, llmEnabled, !isBackgrounded,
+               thermal.policy == .full, await llmIsReady() {
                 store.markRefining(entry.id)
-                let history = translationEnabled
-                    ? store.recentHistory(limit: 6).map {
-                        PromptBuilder.HistoryTurn(
-                            sourceLanguage: $0.direction.source,
-                            sourceText: $0.sourceText,
-                            translation: $0.displayTranslation ?? "")
-                    }
-                    : []
+                let history = store.recentHistory(limit: 6).map {
+                    PromptBuilder.HistoryTurn(
+                        sourceLanguage: $0.direction.source,
+                        sourceText: $0.sourceText,
+                        translation: $0.displayTranslation ?? "")
+                }
                 await refinement?.enqueue(RefinementQueue.Job(
                     entryID: entry.id,
                     source: text,
@@ -655,8 +1103,7 @@ final class CaptionPipeline {
                     direction: direction,
                     history: history,
                     glossary: matcher.glossaryLines(
-                        direction: direction, sourceText: text),
-                    cleanSource: transcriptPolishEnabled))
+                        direction: direction, sourceText: text)))
             } else {
                 store.setRefined(nil, for: entry.id)
             }
@@ -667,8 +1114,7 @@ final class CaptionPipeline {
     }
 
     /// Tier-1 draft for a finalized entry: cancel pending volatile work,
-    /// translate, store, and speak (conversation + TTS). Returns nil and
-    /// marks the entry on failure.
+    /// translate, and store. Returns nil and marks the entry on failure.
     private func produceDraft(for entry: CaptionEntry) async -> String? {
         translator.cancelPending(entryID: entry.id)
         do {
@@ -702,42 +1148,59 @@ final class CaptionPipeline {
     /// contiguous prefix (post-hoc summarize maps the tail).
     private func enqueueChunkNote(for chunk: [CaptionEntry]) async {
         guard !liveMappingStopped, !chunk.isEmpty else { return }
-        guard llmEnabled, thermal.policy == .full, await llmIsReady() else {
-            liveMappingStopped = true
-            return
+        if isBackgrounded {
+            // Enqueue blind: the paused queue HOLDS jobs for foreground
+            // catch-up. Running the readiness gate here would stop live
+            // mapping the first time the screen locks (the LLM is never
+            // "ready" while backgrounded), killing notes for the session.
+            guard llmEnabled else {
+                liveMappingStopped = true
+                return
+            }
+        } else {
+            guard llmEnabled, thermal.policy == .full, await llmIsReady() else {
+                liveMappingStopped = true
+                return
+            }
         }
         let text = chunk.map { entry in
             let label = entry.speaker.map {
-                speakerNames[$0] ?? "Speaker \($0 + 1)"
+                speakerNames[$0] ?? String(localized: "Speaker \($0 + 1)")
             }
             return (label.map { "[\($0)] " } ?? "") + entry.sourceText
         }.joined(separator: "\n")
         let language = AppLanguage.devicePreferred ?? chunk[0].direction.target
+        // Scored against the chunk's source language, where the
+        // mis-hearings the glossary corrects actually live.
+        let vocabulary = hotwords.matcher.noteGlossaryLines(
+            language: chunk[0].direction.source, text: text)
         await noteQueue?.enqueue(ChunkNoteQueue.Job(
             chunkText: text,
             anchorEntryID: chunk[0].id,
             endEntryID: chunk[chunk.count - 1].id,
             startedAt: chunk[0].createdAt,
             fallbackHeadline: String(chunk[0].sourceText.prefix(24)),
-            language: language))
+            language: language,
+            vocabulary: vocabulary))
     }
 
     /// Change the speaker count, live: existing utterances are re-clustered
-    /// into the new count and relabeled on screen. The audio tee follows
+    /// into the new cap and relabeled on screen. The audio tee follows
     /// automatically (checked per-chunk in the feed loop).
     func updateSpeakerCount(_ count: Int) {
         UserDefaults.standard.set(count, forKey: "captions.speakerCount")
         guard isRunning else { return }
-        diarizationActive = count >= 2
+        let cap = VoiceprintService.clusterCap(forPickerValue: count)
+        diarizationActive = cap != nil
         Task { [weak self] in
             guard let self else { return }
-            if count >= 2 {
+            if let cap {
                 if await self.voiceprint.state != .ready {
                     self.setStatus(.diarizer, String(localized: "Preparing speaker separation…"))
                     try? await self.voiceprint.loadIfNeeded(source: self.diarizerSource)
                     self.setStatus(.diarizer, nil)
                 }
-                let relabels = await self.voiceprint.startDiarization(maxSpeakers: count)
+                let relabels = await self.voiceprint.startDiarization(maxSpeakers: cap)
                 for (entryID, slot) in relabels {
                     self.store.setSpeaker(slot, for: entryID)
                 }
@@ -745,6 +1208,17 @@ final class CaptionPipeline {
                 await self.voiceprint.stopDiarization()
             }
         }
+    }
+
+    /// Apply a changed mic-pickup preset. Every knob it tunes lives in
+    /// per-turn state — VAD config inside the engines, boost inside the
+    /// capture tap — so a live session rebinds by restarting its turn,
+    /// the same machinery as a route change; endTurn's drain finalizes
+    /// in-flight speech first. Idle sessions just pick the preset up at
+    /// the next start.
+    func updateMicSensitivity() {
+        guard isRunning else { return }
+        restartCurrentTurn(reason: "mic pickup preset changed")
     }
 
     // MARK: LLM + thermal management
@@ -777,18 +1251,33 @@ final class CaptionPipeline {
     }
 
     private func loadLLMIfAllowed() {
-        guard llmEnabled, thermal.policy != .llmUnloaded else { return }
+        // The background guard also blocks the 10s deferred load at session
+        // start when the user locks immediately: 1.3GB of weights must not
+        // load (and Metal must not warm) with the screen off.
+        if let shed = lastMemoryShed, shed.duration(to: .now) < .seconds(60) { return }
+        guard llmEnabled, thermal.policy != .llmUnloaded, !isBackgrounded else { return }
         Task { [llm] in
             // Called on every silence gap; only show status when there is
             // actually a load to do (llm.load joins in-flight loads).
             if case .ready = await llm.loadState { return }
-            self.setStatus(.llm, String(localized: "Warming up enhanced translations…"))
+            self.setStatus(.llm, String(localized: "Warming up the AI model…"))
             do {
-                try await llm.load()
+                // Never auto-download mid-session: weights are gigabytes and
+                // the user never asked. Downloads happen only from explicit
+                // UI (Settings, or a consent prompt on an AI feature).
+                try await llm.load(policy: .requireDownloaded)
                 await self.refinement?.setPaused(false)
+                await self.noteQueue?.setPaused(false)
+                self.lastMemoryShed = nil
                 self.setStatus(.llm, nil)
+                self.setStatus(.memory, nil)
+            } catch LLMServiceError.modelNotDownloaded {
+                self.setStatus(.memory, nil)
+                self.setStatus(.llm, String(
+                    localized: "AI model not downloaded — transcribing only (see Settings)"))
             } catch {
-                self.setStatus(.llm, String(localized: "Enhanced translations unavailable"))
+                self.setStatus(.memory, nil)
+                self.setStatus(.llm, String(localized: "AI features unavailable"))
             }
         }
     }
@@ -810,12 +1299,12 @@ final class CaptionPipeline {
                     case .refinementPaused:
                         await self.refinement?.setPaused(true)
                         self.setStatus(.thermal, String(
-                            localized: "Enhanced translation paused (device warm)"))
+                            localized: "AI features paused (device warm)"))
                     case .llmUnloaded:
                         await self.refinement?.setPaused(true)
                         await self.llm.unload()
                         self.setStatus(.thermal, String(
-                            localized: "Enhanced translation off (device hot)"))
+                            localized: "AI features off (device hot)"))
                     }
                 }
                 try? await Task.sleep(for: .seconds(2))
@@ -827,8 +1316,17 @@ final class CaptionPipeline {
     /// is about to kill us — drop the big models, not just the MLX cache.
     /// Tier-1 captions keep working; the LLM reloads on the next quiet gap.
     func handleMemoryWarning() {
+        // Coalesce bursts of critical-pressure events — one shed is enough —
+        // but gate on time since the last shed rather than the (session-scoped)
+        // status banner: a genuine later event, e.g. after a background
+        // summarize/import job reloaded the model, must still be able to shed
+        // again. The headroom check at the dispatch source already stops
+        // system-wide thrash.
+        if let shed = lastMemoryShed, shed.duration(to: .now) < .seconds(3) { return }
         logger.warning("memory warning: unloading models")
-        setStatus(.memory, String(localized: "Enhanced translation paused (low memory)"))
+        lastMemoryShed = .now
+        setStatus(.llm, nil)
+        setStatus(.memory, String(localized: "AI features paused (low memory)"))
         Task { [llm, voiceprint, refinement] in
             await refinement?.setPaused(true)
             await llm.unload()

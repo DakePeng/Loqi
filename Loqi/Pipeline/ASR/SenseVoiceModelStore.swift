@@ -101,6 +101,7 @@ final class SenseVoiceModelStore {
     private(set) var progress: Double = 0
     private(set) var lastError: String?
 
+    private var downloadTask: Task<Void, Never>?
     private let logger = Logger(subsystem: "com.kunzhipeng.loqi", category: "sensevoice")
 
     func download(from source: ASRModelSource) async {
@@ -108,8 +109,21 @@ final class SenseVoiceModelStore {
         downloading = true
         lastError = nil
         progress = 0
-        defer { downloading = false }
+        // Run in an owned task so Stop can cancel it; completed-file
+        // checkpoints stay on disk and a later download resumes.
+        let task = Task { await performDownload(from: source) }
+        downloadTask = task
+        await task.value
+        downloadTask = nil
+        downloading = false
+    }
 
+    /// User-initiated stop; not an error. Partial files remain for resume.
+    func cancelDownload() {
+        downloadTask?.cancel()
+    }
+
+    private func performDownload(from source: ASRModelSource) async {
         try? FileManager.default.createDirectory(
             at: Self.directory, withIntermediateDirectories: true)
 
@@ -117,6 +131,7 @@ final class SenseVoiceModelStore {
         var doneWeight: Int64 = 0
         for file in Self.files {
             do {
+                try Task.checkCancellation()
                 let base = doneWeight
                 try await fetch(file, from: source) { [weak self] fileFraction in
                     let blended = Double(base) / Double(totalWeight)
@@ -124,6 +139,10 @@ final class SenseVoiceModelStore {
                     self?.progress = min(blended, 1)
                 }
                 doneWeight += file.expectedBytes
+            } catch is CancellationError {
+                return
+            } catch let error as URLError where error.code == .cancelled {
+                return
             } catch {
                 logger.error("download \(file.name) failed: \(error)")
                 lastError = String(

@@ -86,44 +86,79 @@ struct SummaryEngineTests {
         #expect(note.facts == ["一个事实"])
     }
 
-    // MARK: Refinement dual-output parsing
+    @Test func chunkNoteParserKeepsRicherNotesForLongerSummaries() {
+        let raw = """
+        H: 讨论发布计划
+        F: 事实一
+        F: 事实二
+        F: 事实三
+        F: 事实四
+        F: 事实五
+        F: 事实六
+        D: 决定一
+        D: 决定二
+        D: 决定三
+        D: 决定四
+        D: 决定五
+        D: 决定六
+        A: 待办一
+        A: 待办二
+        A: 待办三
+        A: 待办四
+        A: 待办五
+        A: 待办六
+        T: 术语一
+        T: 术语二
+        T: 术语三
+        T: 术语四
+        T: 术语五
+        T: 术语六
+        """
+        let note = PromptBuilder().parseChunkNote(raw)
+        #expect(note.facts.count == 6)
+        #expect(note.decisions.count == 6)
+        #expect(note.actions.count == 6)
+        #expect(note.terms.count == 6)
+    }
 
-    @Test func parsesDualRefinementOutput() {
+    // MARK: Refinement output parsing (translation only — source rewriting
+    // was removed; an "S:" line from an old prompt shape is ignored)
+
+    @Test func taggedTranslationParses() {
         let parsed = PromptBuilder().parseRefinement(
             "S: 我觉得要不就英法都考一下\nT: I think we should test both English and French.")
-        #expect(parsed.cleanedSource == "我觉得要不就英法都考一下")
-        #expect(parsed.translation == "I think we should test both English and French.")
+        #expect(parsed == "I think we should test both English and French.")
     }
 
-    @Test func untaggedOutputIsTranslationOnly() {
+    @Test func untaggedOutputIsTheTranslation() {
         let parsed = PromptBuilder().parseRefinement("こんにちは、お元気ですか。")
-        #expect(parsed.cleanedSource == nil)
-        #expect(parsed.translation == "こんにちは、お元気ですか。")
+        #expect(parsed == "こんにちは、お元気ですか。")
     }
 
-    @Test func missingTranslationLineSurvives() {
-        let parsed = PromptBuilder().parseRefinement("S: 只有清理后的原文")
-        #expect(parsed.cleanedSource == "只有清理后的原文")
-        #expect(parsed.translation == nil)
+    // MARK: Hotword-restore parsing + fidelity gate
+
+    @Test func restoredSentenceParsesTaggedAndUntagged() {
+        #expect(PromptBuilder().parseRestoredSentence("S: 我们和志鹏开会")
+            == "我们和志鹏开会")
+        #expect(PromptBuilder().parseRestoredSentence("我们和志鹏开会")
+            == "我们和志鹏开会")
     }
 
-    // MARK: Source-cleanup fidelity gate
-
-    @Test func acceptsLightCleanup() {
+    @Test func acceptsTermSwap() {
         let original = "我觉要不就英法问一下考两个来现"
-        let cleaned = "我觉得要不就英法都问一下，考两个来"
-        #expect(PromptBuilder().isAcceptableSourceCleanup(cleaned, original: original))
+        let restored = "我觉得要不就英法都问一下，考两个来"
+        #expect(PromptBuilder().isAcceptableHotwordRestore(restored, original: original))
     }
 
     @Test func rejectsMeaningDivergentRewrite() {
         let original = "我觉要不就英法问一下考两个来现"
-        let cleaned = "今天天气很好我们去公园散步吧"
-        #expect(!PromptBuilder().isAcceptableSourceCleanup(cleaned, original: original))
+        let restored = "今天天气很好我们去公园散步吧"
+        #expect(!PromptBuilder().isAcceptableHotwordRestore(restored, original: original))
     }
 
     @Test func rejectsLengthExplosion() {
         let original = "短句"
-        let cleaned = String(repeating: "解释一下这个短句的意思", count: 5)
-        #expect(!PromptBuilder().isAcceptableSourceCleanup(cleaned, original: original))
+        let restored = String(repeating: "解释一下这个短句的意思", count: 5)
+        #expect(!PromptBuilder().isAcceptableHotwordRestore(restored, original: original))
     }
 }

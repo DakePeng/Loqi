@@ -12,10 +12,14 @@ struct PipelineStatusBar: View {
             ForEach(pipeline.statusBanner, id: \.self) { status in
                 pill(status, icon: "info.circle", isError: false)
             }
+            if let notice = pipeline.transientNotice {
+                pill(notice, icon: "checkmark.circle", isError: false)
+            }
             if let error = pipeline.lastError {
                 pill(error, icon: "exclamationmark.triangle.fill", isError: true)
             }
         }
+        .animation(.easeInOut(duration: 0.2), value: pipeline.transientNotice)
     }
 
     private func pill(_ text: String, icon: String, isError: Bool) -> some View {

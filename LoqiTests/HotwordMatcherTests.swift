@@ -73,6 +73,44 @@ struct HotwordMatcherTests {
         #expect(!lines.contains { $0.contains("Qwen") })
     }
 
+    // MARK: Aliases
+
+    let robert = Hotword(
+        term: "Robert Smith",
+        renderings: [.chinese: "罗伯特"],
+        note: "person name",
+        aliases: ["Bobby", "Roberto", "小罗"])
+
+    var aliasMatcher: HotwordMatcher { HotwordMatcher(hotwords: [robert]) }
+
+    @Test func aliasRestoresItsOwnSpellingNotTheTerm() {
+        // The key alias guarantee: fixup must not rewrite what was said.
+        let cased = aliasMatcher.fixup("i told bobby yesterday", language: .english)
+        #expect(cased == "i told Bobby yesterday")
+        let nearMiss = aliasMatcher.fixup("call Robertto today", language: .english)
+        #expect(nearMiss == "call Roberto today")
+    }
+
+    @Test func cjkAliasHomophoneRestoresAlias() {
+        // 小萝 is a homophone near-miss for the alias 小罗 (both xiaoluo);
+        // it comes back as the alias, not as 罗伯特.
+        let fixed = aliasMatcher.fixup("把文件发给小萝", language: .chinese)
+        #expect(fixed == "把文件发给小罗")
+    }
+
+    @Test func aliasForcesRefinement() {
+        #expect(aliasMatcher.shouldForceRefine("call Robertto", language: .english))
+    }
+
+    @Test func glossaryLineCarriesAliases() {
+        let lines = aliasMatcher.glossaryLines(
+            direction: LanguagePair(source: .english, target: .chinese),
+            sourceText: "Bobby said hi")
+        #expect(lines.contains {
+            $0.contains("Robert Smith (aka Bobby, Roberto, 小罗) → 罗伯特 (person name)")
+        })
+    }
+
     // MARK: Primitives
 
     @Test func pinyinEquatesHomophones() {

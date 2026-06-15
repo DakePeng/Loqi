@@ -32,10 +32,18 @@
 	<string>1.0</string>
 	<key>CFBundleVersion</key>
 	<string>1</string>
+	<key>NSCameraUsageDescription</key>
+	<string>Loqi uses the camera to attach photos of slides and whiteboards to a session. Images never leave your device.</string>
 	<key>NSMicrophoneUsageDescription</key>
 	<string>Loqi listens through the microphone to transcribe and translate speech. Audio never leaves your device.</string>
 	<key>NSSpeechRecognitionUsageDescription</key>
 	<string>Loqi transcribes speech entirely on-device to show live translated captions.</string>
+	<key>NSSupportsLiveActivities</key>
+	<true/>
+	<key>UIBackgroundModes</key>
+	<array>
+		<string>audio</string>
+	</array>
 	<key>UILaunchScreen</key>
 	<dict/>
 	<key>UIRequiresFullScreen</key>

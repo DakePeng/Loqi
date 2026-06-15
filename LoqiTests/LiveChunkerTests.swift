@@ -171,6 +171,31 @@ struct OrphanedRecordingTests {
     }
 }
 
+struct ShouldArchiveTests {
+    /// A one-line voice memo is a real note — it must save.
+    @Test func singleEntrySaves() {
+        #expect(SessionArchive.shouldArchive(
+            entryCount: 1, hasAudio: false, duration: 3))
+    }
+
+    /// Audio with nothing transcribed is still the user's data past the
+    /// junk floor.
+    @Test func audioOnlySavesPastMinimumDuration() {
+        #expect(SessionArchive.shouldArchive(
+            entryCount: 0, hasAudio: true,
+            duration: SessionArchive.audioOnlyMinimumDuration))
+        #expect(!SessionArchive.shouldArchive(
+            entryCount: 0, hasAudio: true,
+            duration: SessionArchive.audioOnlyMinimumDuration - 1))
+    }
+
+    /// Nothing transcribed, nothing recorded: a stray tap stays junk.
+    @Test func emptySessionWithoutAudioIsDiscarded() {
+        #expect(!SessionArchive.shouldArchive(
+            entryCount: 0, hasAudio: false, duration: 60))
+    }
+}
+
 @MainActor
 struct SessionArchiveArtifactsTests {
     @Test func savedEntriesReuseLiveIDsAndCarryArtifacts() {

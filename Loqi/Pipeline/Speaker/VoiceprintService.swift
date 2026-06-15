@@ -28,6 +28,11 @@ actor VoiceprintService {
 
     // MARK: Model lifecycle
 
+    /// FluidAudio segmentation + embedding models, ~50 MB total. Approximate:
+    /// FluidAudio doesn't publish exact sizes, so progress readouts scale
+    /// their fraction by this.
+    nonisolated static let approximateDownloadBytes: Int64 = 50_000_000
+
     /// True when the model files already sit in FluidAudio's cache —
     /// loading then needs no network at all.
     nonisolated static var isModelCached: Bool {
@@ -67,9 +72,8 @@ actor VoiceprintService {
         // mirror serves identical paths.
         ModelRegistry.baseURL = source.baseURL
 
-        var lastError: Error?
-        for attempt in 0..<3 {
-            do {
+        do {
+            try await withExponentialBackoff(attempts: 3) {
                 let models = try await DiarizerModels.downloadIfNeeded { [weak self] progress in
                     onProgress?(progress.fractionCompleted)
                     Task { await self?.noteProgress(progress.fractionCompleted) }
@@ -80,21 +84,15 @@ actor VoiceprintService {
                 diarizer = manager
                 state = .ready
                 logger.info("voiceprint models ready (source: \(source.rawValue))")
-                return
-            } catch is CancellationError {
-                state = .unloaded
-                throw CancellationError()
-            } catch {
-                lastError = error
-                logger.error("voiceprint model load attempt \(attempt + 1) failed: \(error)")
-                if attempt < 2 {
-                    try? await Task.sleep(for: .seconds(Double(1 << (attempt + 1))))
-                }
             }
+        } catch is CancellationError {
+            state = .unloaded
+            throw CancellationError()
+        } catch {
+            let message = error.localizedDescription
+            state = .failed(message)
+            throw error
         }
-        let message = lastError?.localizedDescription ?? "Unknown error"
-        state = .failed(message)
-        throw lastError ?? VoiceprintError.loadFailed(message)
     }
 
     private func noteProgress(_ fraction: Double) {
@@ -166,16 +164,20 @@ actor VoiceprintService {
     private var utteranceSnapshot: [Float] = []
 
     /// Call at utterance start so the window holds one speaker's audio.
+    /// The snapshot is deliberately kept: the previous utterance's ASR
+    /// final is often still in flight when the next speaker starts, and it
+    /// must embed the audio of the utterance it describes — wiping here
+    /// made fast turn-taking attribute one speaker's words to the next
+    /// voice. `endUtterance` replaces the snapshot instead.
     func beginUtterance() {
         window.removeAll(keepingCapacity: true)
-        utteranceSnapshot.removeAll(keepingCapacity: true)
     }
 
     /// Call at VAD speech-end to freeze the utterance's audio for embedding.
+    /// A too-short utterance clears the snapshot rather than keeping the
+    /// previous one — better unattributed than the previous speaker's voice.
     func endUtterance() {
-        if window.count >= minWindowSamples {
-            utteranceSnapshot = window
-        }
+        utteranceSnapshot = window.count >= minWindowSamples ? window : []
     }
 
     /// The cleanest single-speaker audio available: the VAD speech-end
@@ -195,12 +197,48 @@ actor VoiceprintService {
     private struct RememberedUtterance {
         let entryID: UUID
         let embedding: [Float]
+        /// Audio length in seconds — short clips give noisy embeddings, so
+        /// clustering demands more corroboration before they found a speaker.
+        let seconds: Double
         var slot: Int
     }
 
     private var maxClusters = 0
     private var utteranceMemory: [RememberedUtterance] = []
     private let memoryLimit = 60
+    /// Slot centroids by slot number, including slots whose utterances have
+    /// all aged out of memory — a returning voice reclaims its old number.
+    /// Slot numbers are therefore stable for the whole session (the speaker
+    /// cap bounds concurrent clusters, not total slots ever minted).
+    private var slotCentroids: [[Float]] = []
+
+    /// Map the speaker-picker value to a clustering cap: 2+ = hard cap,
+    /// -1 ("Auto") = discover the count by voice similarity under a
+    /// generous ceiling, 0/1 = nil (diarization off). Safe because the
+    /// cap is a ceiling, never a target — clustering merges by the
+    /// similarity threshold first and only forces merges above the cap.
+    static func clusterCap(forPickerValue value: Int) -> Int? {
+        switch value {
+        case -1: 8
+        case 2...: value
+        default: nil
+        }
+    }
+
+    /// Whether the offline file-diarization model bundle (FluidAudio) is
+    /// already cached on disk. Derives the path exactly as FluidAudio's loader
+    /// does — same models directory, repo folder, and required model files —
+    /// so it can't drift from where `diarizeFile` will actually look. Lets the
+    /// import flow ask for consent before a first-use network download instead
+    /// of fetching gigabytes silently (e.g. on cellular).
+    nonisolated static var isOfflineDiarizerDownloaded: Bool {
+        let repoDir = OfflineDiarizerModels.defaultModelsDirectory()
+            .appendingPathComponent(Repo.diarizer.folderName)
+        return ModelNames.OfflineDiarizer.requiredModels.allSatisfy {
+            FileManager.default.fileExists(
+                atPath: repoDir.appendingPathComponent($0).path)
+        }
+    }
 
     /// Begin grouping utterances into at most `maxSpeakers` voices.
     /// Calling again mid-session re-clusters everything heard so far into
@@ -210,6 +248,7 @@ actor VoiceprintService {
         maxClusters = maxSpeakers
         guard maxSpeakers >= 2 else {
             utteranceMemory.removeAll()
+            slotCentroids.removeAll()
             return []
         }
         return reclusterMemory()
@@ -220,6 +259,7 @@ actor VoiceprintService {
     func stopDiarization() {
         maxClusters = 0
         utteranceMemory.removeAll()
+        slotCentroids.removeAll()
     }
 
     /// Assign the current utterance to a speaker slot (0-based), globally
@@ -235,21 +275,32 @@ actor VoiceprintService {
             logger.info("assign skipped: model state not ready")
             return nil
         }
-        guard window.count >= minWindowSamples else {
-            logger.info("assign skipped: window \(self.window.count) samples < \(self.minWindowSamples)")
+        let samples = currentUtteranceSamples
+        // Consume the speech-end snapshot: it stays alive across `beginUtterance`
+        // so a late ASR-final embeds the utterance it describes, but it must be
+        // used at most once — otherwise a second, later entry whose own snapshot
+        // hasn't been frozen yet would be attributed to this (now stale) voice.
+        // After consuming, the next assign falls back to the live window.
+        utteranceSnapshot.removeAll(keepingCapacity: true)
+        guard samples.count >= minWindowSamples else {
+            logger.info("assign skipped: \(samples.count) samples < \(self.minWindowSamples)")
             return nil
         }
-        let samples = currentUtteranceSamples
         guard let probe = embed(samples) else {
             logger.warning("assign skipped: embedding failed for \(samples.count) samples")
             return nil
         }
 
         utteranceMemory.append(RememberedUtterance(
-            entryID: entryID, embedding: probe, slot: -1))
+            entryID: entryID, embedding: probe,
+            seconds: Double(samples.count) / 16_000, slot: -1))
         if utteranceMemory.count > memoryLimit {
             utteranceMemory.removeFirst(utteranceMemory.count - memoryLimit)
         }
+        // The whole-memory recluster below is O(n²) in this count, so the cap
+        // is what keeps it cheap — guard against a future regression that lets
+        // it grow unbounded.
+        assert(utteranceMemory.count <= memoryLimit)
 
         let relabels = reclusterMemory()
         guard let slot = utteranceMemory.last?.slot else { return nil }
@@ -258,21 +309,107 @@ actor VoiceprintService {
         return (slot, relabels.filter { $0.0 != entryID })
     }
 
-    /// Re-run agglomerative clustering over the full memory and update
-    /// stored slots; returns every (entryID, newSlot) that changed.
+    /// Re-run agglomerative clustering over the full memory, pin the
+    /// resulting clusters to stable slot numbers via their centroids, and
+    /// update stored slots; returns every (entryID, newSlot) that changed.
+    ///
+    /// The centroid step matters once the memory cap starts evicting:
+    /// labels from a clustering pass are ordered by first appearance
+    /// *within current memory*, so eviction would silently renumber voices
+    /// while the evicted entries keep their old numbers on screen.
     private func reclusterMemory() -> [(UUID, Int)] {
         guard !utteranceMemory.isEmpty else { return [] }
         let labels = VoiceprintMath.agglomerativeLabels(
             embeddings: utteranceMemory.map(\.embedding),
-            maxClusters: maxClusters)
-        var relabels: [(UUID, Int)] = []
-        for index in utteranceMemory.indices where utteranceMemory[index].slot != labels[index] {
-            utteranceMemory[index].slot = labels[index]
-            relabels.append((utteranceMemory[index].entryID, labels[index]))
+            maxClusters: maxClusters,
+            durations: utteranceMemory.map(\.seconds))
+
+        var membersByLabel: [Int: [Int]] = [:]
+        for (index, label) in labels.enumerated() {
+            membersByLabel[label, default: []].append(index)
         }
-        let clusterCount = Set(labels).count
-        logger.info("recluster: \(self.utteranceMemory.count) utterances → \(clusterCount) speakers (cap \(self.maxClusters)), \(relabels.count) relabels")
+        let orderedLabels = membersByLabel.keys.sorted()
+        let centroids = orderedLabels.map { label in
+            VoiceprintMath.meanEmbedding(
+                membersByLabel[label]!.map { utteranceMemory[$0].embedding })
+        }
+        let slotForLabel = VoiceprintMath.matchClustersToSlots(
+            clusters: centroids, slots: slotCentroids)
+        for (which, slot) in slotForLabel.enumerated() {
+            if slot < slotCentroids.count {
+                slotCentroids[slot] = centroids[which]
+            } else {
+                slotCentroids.append(centroids[which])
+            }
+        }
+
+        var relabels: [(UUID, Int)] = []
+        for index in utteranceMemory.indices {
+            let slot = slotForLabel[labels[index]]
+            if utteranceMemory[index].slot != slot {
+                utteranceMemory[index].slot = slot
+                relabels.append((utteranceMemory[index].entryID, slot))
+            }
+        }
+        logger.info("recluster: \(self.utteranceMemory.count) utterances → \(orderedLabels.count) speakers (cap \(self.maxClusters)), \(relabels.count) relabels")
         return relabels
+    }
+
+    // MARK: Whole-file diarization (imports)
+
+    enum FileDiarizationProgress: Sendable {
+        case download(Double)
+        case analysis(Double)
+    }
+
+    /// Diarize a complete audio file with FluidAudio's offline pipeline
+    /// (Pyannote Community-1: powerset segmentation + WeSpeaker + VBx) —
+    /// far more accurate than per-utterance embeddings, because the
+    /// segmentation model masks out overlapping voices and VBx refines
+    /// cluster boundaries over the whole recording at once. Its model
+    /// bundle is separate from the live models and downloads on first use
+    /// (honoring the chosen mirror). Nothing is cached in memory: imports
+    /// are occasional and CoreML keeps the compiled models on disk.
+    ///
+    /// Returns segments with dense slot numbers by first appearance.
+    func diarizeFile(
+        url: URL,
+        maxSpeakers: Int,
+        source: DiarizerSource = .huggingFace,
+        onProgress: (@Sendable (FileDiarizationProgress) -> Void)? = nil
+    ) async throws -> [SpeakerAttribution.Segment] {
+        ModelRegistry.baseURL = source.baseURL
+        var clustering = OfflineDiarizerConfig.Clustering.community
+        clustering.maxSpeakers = max(2, maxSpeakers)
+        let manager = OfflineDiarizerManager(
+            config: OfflineDiarizerConfig(clustering: clustering))
+
+        // Same transient-network retry as the live models; FluidAudio
+        // wipes and re-fetches corrupted caches itself.
+        let models = try await withExponentialBackoff(attempts: 3) {
+            try await OfflineDiarizerModels.load { progress in
+                onProgress?(.download(progress.fractionCompleted))
+            }
+        }
+        manager.initialize(models: models)
+
+        let result = try await manager.process(url) { done, total in
+            onProgress?(.analysis(Double(done) / Double(max(total, 1))))
+        }
+
+        let ordered = result.segments.sorted {
+            $0.startTimeSeconds < $1.startTimeSeconds
+        }
+        var slotByID: [String: Int] = [:]
+        return ordered.map { segment in
+            let slot = slotByID[
+                segment.speakerId, default: slotByID.count]
+            slotByID[segment.speakerId] = slot
+            return SpeakerAttribution.Segment(
+                slot: slot,
+                start: TimeInterval(segment.startTimeSeconds),
+                end: TimeInterval(segment.endTimeSeconds))
+        }
     }
 
     // MARK: Internals

@@ -11,15 +11,11 @@ actor RefinementQueue {
         var direction: LanguagePair
         var history: [PromptBuilder.HistoryTurn]
         var glossary: [String] = []
-        /// Also ask the model to lightly clean the transcript text.
-        var cleanSource: Bool = false
     }
 
-    /// What a finished job delivers: either field nil means "keep what's
-    /// on screen" for that half.
+    /// What a finished job delivers: nil means "keep the draft on screen".
     struct Outcome: Sendable {
         var translation: String?
-        var cleanedSource: String?
     }
 
     /// Jobs beyond this depth drop oldest-first; their drafts stand.
@@ -101,35 +97,18 @@ actor RefinementQueue {
 
             var outcome = Outcome()
             do {
-                // Transcribe-only sessions enqueue with an empty draft:
-                // polish the transcript, no translation to refine.
-                let polishOnly = job.draft.isEmpty && job.cleanSource
-                let raw: String
-                if polishOnly {
-                    raw = try await llm.generate(
-                        system: prompts.polishSystemPrompt(language: job.direction.source),
-                        user: "Sentence: \(job.source)",
-                        maxTokens: 120)
-                } else {
-                    raw = try await llm.generate(
-                        system: prompts.systemPrompt(
-                            direction: job.direction, cleanSource: job.cleanSource),
-                        user: prompts.userPrompt(
-                            source: job.source,
-                            draft: job.draft,
-                            direction: job.direction,
-                            history: job.history,
-                            glossary: job.glossary),
-                        maxTokens: job.cleanSource ? 220 : 120)
-                }
-                let parsed = prompts.parseRefinement(raw)
-                if !polishOnly, let translation = parsed.translation,
+                let raw = try await llm.generate(
+                    system: prompts.systemPrompt(direction: job.direction),
+                    user: prompts.userPrompt(
+                        source: job.source,
+                        draft: job.draft,
+                        direction: job.direction,
+                        history: job.history,
+                        glossary: job.glossary),
+                    maxTokens: 120)
+                if let translation = prompts.parseRefinement(raw),
                    prompts.isAcceptable(translation, draft: job.draft) {
                     outcome.translation = translation
-                }
-                if job.cleanSource, let cleaned = parsed.cleanedSource,
-                   prompts.isAcceptableSourceCleanup(cleaned, original: job.source) {
-                    outcome.cleanedSource = cleaned
                 }
             } catch {
                 outcome = Outcome()

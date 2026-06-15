@@ -160,6 +160,23 @@ struct ModelScopeDownloader: Downloader {
         }
     }
 
+    /// Force a re-list on the next download when `model` needs vision
+    /// files its cached snapshot predates: the manifest otherwise reports
+    /// the old snapshot complete forever, so the newly added processor
+    /// configs (and the grown weights) would never be fetched. Re-listing
+    /// only downloads missing or size-changed files.
+    static func invalidateSnapshotIfMissingVisionFiles(model: ModelOption) {
+        guard model.supportsVision else { return }
+        let directory = cacheRoot.appending(path: model.id, directoryHint: .isDirectory)
+        let fm = FileManager.default
+        let manifest = directory.appending(path: ".manifest.json")
+        guard fm.fileExists(atPath: manifest.path),
+              !fm.fileExists(
+                atPath: directory.appending(path: "preprocessor_config.json").path)
+        else { return }
+        try? fm.removeItem(at: manifest)
+    }
+
     /// Reclaim disk from cached snapshots of models the app no longer
     /// offers (e.g. after a default-model change ships).
     static func removeSnapshots(notIn keepIDs: Set<String>) {

@@ -1,32 +1,53 @@
 import SwiftUI
 
-/// First-run flow: mic permission, then batch download of speech models
-/// for all three languages. Translation packs and the LLM/speaker models
-/// download on first use; Settings manages them afterwards.
+/// First-run flow: mic permission, then a guided model setup — pick a
+/// download region, choose models (recommended: SenseVoice + speaker model
+/// + Qwen3.5 2B, with Qwen3-ASR optional), and watch them install. Apple
+/// speech assets ride along as the always-included fallback live engine.
+/// Every download is skippable; Settings manages them all afterwards.
 struct OnboardingView: View {
+    let pipeline: CaptionPipeline
     let onComplete: () -> Void
 
     private enum Step {
         case welcome
         case permission
-        case assets
-    }
-
-    private enum AssetState: Equatable {
-        case pending
-        case downloading(Double)
-        case done
-        case unsupported
-        case failed
+        case region
+        case models
+        case download
     }
 
     @State private var step = Step.welcome
-    @State private var assetStates: [AppLanguage: AssetState] = [:]
-    @State private var assetError: String?
     @State private var micDenied = false
-    private let assets = AssetManager()
+    @State private var region = DownloadRegion.suggested(for: Locale.current.region)
+    @State private var selection = OnboardingItemKind.defaultSelection
+    @State private var downloads: OnboardingDownloadModel
+
+    init(pipeline: CaptionPipeline, onComplete: @escaping () -> Void) {
+        self.pipeline = pipeline
+        self.onComplete = onComplete
+        _downloads = State(initialValue: OnboardingDownloadModel(pipeline: pipeline))
+    }
 
     var body: some View {
+        switch step {
+        case .welcome, .permission:
+            hero
+        case .region:
+            OnboardingRegionStep(selected: $region, onContinue: confirmRegion)
+        case .models:
+            OnboardingModelStep(
+                selection: $selection,
+                onDownload: startDownloads,
+                onSkip: onComplete)
+        case .download:
+            OnboardingDownloadStep(model: downloads, onFinish: onComplete)
+        }
+    }
+
+    /// The logo screen shared by the first two steps; the later steps need
+    /// the full height for their lists.
+    private var hero: some View {
         VStack(spacing: 24) {
             Spacer()
             Image(systemName: "globe.badge.chevron.backward")
@@ -41,131 +62,64 @@ struct OnboardingView: View {
 
             Spacer()
 
-            switch step {
-            case .welcome:
+            if step == .welcome {
                 Button("Get Started") { step = .permission }
                     .buttonStyle(.borderedProminent)
-
-            case .permission:
-                VStack(spacing: 12) {
-                    Text("Loqi needs the microphone to hear speech. Audio is processed entirely on-device.")
-                        .font(.footnote)
-                        .multilineTextAlignment(.center)
-                        .foregroundStyle(.secondary)
-                        .padding(.horizontal, 32)
-                    if micDenied {
-                        Text("Microphone access is off. Loqi cannot transcribe without it.")
-                            .font(.footnote)
-                            .foregroundStyle(.red)
-                        Button("Open Settings") {
-                            if let url = URL(string: UIApplication.openSettingsURLString) {
-                                UIApplication.shared.open(url)
-                            }
-                        }
-                        Button("Continue anyway") {
-                            advanceToAssets()
-                        }
-                        .buttonStyle(.borderedProminent)
-                    } else {
-                        Button("Allow Microphone") {
-                            Task {
-                                let granted = await AudioCaptureService.requestPermission()
-                                if granted {
-                                    advanceToAssets()
-                                } else {
-                                    micDenied = true
-                                }
-                            }
-                        }
-                        .buttonStyle(.borderedProminent)
-                    }
-                }
-
-            case .assets:
-                VStack(spacing: 12) {
-                    ForEach(AppLanguage.allCases) { language in
-                        HStack {
-                            Text(language.displayName)
-                            Spacer()
-                            assetStatusView(assetStates[language] ?? .pending)
-                        }
-                        .padding(.horizontal, 48)
-                    }
-                    Text("Translation language packs and the enhanced-translation model download on first use. Manage them anytime in Settings.")
-                        .font(.caption2)
-                        .foregroundStyle(.tertiary)
-                        .multilineTextAlignment(.center)
-                        .padding(.horizontal, 32)
-                    if let assetError {
-                        Text(assetError)
-                            .font(.footnote)
-                            .foregroundStyle(.red)
-                        Button("Retry") {
-                            Task { await downloadAssets() }
-                        }
-                        Button("Skip for now") {
-                            onComplete()
-                        }
-                    }
-                }
+            } else {
+                permissionControls
             }
             Spacer()
         }
         .padding()
     }
 
-    @ViewBuilder
-    private func assetStatusView(_ state: AssetState) -> some View {
-        switch state {
-        case .pending:
-            Image(systemName: "circle.dotted").foregroundStyle(.tertiary)
-        case .downloading(let progress):
-            ProgressView(value: progress).frame(width: 120)
-        case .done:
-            Image(systemName: "checkmark.circle.fill").foregroundStyle(.green)
-        case .unsupported:
-            Text("Not supported on this device")
-                .font(.caption)
+    private var permissionControls: some View {
+        VStack(spacing: 12) {
+            Text("Loqi needs the microphone to hear speech. Audio is processed entirely on-device.")
+                .font(.footnote)
+                .multilineTextAlignment(.center)
                 .foregroundStyle(.secondary)
-        case .failed:
-            Image(systemName: "exclamationmark.circle.fill").foregroundStyle(.red)
-        }
-    }
-
-    private func advanceToAssets() {
-        step = .assets
-        Task { await downloadAssets() }
-    }
-
-    private func downloadAssets() async {
-        assetError = nil
-        var anyFailure = false
-        for language in AppLanguage.allCases {
-            if assetStates[language] == .done || assetStates[language] == .unsupported {
-                continue
-            }
-            let status = await assets.speechAssetStatus(for: language)
-            guard status != .unsupported else {
-                assetStates[language] = .unsupported
-                continue
-            }
-            do {
-                assetStates[language] = .downloading(0)
-                try await assets.installSpeechAssets(for: language) { progress in
-                    Task { @MainActor in
-                        assetStates[language] = .downloading(progress)
+                .padding(.horizontal, 32)
+            if micDenied {
+                Text("Microphone access is off. Loqi cannot transcribe without it.")
+                    .font(.footnote)
+                    .foregroundStyle(.red)
+                Button("Open Settings") {
+                    if let url = URL(string: UIApplication.openSettingsURLString) {
+                        UIApplication.shared.open(url)
                     }
                 }
-                assetStates[language] = .done
-            } catch {
-                assetStates[language] = .failed
-                anyFailure = true
+                Button("Continue anyway") { step = .region }
+                    .buttonStyle(.borderedProminent)
+            } else {
+                Button("Allow Microphone") {
+                    Task {
+                        let granted = await AudioCaptureService.requestPermission()
+                        if granted {
+                            step = .region
+                        } else {
+                            micDenied = true
+                        }
+                    }
+                }
+                .buttonStyle(.borderedProminent)
             }
         }
-        if anyFailure {
-            assetError = "Some downloads failed. Check your connection and retry."
-        } else {
-            onComplete()
-        }
+    }
+
+    /// One write covers all three source settings, plus an in-memory sync:
+    /// the shared pipeline captured "model.source" at construction, before
+    /// these keys existed.
+    private func confirmRegion() {
+        region.persistSources()
+        let llm = pipeline.llm
+        let source = region.llmSource
+        Task { await llm.setSource(source) }
+        step = .models
+    }
+
+    private func startDownloads() {
+        step = .download
+        downloads.start(selection: selection, region: region)
     }
 }

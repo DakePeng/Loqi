@@ -1,0 +1,145 @@
+import SwiftUI
+import UIKit
+
+/// Small rounded thumbnail for an attached photo, loaded off the main
+/// thread. Used inline in the live transcript and the session detail.
+struct AttachmentThumbnail: View {
+    let attachment: SessionRecord.Attachment
+    var height: CGFloat = 88
+
+    @State private var image: UIImage?
+
+    var body: some View {
+        Group {
+            if let image {
+                Image(uiImage: image)
+                    .resizable()
+                    .scaledToFill()
+            } else {
+                RoundedRectangle(cornerRadius: 10)
+                    .fill(Color(.tertiarySystemFill))
+                    .overlay {
+                        Image(systemName: "photo")
+                            .foregroundStyle(.secondary)
+                    }
+            }
+        }
+        .frame(width: height * 4 / 3, height: height)
+        .clipShape(RoundedRectangle(cornerRadius: 10))
+        .overlay(alignment: .bottomLeading) {
+            if attachment.ocrText != nil || attachment.vlmDescription != nil {
+                Image(systemName: "text.viewfinder")
+                    .font(.caption2)
+                    .padding(4)
+                    .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 5))
+                    .padding(4)
+            }
+        }
+        .task(id: attachment.fileName) {
+            let url = SessionArchive.attachmentURL(fileName: attachment.fileName)
+            let loaded = await Task.detached(priority: .utility) {
+                UIImage(contentsOfFile: url.path())?
+                    .preparingForDisplay()
+            }.value
+            image = loaded
+        }
+    }
+}
+
+/// Full-screen photo viewer: zoomable image, extracted text, optional
+/// caption editing and delete (detail view only; nil handlers hide them).
+struct AttachmentViewer: View {
+    let attachment: SessionRecord.Attachment
+    var onSaveCaption: (@MainActor (String) -> Void)? = nil
+    var onDelete: (@MainActor () -> Void)? = nil
+
+    @Environment(\.dismiss) private var dismiss
+    @State private var image: UIImage?
+    @State private var captionDraft = ""
+    @State private var showingText = false
+    @State private var confirmDelete = false
+
+    var body: some View {
+        NavigationStack {
+            ZStack {
+                Color.black.ignoresSafeArea()
+                if let image {
+                    ScrollView([.horizontal, .vertical]) {
+                        Image(uiImage: image)
+                            .resizable()
+                            .scaledToFit()
+                            .containerRelativeFrame([.horizontal, .vertical])
+                    }
+                    .scrollBounceBehavior(.basedOnSize)
+                } else {
+                    ProgressView()
+                        .tint(.white)
+                }
+            }
+            .toolbar {
+                ToolbarItem(placement: .topBarLeading) {
+                    Button("Done") { dismiss() }
+                }
+                ToolbarItemGroup(placement: .topBarTrailing) {
+                    if let text = attachment.ocrText ?? attachment.vlmDescription,
+                       !text.isEmpty {
+                        Button("Extracted text", systemImage: "text.viewfinder") {
+                            showingText = true
+                        }
+                    }
+                    if let image {
+                        ShareLink(
+                            item: Image(uiImage: image),
+                            preview: SharePreview("Photo", image: Image(uiImage: image)))
+                    }
+                    if onDelete != nil {
+                        Button("Delete", systemImage: "trash", role: .destructive) {
+                            confirmDelete = true
+                        }
+                    }
+                }
+            }
+            .safeAreaInset(edge: .bottom) {
+                if onSaveCaption != nil {
+                    TextField("Add a caption", text: $captionDraft)
+                        .textFieldStyle(.roundedBorder)
+                        .submitLabel(.done)
+                        .onSubmit { onSaveCaption?(captionDraft) }
+                        .padding()
+                        .background(.bar)
+                }
+            }
+            .sheet(isPresented: $showingText) {
+                NavigationStack {
+                    ScrollView {
+                        Text(attachment.ocrText ?? attachment.vlmDescription ?? "")
+                            .textSelection(.enabled)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .padding()
+                    }
+                    .navigationTitle("Extracted text")
+                    .navigationBarTitleDisplayMode(.inline)
+                }
+                .presentationDetents([.medium, .large])
+            }
+            .confirmationDialog(
+                "Delete this photo?",
+                isPresented: $confirmDelete,
+                titleVisibility: .visible
+            ) {
+                Button("Delete", role: .destructive) {
+                    onDelete?()
+                    dismiss()
+                }
+                Button("Cancel", role: .cancel) {}
+            }
+        }
+        .task {
+            captionDraft = attachment.caption ?? ""
+            let url = SessionArchive.attachmentURL(fileName: attachment.fileName)
+            image = await Task.detached(priority: .userInitiated) {
+                UIImage(contentsOfFile: url.path())
+            }.value
+        }
+    }
+}

@@ -51,7 +51,14 @@ struct HorizontalCaptionView: View {
         }
         .overlay(alignment: .topTrailing) {
             HStack(spacing: 14) {
-                if pipeline.isRunning, let startedAt = pipeline.sessionStartedAt {
+                if pipeline.isPaused {
+                    // The wall-clock timer keeps ticking through an
+                    // interruption; over a dead mic that reads as "still
+                    // recording" — show the truth instead.
+                    Label("Paused", systemImage: "pause.fill")
+                        .font(.callout.weight(.medium))
+                        .foregroundStyle(.orange)
+                } else if pipeline.isRunning, let startedAt = pipeline.sessionStartedAt {
                     Text(startedAt, style: .timer)
                         .font(.callout.monospacedDigit())
                         .foregroundStyle(Color(white: 0.5))
@@ -76,6 +83,23 @@ struct HorizontalCaptionView: View {
             }
             .padding(.top, 10)
             .padding(.trailing, 16)
+        }
+        // The teleprompter is exactly where a silently paused mic matters
+        // most: surface the same pipeline status portrait shows.
+        .overlay(alignment: .top) {
+            VStack(spacing: 6) {
+                PipelineStatusBar(pipeline: pipeline)
+                if !pipeline.isRunning, pipeline.lastFinishedSessionID != nil {
+                    Label("Saved — rotate to portrait to review",
+                          systemImage: "checkmark.circle.fill")
+                        .font(.caption)
+                        .foregroundStyle(.green)
+                        .padding(.horizontal, 12)
+                        .padding(.vertical, 5)
+                        .background(Color(white: 0.16), in: Capsule())
+                }
+            }
+            .padding(.top, 12)
         }
         .statusBarHidden()
         .persistentSystemOverlays(.hidden)

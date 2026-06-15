@@ -1,6 +1,5 @@
 import AVFoundation
 import Foundation
-import Speech
 import os
 
 /// Imports a pre-recorded audio file (Voice Memos via share sheet, or any
@@ -12,31 +11,41 @@ import os
 final class FileImportEngine {
     enum Phase: Equatable {
         case transcribing(Double)   // 0...1 through the file
+        case fetchingSpeakerModel(Double)   // first diarized import only
         case identifyingSpeakers(Double)
         case translating(Double)
     }
 
     private let translator: TranslationCoordinator
     private let voiceprint: VoiceprintService
+    /// Unloaded before a Qwen3-ASR decode: its ~940MB of weights and the
+    /// resident LLM can't coexist on 6GB devices. Imports never use the
+    /// LLM (drafts come from the system translator), so it reloads lazily
+    /// at the next AI feature.
+    private let llm: LLMService?
+    /// Vocabulary that primes the Qwen3-ASR decoder.
+    private let hotwords: HotwordStore?
     private let logger = Logger(subsystem: "com.kunzhipeng.loqi", category: "import")
 
-    init(translator: TranslationCoordinator, voiceprint: VoiceprintService) {
+    init(
+        translator: TranslationCoordinator,
+        voiceprint: VoiceprintService,
+        llm: LLMService? = nil,
+        hotwords: HotwordStore? = nil
+    ) {
         self.translator = translator
         self.voiceprint = voiceprint
-    }
-
-    /// Whether to actually use SenseVoice: requested AND installed, else
-    /// fall back to Apple (mirrors the live pipeline). Pure for testing.
-    nonisolated static func effectiveUseSenseVoice(choice: String, installed: Bool) -> Bool {
-        choice == "sensevoice" && installed
+        self.llm = llm
+        self.hotwords = hotwords
     }
 
     func importAudio(
         url: URL,
+        sessionID: UUID = UUID(),
         direction: LanguagePair,
         speakerCount: Int,
         engine: String = "apple",
-        onPhase: @escaping (Phase) -> Void
+        onPhase: @escaping @MainActor @Sendable (Phase) -> Void
     ) async throws -> SessionRecord {
         // Files-picker URLs are security-scoped; copy into our container so
         // long processing never races the scope.
@@ -63,13 +72,19 @@ final class FileImportEngine {
 
         // MARK: Transcribe (finals only, each carrying a time range)
         onPhase(.transcribing(0))
-        let useSenseVoice = Self.effectiveUseSenseVoice(
-            choice: engine, installed: SenseVoiceModelStore.isInstalled)
-        let utterances = useSenseVoice
-            ? try await transcribeWithSenseVoice(
-                audioFile, language: direction.source, onPhase: onPhase)
-            : try await transcribeWithApple(
-                audioFile, source: direction.source, duration: duration, onPhase: onPhase)
+        let backend = OfflineTranscriber.importBackend(
+            choice: engine,
+            senseVoiceInstalled: SenseVoiceModelStore.isInstalled,
+            qwen3Installed: Qwen3ASRModelStore.isInstalled)
+        if backend == .qwen3ASR { await llm?.unload() }
+        let utterances = try await OfflineTranscriber.transcribe(
+            audioFile,
+            language: direction.source,
+            backend: backend,
+            hotwords: hotwords?.biasStrings(for: direction.source) ?? []
+        ) { fraction in
+            onPhase(.transcribing(fraction))
+        }
         logger.info("import: \(utterances.count) utterances from \(Int(duration))s file")
 
         var entries = utterances.map { utterance in
@@ -78,40 +93,65 @@ final class FileImportEngine {
                 translation: nil,
                 speaker: nil,
                 direction: direction,
-                timestamp: recordedAt.addingTimeInterval(utterance.start))
+                timestamp: recordedAt.addingTimeInterval(utterance.start),
+                audioOffset: utterance.start)
         }
 
-        // MARK: Diarization (optional; model must already be downloaded)
-        if speakerCount >= 2, await voiceprint.state == .ready {
-            await voiceprint.startDiarization(maxSpeakers: speakerCount)
-            let reader = try AVAudioFile(forReading: workingURL)
-            var slotByEntry: [UUID: Int] = [:]
-            for (index, utterance) in utterances.enumerated() {
-                onPhase(.identifyingSpeakers(
-                    Double(index) / Double(max(utterances.count, 1))))
-                await voiceprint.beginUtterance()
-                await feedSegment(
-                    of: reader,
-                    from: utterance.start, to: utterance.end,
-                    sampleRate: sampleRate)
-                await voiceprint.endUtterance()
-                if let result = await voiceprint.assignSpeaker(entryID: entries[index].id) {
-                    slotByEntry[entries[index].id] = result.slot
-                    for (entryID, slot) in result.relabels {
-                        slotByEntry[entryID] = slot
+        // MARK: Diarization + tier-1 translation
+        // The two phases are independent — diarization reads the audio and
+        // writes speaker slots; translation reads source text and writes the
+        // translation field — so when both run, the tier-1 drafts overlap the
+        // off-main diarizer (which owns the visible progress, including any
+        // first-use model download). With no diarization, translation drives
+        // the progress bar itself, exactly as before. Same-language imports
+        // are transcribe-only and skip translation entirely.
+        try Task.checkCancellation()
+        let needsTranslation = direction.source != direction.target
+        if needsTranslation { await translator.addDirection(direction) }
+
+        if let speakerCap = VoiceprintService.clusterCap(forPickerValue: speakerCount) {
+            // Snapshot the entries (a `let`) so the concurrent draft pass and
+            // the diarization speaker-writes below don't contend for `entries`.
+            let entriesSnapshot = entries
+            async let drafts: [String?] = Self.draftAll(
+                entries: entriesSnapshot, direction: direction,
+                translator: needsTranslation ? translator : nil)
+
+            onPhase(.identifyingSpeakers(0))
+            do {
+                let segments = try await voiceprint.diarizeFile(
+                    url: workingURL, maxSpeakers: speakerCap, source: .current
+                ) { progress in
+                    Task { @MainActor in
+                        switch progress {
+                        case .download(let fraction):
+                            onPhase(.fetchingSpeakerModel(fraction))
+                        case .analysis(let fraction):
+                            onPhase(.identifyingSpeakers(fraction))
+                        }
                     }
                 }
+                let slots = SpeakerAttribution.attribute(
+                    utterances: utterances.map { ($0.start, $0.end) },
+                    to: segments)
+                for index in entries.indices {
+                    entries[index].speaker = slots[index]
+                }
+                logger.info("import: \(Set(segments.map(\.slot)).count) speakers across \(segments.count) segments")
+            } catch {
+                // Speaker labels are an enhancement: a failed model download
+                // or analysis must not cost the transcript.
+                logger.error("import diarization failed: \(error.localizedDescription)")
             }
-            await voiceprint.stopDiarization()
-            for index in entries.indices {
-                entries[index].speaker = slotByEntry[entries[index].id]
-            }
-        }
 
-        // MARK: Tier-1 translation (same-language import = transcribe-only)
-        if direction.source != direction.target {
-            await translator.addDirection(direction)
+            // Apply the translations drafted concurrently with diarization.
+            let translations = try await drafts
+            for index in entries.indices where index < translations.count {
+                entries[index].translation = translations[index]
+            }
+        } else if needsTranslation {
             for index in entries.indices {
+                try Task.checkCancellation()
                 onPhase(.translating(Double(index) / Double(max(entries.count, 1))))
                 entries[index].translation = try? await translator.draft(
                     entries[index].sourceText, direction: direction)
@@ -119,37 +159,33 @@ final class FileImportEngine {
         }
 
         guard entries.count >= 1 else { throw ImportError.nothingTranscribed }
+        // Preassigned ID: the job center's placeholder record keeps its
+        // identity when this finished record replaces it.
         return SessionRecord(
+            id: sessionID,
             mode: .captions,
             startedAt: recordedAt,
             endedAt: recordedAt.addingTimeInterval(duration),
             entries: entries)
     }
 
-    /// Stream one utterance's samples into the voiceprint service in ≤1s
-    /// buffers (its rolling window keeps the last 3s; resampling happens
-    /// inside ingest).
-    private func feedSegment(
-        of file: AVAudioFile,
-        from start: TimeInterval, to end: TimeInterval,
-        sampleRate: Double
-    ) async {
-        let startFrame = AVAudioFramePosition(max(0, start) * sampleRate)
-        let endFrame = min(AVAudioFramePosition(end * sampleRate), file.length)
-        guard endFrame > startFrame else { return }
-        file.framePosition = startFrame
-        var remaining = AVAudioFrameCount(endFrame - startFrame)
-        let chunkFrames = AVAudioFrameCount(sampleRate)  // 1s
-        while remaining > 0 {
-            let count = min(remaining, chunkFrames)
-            guard let buffer = AVAudioPCMBuffer(
-                pcmFormat: file.processingFormat, frameCapacity: count
-            ), (try? file.read(into: buffer, frameCount: count)) != nil,
-                  buffer.frameLength > 0 else { break }
-            let chunk = AudioCaptureService.AudioChunk(buffer: buffer)
-            await voiceprint.ingest(chunk)
-            remaining -= buffer.frameLength
+    /// Draft every entry's tier-1 translation, in order. Extracted so it can
+    /// run as an `async let` overlapping the off-main diarizer; a nil
+    /// translator (same-language import) yields no drafts.
+    private static func draftAll(
+        entries: [SessionRecord.Entry],
+        direction: LanguagePair,
+        translator: TranslationCoordinator?
+    ) async throws -> [String?] {
+        guard let translator else { return [] }
+        var drafts: [String?] = []
+        drafts.reserveCapacity(entries.count)
+        for entry in entries {
+            try Task.checkCancellation()
+            drafts.append(try? await translator.draft(
+                entry.sourceText, direction: direction))
         }
+        return drafts
     }
 
     // MARK: Audio extraction (video → audio)
@@ -180,106 +216,6 @@ final class FileImportEngine {
         return output
     }
 
-    // MARK: Transcription backends
-
-    /// Apple SpeechAnalyzer: file-based, finals only, each Result carrying a
-    /// time range. Unchanged from the original single-engine import.
-    private func transcribeWithApple(
-        _ audioFile: AVAudioFile,
-        source: AppLanguage,
-        duration: TimeInterval,
-        onPhase: @escaping (Phase) -> Void
-    ) async throws -> [(text: String, start: TimeInterval, end: TimeInterval)] {
-        let transcriber = SpeechTranscriber(
-            locale: source.speechLocale,
-            transcriptionOptions: [],
-            reportingOptions: [],
-            attributeOptions: [])
-        if let request = try await AssetInventory.assetInstallationRequest(
-            supporting: [transcriber]
-        ) {
-            try await request.downloadAndInstall()
-        }
-        let analyzer = SpeechAnalyzer(modules: [transcriber])
-
-        var utterances: [(text: String, start: TimeInterval, end: TimeInterval)] = []
-        let collector = Task {
-            for try await result in transcriber.results {
-                let text = String(result.text.characters)
-                    .trimmingCharacters(in: .whitespacesAndNewlines)
-                guard !text.isEmpty else { continue }
-                let start = result.range.start.seconds
-                let end = result.range.end.seconds
-                utterances.append((text, start, end))
-                onPhase(.transcribing(duration > 0 ? min(end / duration, 1) : 0))
-            }
-        }
-        try await analyzer.start(inputAudioFile: audioFile, finishAfterFile: true)
-        try await collector.value
-        return utterances
-    }
-
-    /// SenseVoice offline: decode the file to 16 kHz mono, then run the VAD +
-    /// recognizer over it. Higher zh/ja/ko accuracy than the system engine.
-    private func transcribeWithSenseVoice(
-        _ audioFile: AVAudioFile,
-        language: AppLanguage,
-        onPhase: @escaping (Phase) -> Void
-    ) async throws -> [(text: String, start: TimeInterval, end: TimeInterval)] {
-        let samples = try decodeMono16k(audioFile)
-        let transcriber = SenseVoiceFileTranscriber(language: language)
-        let utterances = try await transcriber.transcribe(samples16k: samples) { fraction in
-            onPhase(.transcribing(fraction))
-        }
-        return utterances.map { ($0.text, $0.start, $0.end) }
-    }
-
-    /// Decode an audio file to a flat 16 kHz mono float buffer for SenseVoice.
-    private func decodeMono16k(_ file: AVAudioFile) throws -> [Float] {
-        guard let target = AVAudioFormat(
-            commonFormat: .pcmFormatFloat32,
-            sampleRate: 16_000, channels: 1, interleaved: false),
-              let converter = AVAudioConverter(from: file.processingFormat, to: target)
-        else { throw ImportError.audioExtractionFailed }
-
-        var output: [Float] = []
-        let readSize: AVAudioFrameCount = 16_000 * 10   // 10s of source frames
-        var finished = false
-
-        while !finished {
-            guard let outBuffer = AVAudioPCMBuffer(
-                pcmFormat: target, frameCapacity: readSize) else { break }
-            var conversionError: NSError?
-            let status = converter.convert(to: outBuffer, error: &conversionError) { _, inStatus in
-                guard let inBuffer = AVAudioPCMBuffer(
-                    pcmFormat: file.processingFormat, frameCapacity: readSize) else {
-                    inStatus.pointee = .endOfStream
-                    return nil
-                }
-                do {
-                    try file.read(into: inBuffer)
-                } catch {
-                    inStatus.pointee = .endOfStream
-                    return nil
-                }
-                if inBuffer.frameLength == 0 {
-                    inStatus.pointee = .endOfStream
-                    return nil
-                }
-                inStatus.pointee = .haveData
-                return inBuffer
-            }
-            if let conversionError { throw conversionError }
-            if outBuffer.frameLength > 0, let channel = outBuffer.floatChannelData?[0] {
-                output.append(contentsOf: UnsafeBufferPointer(
-                    start: channel, count: Int(outBuffer.frameLength)))
-            }
-            if status == .endOfStream || status == .error || outBuffer.frameLength == 0 {
-                finished = true
-            }
-        }
-        return output
-    }
 }
 
 enum ImportError: LocalizedError {

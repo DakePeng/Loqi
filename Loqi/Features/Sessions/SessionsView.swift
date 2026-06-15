@@ -1,43 +1,93 @@
 import SwiftUI
+import UniformTypeIdentifiers
 
-/// Saved sessions: list, transcript detail, on-device summary, Markdown
-/// export, speaker renaming, and hotword suggestions.
+/// Saved sessions: list with live background-job progress, search,
+/// multi-select batch actions, transcript detail, on-device summary,
+/// Markdown export, speaker renaming, and hotword suggestions.
 struct SessionsView: View {
     @Bindable var pipeline: CaptionPipeline
     @State private var pickingFile = false
     @State private var importURL: URL?
+    @State private var searchQuery = ""
+    @State private var searchIndex = SessionSearchIndex()
+    @State private var isSelecting = false
+    @State private var selection = Set<UUID>()
+    @State private var confirmBatchDelete = false
+    @State private var batchAlert: String?
+    /// Briefly highlighted row: a session just arrived or just finished
+    /// its background job.
+    @State private var flashedSessionID: UUID?
+
+    private var trimmedQuery: String {
+        searchQuery.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    private var searchMatches: [SessionSearch.Match] {
+        searchIndex.matches(in: pipeline.archive.sessions, query: searchQuery)
+    }
+
+    private var isEditing: Bool { isSelecting }
+
+    /// One-way binding: the List can read edit mode but can't reset it
+    /// behind our back (the tab-bar hide transition was causing that).
+    private var editModeBinding: Binding<EditMode> {
+        Binding(
+            get: { isSelecting ? .active : .inactive },
+            set: { isSelecting = ($0 == .active) }
+        )
+    }
+
+    private var selectedSessions: [SessionRecord] {
+        pipeline.archive.sessions.filter { selection.contains($0.id) }
+    }
 
     var body: some View {
         NavigationStack {
-            List {
-                ForEach(pipeline.archive.sessions) { session in
-                    NavigationLink {
-                        SessionDetailView(pipeline: pipeline, sessionID: session.id)
-                    } label: {
-                        VStack(alignment: .leading, spacing: 3) {
-                            Text(session.title)
-                                .lineLimit(1)
-                            HStack(spacing: 6) {
-                                Image(systemName: session.mode == .captions
-                                    ? "captions.bubble" : "bubble.left.and.bubble.right")
-                                Text(session.startedAt, style: .date)
-                                Text(session.startedAt, style: .time)
-                                Text("· \(session.entries.count)")
+            List(selection: $selection) {
+                if trimmedQuery.isEmpty {
+                    ForEach(pipeline.archive.sessions) { session in
+                        row(session)
+                            // Multi-select shows selection circles only —
+                            // without this, onDelete adds the red minus
+                            // controls next to them in edit mode.
+                            .deleteDisabled(isEditing)
+                            .listRowBackground(
+                                session.id == flashedSessionID
+                                    ? Color.accentColor.opacity(0.16) : nil)
+                    }
+                    // Delete only outside search: ForEach offsets map to the
+                    // archive's array order, which a filtered list breaks.
+                    .onDelete { offsets in
+                        deleteSessions(ids: Set(
+                            offsets.map { pipeline.archive.sessions[$0].id }))
+                    }
+                } else {
+                    ForEach(searchMatches) { match in
+                        if let session = pipeline.archive.sessions
+                            .first(where: { $0.id == match.sessionID }) {
+                            NavigationLink {
+                                SessionDetailView(
+                                    pipeline: pipeline,
+                                    sessionID: match.sessionID,
+                                    initialScrollEntryID: match.firstEntryID)
+                            } label: {
+                                searchRowLabel(session, match: match)
                             }
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
                         }
                     }
                 }
-                .onDelete { pipeline.archive.delete(at: $0) }
             }
-            .navigationTitle("Sessions")
-            .toolbar {
-                ToolbarItem(placement: .topBarTrailing) {
-                    Button("Import audio", systemImage: "square.and.arrow.down") {
-                        pickingFile = true
-                    }
-                    .disabled(pipeline.isRunning)
+            .environment(\.editMode, editModeBinding)
+            .searchable(text: $searchQuery, prompt: Text("Search sessions"))
+            .tabHeaderTitle("Sessions")
+            .toolbar { toolbarContent }
+            // The batch actions live in an explicit bottom inset: on iOS 26
+            // the floating tab bar and bottom-docked search own the
+            // .bottomBar toolbar region, and items placed there never show.
+            .toolbar(isEditing ? .hidden : .automatic, for: .tabBar)
+            .safeAreaInset(edge: .bottom) {
+                if isEditing {
+                    batchActionBar
                 }
             }
             .fileImporter(
@@ -57,439 +107,339 @@ struct SessionsView: View {
                         "No sessions yet",
                         systemImage: "clock",
                         description: Text("Finished sessions are saved here automatically."))
+                } else if !trimmedQuery.isEmpty, searchMatches.isEmpty {
+                    ContentUnavailableView.search(text: trimmedQuery)
                 }
+            }
+            .confirmationDialog(
+                "Delete \(selection.count) sessions?",
+                isPresented: $confirmBatchDelete,
+                titleVisibility: .visible
+            ) {
+                Button("Delete recording, transcript and notes", role: .destructive) {
+                    deleteSessions(ids: selection)
+                    withAnimation { isSelecting = false }
+                }
+                Button("Cancel", role: .cancel) {}
+            } message: {
+                Text("This can't be undone.")
+            }
+            .alert("Can't re-transcribe", isPresented: .init(
+                get: { batchAlert != nil },
+                set: { if !$0 { batchAlert = nil } }
+            )) {
+                Button("OK", role: .cancel) {}
+            } message: {
+                Text(batchAlert ?? "")
+            }
+            // Flash fresh arrivals: a new row (live save, import placeholder)
+            // or a background import completing on an existing row.
+            .onChange(of: pipeline.archive.sessions.map(\.id)) { old, new in
+                guard let fresh = new.first(where: { !old.contains($0) }) else { return }
+                flash(fresh)
+            }
+            .onChange(of: pipeline.jobs.lastCompleted) { _, completed in
+                if let completed { flash(completed.id) }
+            }
+            // Search and edit mode don't mix: the filtered rows carry match
+            // ids, not session ids.
+            .onChange(of: trimmedQuery) { _, query in
+                if !query.isEmpty, isEditing {
+                    isSelecting = false
+                    selection.removeAll()
+                }
+            }
+        }
+    }
+
+    @ToolbarContentBuilder
+    private var toolbarContent: some ToolbarContent {
+        if isEditing {
+            ToolbarItem(placement: .topBarTrailing) {
+                Button("Done") {
+                    withAnimation {
+                        isSelecting = false
+                        selection.removeAll()
+                    }
+                }
+            }
+        } else {
+            ToolbarItem(placement: .topBarTrailing) {
+                if !pipeline.archive.sessions.isEmpty, trimmedQuery.isEmpty {
+                    Button("Select", systemImage: "checkmark.circle") {
+                        withAnimation { isSelecting = true }
+                    }
+                }
+            }
+            ToolbarItem(placement: .topBarTrailing) {
+                Button("Import audio", systemImage: "square.and.arrow.down") {
+                    pickingFile = true
+                }
+                .disabled(pipeline.isRunning)
+            }
+        }
+    }
+
+    /// Batch actions over the current selection, shown while editing.
+    private var batchActionBar: some View {
+        HStack {
+            Button("Re-transcribe (\(selection.count))") {
+                batchRetranscribe()
+            }
+            Spacer()
+            ShareLink(
+                "Export (\(selection.count))",
+                items: selectedSessions.map(SessionMarkdownDocument.init)
+            ) { document in
+                SharePreview(document.record.title)
+            }
+            Spacer()
+            Button("Delete (\(selection.count))", role: .destructive) {
+                confirmBatchDelete = true
+            }
+        }
+        .disabled(selection.isEmpty)
+        .font(.subheadline)
+        .padding(.horizontal, 20)
+        .padding(.vertical, 14)
+        .background(.bar)
+    }
+
+    /// Row shell: navigable normally, a bare selectable label in edit mode.
+    @ViewBuilder
+    private func row(_ session: SessionRecord) -> some View {
+        if isEditing {
+            rowContent(session)
+        } else {
+            NavigationLink {
+                SessionDetailView(pipeline: pipeline, sessionID: session.id)
+            } label: {
+                rowContent(session)
+            }
+            .contextMenu {
+                if pipeline.jobs.isBusy(session.id) {
+                    Button("Cancel processing", systemImage: "xmark.circle", role: .destructive) {
+                        pipeline.jobs.cancel(session.id)
+                    }
+                }
+            }
+        }
+    }
+
+    private func rowContent(_ session: SessionRecord) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            sessionRowLabel(session)
+            SessionRowStatus(jobs: pipeline.jobs, sessionID: session.id)
+        }
+    }
+
+    /// Title, then the facts a capture archive lives on: when, how long,
+    /// and whether audio / a summary exist. (Raw entry counts told users
+    /// nothing.)
+    private func sessionRowLabel(_ session: SessionRecord) -> some View {
+        VStack(alignment: .leading, spacing: 3) {
+            HStack(spacing: 6) {
+                if session.unseen == true {
+                    Circle()
+                        .fill(.tint)
+                        .frame(width: 8, height: 8)
+                        .accessibilityLabel("New")
+                }
+                Text(session.title)
+                    .lineLimit(1)
+            }
+            HStack(spacing: 6) {
+                Text(session.startedAt, style: .date)
+                Text(session.startedAt, style: .time)
+                Text("· \(Self.durationText(session.duration))")
+                if session.audioFileName != nil {
+                    Image(systemName: "waveform")
+                        .accessibilityLabel("Has recording")
+                }
+                if session.summary != nil {
+                    Image(systemName: "doc.text")
+                        .accessibilityLabel("Has summary")
+                }
+            }
+            .font(.caption)
+            .foregroundStyle(.secondary)
+        }
+    }
+
+    /// "3:25" under an hour, "1:02:09" above.
+    private static func durationText(_ duration: TimeInterval) -> String {
+        Duration.seconds(duration).formatted(.time(
+            pattern: duration >= 3600 ? .hourMinuteSecond : .minuteSecond))
+    }
+
+    private func searchRowLabel(
+        _ session: SessionRecord, match: SessionSearch.Match
+    ) -> some View {
+        HStack(alignment: .center, spacing: 8) {
+            VStack(alignment: .leading, spacing: 3) {
+                sessionRowLabel(session)
+                Text(match.snippet)
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(2)
+            }
+            Spacer(minLength: 0)
+            Text("\(match.matchCount)")
+                .font(.caption.monospacedDigit())
+                .foregroundStyle(.secondary)
+                .padding(.horizontal, 8)
+                .padding(.vertical, 2)
+                .background(.quaternary, in: Capsule())
+        }
+    }
+
+    // MARK: Actions
+
+    /// Single delete path for swipe and batch: a running job must stop
+    /// before its record (and files) disappear under it.
+    private func deleteSessions(ids: Set<UUID>) {
+        for id in ids {
+            pipeline.jobs.cancel(id)
+            pipeline.archive.delete(id: id)
+        }
+        selection.subtract(ids)
+    }
+
+    private func batchRetranscribe() {
+        let llmEnabled = UserDefaults.standard.object(forKey: "llm.enabled") == nil
+            || UserDefaults.standard.bool(forKey: "llm.enabled")
+        guard llmEnabled else {
+            batchAlert = String(localized: "AI features are turned off in Settings.")
+            return
+        }
+        let eligible = selectedSessions.filter(SessionRetranscriber.canRetranscribe)
+        guard !eligible.isEmpty else {
+            batchAlert = String(localized:
+                "None of the selected sessions has a saved recording to re-transcribe.")
+            return
+        }
+        guard LLMService.isDownloaded(model: ModelCatalog.current) else {
+            batchAlert = String(localized:
+                "The AI model isn't downloaded yet. Open a session and use Re-transcribe & summarize once to download it.")
+            return
+        }
+        // Each session keeps its own summary shape; the queue serializes.
+        for session in eligible {
+            pipeline.jobs.enqueueRetranscribe(
+                ids: [session.id],
+                style: session.resolvedSummaryStyle,
+                length: session.resolvedSummaryLength)
+        }
+        withAnimation {
+            isSelecting = false
+            selection.removeAll()
+        }
+    }
+
+    private func flash(_ id: UUID) {
+        withAnimation(.easeIn(duration: 0.25)) { flashedSessionID = id }
+        Task {
+            try? await Task.sleep(for: .seconds(1.6))
+            if flashedSessionID == id {
+                withAnimation(.easeOut(duration: 0.6)) { flashedSessionID = nil }
             }
         }
     }
 }
 
-private struct SessionDetailView: View {
-    @Bindable var pipeline: CaptionPipeline
+/// Live job status under a session row. A separate view so the per-tick
+/// `activities` reads re-evaluate only the few busy rows, not the list.
+private struct SessionRowStatus: View {
+    let jobs: SummaryJobCenter
     let sessionID: UUID
 
-    @State private var summarizing = false
-    @State private var summarizeProgress: (done: Int, total: Int)?
-    @State private var suggesting = false
-    @State private var suggestions: [(term: String, note: String)] = []
-    @State private var actionError: String?
-    @State private var renamingSlot: Int?
-    @State private var renameText = ""
-    @State private var scrollTarget: UUID?
-    @State private var highlightedBlockID: UUID?
-    @State private var isEditingSummary = false
-    @State private var summaryDraft = ""
-    @State private var confirmRegenerate = false
-    @State private var timelineExpanded = false
-
-    private var session: SessionRecord? {
-        pipeline.archive.sessions.first { $0.id == sessionID }
-    }
-
     var body: some View {
-        ScrollViewReader { proxy in
-            list(proxy: proxy)
-        }
-    }
-
-    private func list(proxy: ScrollViewProxy) -> some View {
-        List {
-            if let session {
-                if let fileName = session.audioFileName {
-                    Section {
-                        PlaybackBar(url: SessionArchive.recordingURL(fileName: fileName))
-                            .disabled(pipeline.isRunning)
-                    } header: {
-                        Text("Recording")
-                    } footer: {
-                        if let size = recordingSize(fileName) {
-                            Text(size)
-                        }
-                    }
-                }
-
-                if let summary = session.summary {
-                    Section {
-                        if isEditingSummary {
-                            TextEditor(text: $summaryDraft)
-                                .font(.callout)
-                                .frame(minHeight: 180)
-                        } else {
-                            SummaryTextView(summary: summary)
-                        }
-                    } header: {
-                        HStack {
-                            Text("Summary")
-                            Spacer()
-                            Button(isEditingSummary ? "Done" : "Edit") {
-                                if isEditingSummary {
-                                    saveSummaryEdit()
-                                } else {
-                                    summaryDraft = summary
-                                    isEditingSummary = true
-                                }
-                            }
-                            .font(.footnote)
-                            .textCase(nil)
-                            .disabled(summarizing)
-                        }
-                    }
-                }
-
-                if let notes = session.chunkNotes, notes.count > 1 {
-                    Section {
-                        DisclosureGroup(isExpanded: $timelineExpanded) {
-                            ForEach(notes) { note in
-                                Button {
-                                    if let anchor = note.anchorEntryID {
-                                        scrollTarget = anchor
-                                    }
-                                } label: {
-                                    HStack {
-                                        Text(note.headline)
-                                            .foregroundStyle(.primary)
-                                            .lineLimit(1)
-                                        Spacer()
-                                        Text(note.startedAt, style: .time)
-                                            .font(.caption)
-                                            .foregroundStyle(.secondary)
-                                    }
-                                }
-                            }
-                        } label: {
-                            Text("Timeline")
-                        }
-                    }
-                }
-
-                if !suggestions.isEmpty {
-                    Section("Suggested hotwords") {
-                        ForEach(suggestions, id: \.term) { suggestion in
-                            HStack {
-                                VStack(alignment: .leading) {
-                                    Text(suggestion.term)
-                                    if !suggestion.note.isEmpty {
-                                        Text(suggestion.note)
-                                            .font(.caption)
-                                            .foregroundStyle(.secondary)
-                                    }
-                                }
-                                Spacer()
-                                Button("Add") {
-                                    pipeline.hotwords.add(
-                                        Hotword(term: suggestion.term, note: suggestion.note))
-                                    suggestions.removeAll { $0.term == suggestion.term }
-                                }
-                                .buttonStyle(.bordered)
-                            }
-                        }
-                    }
-                }
-
-                Section("Transcript") {
-                    ForEach(transcriptBlocks(session), id: \.0) { block in
-                        transcriptBlockView(block)
-                    }
-                }
-
-                if let actionError {
-                    Section {
-                        Text(actionError)
-                            .font(.footnote)
-                            .foregroundStyle(.red)
-                    }
-                }
-            }
-        }
-        .navigationTitle(session.map { Text($0.startedAt, style: .date) } ?? Text("Session"))
-        .navigationBarTitleDisplayMode(.inline)
-        .toolbar {
-            ToolbarItemGroup(placement: .topBarTrailing) {
-                if let session {
-                    ShareLink(item: session.markdown(), preview: SharePreview(session.title))
-                }
-                Menu {
-                    Button {
-                        if session?.summaryEdited == true {
-                            confirmRegenerate = true
-                        } else {
-                            summarize()
-                        }
-                    } label: {
-                        Label(session?.summary == nil ? "Summarize" : "Re-summarize",
-                              systemImage: "sparkles")
-                    }
-                    .disabled(summarizing || isEditingSummary)
-                    Button {
-                        suggestHotwords()
-                    } label: {
-                        Label("Suggest hotwords", systemImage: "character.magnify")
-                    }
-                    .disabled(suggesting)
-                } label: {
-                    if let progress = summarizeProgress, progress.total > 1 {
-                        Text("\(progress.done)/\(progress.total)")
-                            .font(.caption.monospacedDigit())
-                    } else if summarizing || suggesting {
-                        ProgressView()
-                    } else {
-                        Image(systemName: "wand.and.stars")
-                    }
-                }
-            }
-        }
-        .alert("Rename speaker", isPresented: .init(
-            get: { renamingSlot != nil },
-            set: { if !$0 { renamingSlot = nil } }
-        )) {
-            TextField("Name", text: $renameText)
-            Button("Save") {
-                if var session, let slot = renamingSlot {
-                    session.speakerNames[slot] = renameText.isEmpty ? nil : renameText
-                    pipeline.archive.update(session)
-                }
-                renamingSlot = nil
-            }
-            Button("Cancel", role: .cancel) { renamingSlot = nil }
-        }
-        .confirmationDialog(
-            "Replace edited summary?",
-            isPresented: $confirmRegenerate,
-            titleVisibility: .visible
-        ) {
-            Button("Replace", role: .destructive) { summarize() }
-            Button("Cancel", role: .cancel) {}
-        } message: {
-            Text("You edited this summary. Summarizing again will replace your changes.")
-        }
-        .onChange(of: scrollTarget) {
-            guard let target = scrollTarget, let session else { return }
-            // List only registers row ids with the scroll proxy, so jump to
-            // the transcript BLOCK containing the anchor entry, not the
-            // entry's nested id (which scrollTo can't reach).
-            let blockID = transcriptBlocks(session).first {
-                $0.3.contains { $0.id == target }
-            }?.0
-            withAnimation { proxy.scrollTo(blockID ?? target, anchor: .top) }
-            scrollTarget = nil
-            // Flash the block so the eye lands on the right spot.
-            highlightedBlockID = blockID
-            Task {
-                try? await Task.sleep(for: .seconds(1.6))
-                withAnimation { highlightedBlockID = nil }
-            }
-        }
-    }
-
-    private func transcriptBlockView(
-        _ block: (UUID, String?, Int, [SessionRecord.Entry])
-    ) -> some View {
-        VStack(alignment: .leading, spacing: 6) {
-            if let label = block.1 {
-                Button {
-                    startRename(block.2)
-                } label: {
-                    Label(label, systemImage: "person")
-                        .font(.caption.weight(.semibold))
-                        .foregroundStyle(.tint)
-                }
-            }
-            ForEach(block.3) { entry in
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(entry.sourceText)
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                    if let translation = entry.translation {
-                        Text(translation)
-                    }
-                }
-                .id(entry.id)
-            }
-        }
-        .padding(.vertical, 2)
-        .listRowBackground(
-            block.0 == highlightedBlockID
-                ? Color.accentColor.opacity(0.14) : nil)
-    }
-
-    /// (block id, speaker label, slot, entries) grouped by consecutive speaker.
-    private func transcriptBlocks(
-        _ session: SessionRecord
-    ) -> [(UUID, String?, Int, [SessionRecord.Entry])] {
-        var blocks: [(UUID, String?, Int, [SessionRecord.Entry])] = []
-        for entry in session.entries {
-            if var last = blocks.last,
-               entry.speaker == nil || entry.speaker == last.2 {
-                last.3.append(entry)
-                blocks[blocks.count - 1] = last
+        if let activity = jobs.activity(for: sessionID) {
+            if case .queuedRetranscribe = activity {
+                Label("Waiting to re-transcribe…", systemImage: "clock")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            } else if case .pausedForRecording = activity {
+                Label("Paused — recording in progress", systemImage: "pause.circle")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
             } else {
-                blocks.append((
-                    entry.id,
-                    session.speakerLabel(entry.speaker),
-                    entry.speaker ?? -1,
-                    [entry]))
-            }
-        }
-        return blocks
-    }
-
-    private func recordingSize(_ fileName: String) -> String? {
-        let url = SessionArchive.recordingURL(fileName: fileName)
-        guard let bytes = try? url.resourceValues(forKeys: [.fileSizeKey]).fileSize
-        else { return nil }
-        return ByteCountFormatter.string(fromByteCount: Int64(bytes), countStyle: .file)
-    }
-
-    private func startRename(_ slot: Int) {
-        guard slot >= 0 else { return }
-        renameText = session?.speakerNames[slot] ?? ""
-        renamingSlot = slot
-    }
-
-    private func saveSummaryEdit() {
-        defer { isEditingSummary = false }
-        guard var updated = session else { return }
-        let text = summaryDraft.trimmingCharacters(in: .whitespacesAndNewlines)
-        // Empty or unchanged edits revert rather than clearing the summary.
-        guard !text.isEmpty, text != updated.summary else { return }
-        updated.summary = text
-        updated.summaryEdited = true
-        pipeline.archive.update(updated)
-    }
-
-    private func summarize() {
-        guard let session else { return }
-        summarizing = true
-        actionError = nil
-        Task {
-            defer {
-                summarizing = false
-                summarizeProgress = nil
-            }
-            do {
-                // Summaries are for the reader: the device language wins,
-                // with the session's target language as fallback.
-                let language = AppLanguage.devicePreferred
-                    ?? session.entries.last?.direction.target ?? .english
-                let engine = SummaryEngine(llm: pipeline.llm)
-                let result = try await engine.summarize(session, in: language) { done, total in
-                    summarizeProgress = (done, total)
+                let info = Self.info(for: activity)
+                VStack(alignment: .leading, spacing: 3) {
+                    ProgressView(value: info.fraction)
+                    Text(caption(info))
+                        .font(.caption2.monospacedDigit())
+                        .foregroundStyle(.secondary)
                 }
-                var updated = session
-                updated.summary = result.summary
-                updated.summaryEdited = nil
-                updated.chunkNotes = result.notes
-                // Full coverage now: future re-summarize is reduce-only.
-                updated.liveNotesEndEntryID = session.entries.last?.id
-                pipeline.archive.update(updated)
-            } catch {
-                actionError = error.localizedDescription
+                .padding(.vertical, 2)
             }
+        } else if let error = jobs.error(for: sessionID) {
+            Label(error, systemImage: "exclamationmark.triangle")
+                .font(.caption)
+                .foregroundStyle(.red)
+                .lineLimit(2)
         }
     }
 
-    private func suggestHotwords() {
-        guard let session else { return }
-        suggesting = true
-        actionError = nil
-        Task {
-            defer { suggesting = false }
-            do {
-                try await pipeline.llm.load()
-                let builder = PromptBuilder()
-                let prompt = builder.hotwordSuggestionPrompt(
-                    transcript: session.plainTranscript())
-                let raw = try await pipeline.llm.generate(
-                    system: prompt.system, user: prompt.user, maxTokens: 200)
-                let known = Set(pipeline.hotwords.hotwords.map(\.term))
-                suggestions = builder.parseHotwordSuggestions(raw)
-                    .filter { !known.contains($0.term) }
-                if suggestions.isEmpty {
-                    actionError = "No new terms found."
-                }
-            } catch {
-                actionError = error.localizedDescription
-            }
+    private static func info(
+        for activity: SummaryJobCenter.Activity
+    ) -> (label: String, fraction: Double?) {
+        switch activity {
+        case .downloadingModel(let f):
+            (String(localized: "Downloading AI model…"), f)
+        case .summarizing(let done, let total):
+            (String(localized: "Summarizing…"),
+             total > 1 ? Double(done) / Double(total) : nil)
+        case .retranscribing(.transcribing(let f)):
+            (String(localized: "Re-transcribing…"), f)
+        case .retranscribing(.translating(let f)):
+            (String(localized: "Translating…"), f)
+        case .importing(.transcribing(let f)):
+            (String(localized: "Transcribing…"), f)
+        case .importing(.fetchingSpeakerModel(let f)):
+            (String(localized: "Downloading speaker model…"), f)
+        case .importing(.identifyingSpeakers(let f)):
+            (String(localized: "Identifying speakers…"), f)
+        case .importing(.translating(let f)):
+            (String(localized: "Translating…"), f)
+        case .queuedRetranscribe:
+            (String(localized: "Waiting to re-transcribe…"), nil)
+        case .pausedForRecording:
+            (String(localized: "Paused — recording in progress"), nil)
         }
+    }
+
+    /// "Transcribing… · 37% · ~4 min left" — percent and remaining only
+    /// when known.
+    private func caption(_ info: (label: String, fraction: Double?)) -> String {
+        var parts = [info.label]
+        if let fraction = info.fraction {
+            parts.append(fraction.formatted(.percent.precision(.fractionLength(0))))
+        }
+        if let remaining = jobs.remaining[sessionID] {
+            parts.append(ProcessingETA.text(remaining: remaining))
+        }
+        return parts.joined(separator: " · ")
     }
 }
 
-/// Renders the summary markdown (overview paragraph, "## " section headings,
-/// bullet lines) with real typography: paragraphs read as prose, headings
-/// separate sections, bullets get a hanging indent and breathing room.
-/// Legacy plain-text summaries (no headings) render as before.
-struct SummaryTextView: View {
-    let summary: String
+/// Wraps a session so ShareLink writes a correctly named .md file at share
+/// time. Each file lands in its own temp subdirectory — two sessions can
+/// share a title, and a fixed path would overwrite one mid-share.
+private struct SessionMarkdownDocument: Transferable {
+    let record: SessionRecord
 
-    enum Part: Equatable {
-        case heading(String)
-        case paragraph(String)
-        case bullet(String)
-    }
-
-    /// Small models vary the bullet glyph; accept the common ones. Any line
-    /// of leading "#"s is a heading regardless of its text — rendering never
-    /// keys on heading words, so hand-edits can't break it.
-    /// nonisolated: pure string logic, also exercised off-main in tests.
-    nonisolated static func parse(_ summary: String) -> [Part] {
-        let markers = ["•", "・", "·", "●", "-", "*"]
-        var parts: [Part] = []
-        var paragraph: [String] = []
-
-        func closeParagraph() {
-            if !paragraph.isEmpty {
-                parts.append(.paragraph(paragraph.joined(separator: " ")))
-                paragraph = []
-            }
+    static var transferRepresentation: some TransferRepresentation {
+        FileRepresentation(exportedContentType: .plainText) { document in
+            let directory = URL.temporaryDirectory.appending(path: UUID().uuidString)
+            try FileManager.default.createDirectory(
+                at: directory, withIntermediateDirectories: true)
+            let name = document.record.title
+                .replacingOccurrences(of: "/", with: "-")
+                .replacingOccurrences(of: ":", with: "-")
+            let url = directory.appending(path: "\(name).md")
+            try Data(document.record.markdown().utf8).write(to: url, options: .atomic)
+            return SentTransferredFile(url)
         }
-
-        for rawLine in summary.split(separator: "\n", omittingEmptySubsequences: false) {
-            let line = rawLine.trimmingCharacters(in: .whitespaces)
-            if line.isEmpty {
-                closeParagraph()
-            } else if line.hasPrefix("#") {
-                closeParagraph()
-                let text = line.drop(while: { $0 == "#" })
-                    .trimmingCharacters(in: .whitespaces)
-                if !text.isEmpty { parts.append(.heading(text)) }
-            } else if let marker = markers.first(where: { line.hasPrefix($0) }) {
-                closeParagraph()
-                let text = line.dropFirst(marker.count)
-                    .trimmingCharacters(in: .whitespaces)
-                if !text.isEmpty { parts.append(.bullet(text)) }
-            } else {
-                paragraph.append(line)
-            }
-        }
-        closeParagraph()
-        return parts
-    }
-
-    var body: some View {
-        let parts = Self.parse(summary)
-        VStack(alignment: .leading, spacing: 10) {
-            ForEach(Array(parts.enumerated()), id: \.offset) { _, part in
-                switch part {
-                case .heading(let text):
-                    Text(text)
-                        .font(.subheadline.weight(.semibold))
-                        .foregroundStyle(.secondary)
-                        .padding(.top, 4)
-                case .paragraph(let text):
-                    Text(text)
-                        .font(.callout)
-                case .bullet(let text):
-                    HStack(alignment: .firstTextBaseline, spacing: 9) {
-                        Circle()
-                            .fill(.tint)
-                            .frame(width: 5, height: 5)
-                            .alignmentGuide(.firstTextBaseline) { $0[VerticalAlignment.center] + 5 }
-                        Text(text)
-                            .font(.callout)
-                    }
-                }
-            }
-        }
-        .padding(.vertical, 2)
-        .textSelection(.enabled)
     }
 }

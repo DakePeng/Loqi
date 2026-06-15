@@ -80,10 +80,12 @@ final class AudioPlaybackController {
     }
 }
 
-/// Play/pause + scrubber row for a saved session's audio.
+/// Play/pause + scrubber row for a saved session's audio. The controller is
+/// owned by the detail view so transcript taps can seek the same player;
+/// this bar keeps the load/stop lifecycle (it disappears with the view).
 struct PlaybackBar: View {
     let url: URL
-    @State private var controller = AudioPlaybackController()
+    let controller: AudioPlaybackController
     @State private var scrubTime: TimeInterval?
 
     var body: some View {
@@ -119,8 +121,11 @@ struct PlaybackBar: View {
                     .foregroundStyle(.secondary)
             }
         }
+        // Load is idempotent, so reappearing after a scroll is a no-op. No
+        // onDisappear stop: this is a lazy List row, and rows "disappear"
+        // on mere scrolling — the OWNING view stops the controller when the
+        // screen actually goes away.
         .onAppear { controller.load(url: url) }
-        .onDisappear { controller.stop() }
     }
 
     private var timeLabel: String {

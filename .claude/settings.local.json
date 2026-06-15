@@ -19,7 +19,17 @@
       "Bash(xcrun simctl *)",
       "Bash(xcodebuild test *)",
       "Bash(grep -vE \"^$|note:|warning: Skipping\")",
-      "Bash(git commit *)"
+      "Bash(git commit *)",
+      "Bash(grep -E \"Tests\\\\.swift$\")",
+      "Bash(ls /Users/kunzhipeng/Desktop)",
+      "Bash(grep -n \"audioFileName\\\\|recordingsDirectory\\\\|copyItem\" /Users/kunzhipeng/Desktop/Loqi/Loqi/Features/Sessions/ImportAudioSheet.swift; echo ---; head -40 /Users/kunzhipeng/Desktop/Loqi/LoqiTests/SessionRecordTests.swift; echo ---; ls ~/Library/Developer/Xcode/DerivedData 2>/dev/null | grep -i loqi)",
+      "Bash(grep -rln \"glossaryLines\\\\|struct HotwordMatcher\\\\|class HotwordStore\" /Users/kunzhipeng/Desktop/Loqi/Loqi; echo ---; grep -n \"\" /dev/null; grep -rn \"glossaryLines\" /Users/kunzhipeng/Desktop/Loqi/Loqi | head)",
+      "Bash(awk -F: '{print $1\":\"$2\":\"$3}')",
+      "Bash(python3 -c ' *)",
+      "Bash(python3)",
+      "Bash(git -C /Users/kunzhipeng/Desktop/Loqi status --short)",
+      "Bash(git -C /Users/kunzhipeng/Desktop/Loqi log --oneline -3)",
+      "Read(//Applications/Xcode.app/Contents/Developer/Platforms/iPhoneSimulator.platform/Developer/SDKs/iPhoneSimulator.sdk/System/Library/Frameworks/SwiftUI.framework/Modules/SwiftUI.swiftmodule/**)"
     ]
   }
 }

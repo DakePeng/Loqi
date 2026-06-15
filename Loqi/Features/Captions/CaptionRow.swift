@@ -4,10 +4,14 @@ import SwiftUI
 /// it renders large; older rows recede into a compact history.
 ///
 /// Transcribe-only sessions (no translation) promote the source text to the
-/// primary slot — it IS the content, not a caption above a translation.
+/// primary slot — it IS the content, not a caption above a translation. The
+/// source text is exactly what was recognized (plus the deterministic
+/// hotword fixup); the LLM never rewrites it.
 struct CaptionRow: View {
     let entry: CaptionEntry
     var isLatest = false
+
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     private var transcribeOnly: Bool {
         entry.direction.source == entry.direction.target
@@ -19,9 +23,7 @@ struct CaptionRow: View {
                 primaryLine(
                     entry.sourceText,
                     italic: entry.state == .volatile,
-                    showsPolishMark: entry.rawSourceText != nil,
-                    showsSpinner: entry.state == .refining)
-                .contextMenu { copyMenu }
+                    showsSpinner: false)
             } else {
                 sourceLine
                 translationBlock
@@ -35,7 +37,7 @@ struct CaptionRow: View {
 
     /// Big readable text for whatever the user is actually reading.
     private func primaryLine(
-        _ text: String, italic: Bool, showsPolishMark: Bool, showsSpinner: Bool
+        _ text: String, italic: Bool, showsSpinner: Bool
     ) -> some View {
         HStack(alignment: .firstTextBaseline, spacing: 6) {
             Text(text)
@@ -52,28 +54,16 @@ struct CaptionRow: View {
                 Image(systemName: "sparkles")
                     .font(.caption)
                     .foregroundStyle(.tint)
-                    .symbolEffect(.pulse, isActive: true)
-            } else if showsPolishMark {
-                Image(systemName: "pencil.line")
-                    .font(.caption2)
-                    .foregroundStyle(.tertiary)
+                    .symbolEffect(.pulse, isActive: !reduceMotion)
             }
         }
     }
 
     private var sourceLine: some View {
-        HStack(alignment: .firstTextBaseline, spacing: 4) {
-            Text(entry.sourceText)
-                .font(isLatest ? .body : .footnote)
-                .foregroundStyle(entry.state == .volatile ? .tertiary : .secondary)
-                .italic(entry.state == .volatile)
-            if entry.rawSourceText != nil {
-                Image(systemName: "pencil.line")
-                    .font(.caption2)
-                    .foregroundStyle(.tertiary)
-            }
-        }
-        .contextMenu { copyMenu }
+        Text(entry.sourceText)
+            .font(isLatest ? .body : .footnote)
+            .foregroundStyle(entry.state == .volatile ? .tertiary : .secondary)
+            .italic(entry.state == .volatile)
     }
 
     @ViewBuilder
@@ -82,7 +72,6 @@ struct CaptionRow: View {
             primaryLine(
                 translation,
                 italic: false,
-                showsPolishMark: false,
                 showsSpinner: entry.state == .refining)
         } else if entry.draftFailed {
             Label("Translation unavailable", systemImage: "exclamationmark.triangle")
@@ -91,22 +80,6 @@ struct CaptionRow: View {
         } else if entry.state != .volatile {
             ProgressView()
                 .controlSize(.mini)
-        }
-    }
-
-    @ViewBuilder
-    private var copyMenu: some View {
-        if let raw = entry.rawSourceText {
-            Button {
-                UIPasteboard.general.string = raw
-            } label: {
-                Label("Copy original transcript", systemImage: "doc.on.doc")
-            }
-            Button {
-                UIPasteboard.general.string = entry.sourceText
-            } label: {
-                Label("Copy polished transcript", systemImage: "sparkles")
-            }
         }
     }
 }

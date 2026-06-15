@@ -49,8 +49,31 @@ struct HotwordMatcher: Sendable {
                 guard score >= glossaryThreshold else { return nil }
                 let source = hotword.rendering(for: direction.source)
                 let target = hotword.rendering(for: direction.target)
+                // Aliases ride along so the LLM knows a nickname in the
+                // source refers to this same entity.
+                let akaForms = (hotword.aliases ?? [])
+                    .filter { !$0.isEmpty && $0 != source }
+                let aka = akaForms.isEmpty
+                    ? "" : " (aka \(akaForms.joined(separator: ", ")))"
                 let note = hotword.note.isEmpty ? "" : " (\(hotword.note))"
-                return (score, "\(source) → \(target)\(note)")
+                return (score, "\(source)\(aka) → \(target)\(note)")
+            }
+            .sorted { $0.0 > $1.0 }
+            .prefix(glossaryLimit)
+            .map(\.1)
+    }
+
+    /// Monolingual glossary for the notes pipeline: hotwords plausibly
+    /// present in `text`, rendered in its own language. Same scoring and
+    /// budget as `glossaryLines`, without the translation column.
+    func noteGlossaryLines(language: AppLanguage, text: String) -> [String] {
+        hotwords
+            .compactMap { hotword -> (Double, String)? in
+                let score = score(hotword, in: text, language: language)
+                guard score >= glossaryThreshold else { return nil }
+                let term = hotword.rendering(for: language)
+                let note = hotword.note.isEmpty ? "" : " (\(hotword.note))"
+                return (score, "\(term)\(note)")
             }
             .sorted { $0.0 > $1.0 }
             .prefix(glossaryLimit)
@@ -59,21 +82,20 @@ struct HotwordMatcher: Sendable {
 
     // MARK: Tier-0 fixup
 
-    /// Replace high-confidence near-misses in finalized source text with the
-    /// hotword's preferred rendering. Conservative by design.
+    /// Replace high-confidence near-misses in finalized source text with
+    /// each form's replacement: canonical rendering for the term, the
+    /// alias's own spelling for an alias. Conservative by design.
     func fixup(_ text: String, language: AppLanguage) -> String {
         guard !hotwords.isEmpty else { return text }
         var result = text
         for hotword in hotwords {
-            let rendering = hotword.rendering(for: language)
-            guard !rendering.isEmpty else { continue }
-            for form in hotword.recognitionForms(for: language) {
+            for (form, replacement) in hotword.fixupPairs(for: language) {
                 if language.usesCJKScript, form.contains(where: \.isCJK) {
                     result = replaceCJKHomophones(
-                        of: form, with: rendering, in: result)
+                        of: form, with: replacement, in: result)
                 } else {
                     result = replaceLatinNearMisses(
-                        of: form, with: rendering, in: result)
+                        of: form, with: replacement, in: result)
                 }
             }
         }

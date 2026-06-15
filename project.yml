@@ -63,6 +63,14 @@ targets:
       properties:
         NSMicrophoneUsageDescription: "Loqi listens through the microphone to transcribe and translate speech. Audio never leaves your device."
         NSSpeechRecognitionUsageDescription: "Loqi transcribes speech entirely on-device to show live translated captions."
+        NSCameraUsageDescription: "Loqi uses the camera to attach photos of slides and whiteboards to a session. Images never leave your device."
+        # A running session keeps capturing when the screen locks or the
+        # app backgrounds; LLM work pauses there (CaptionPipeline).
+        UIBackgroundModes:
+          - audio
+        # Recording Live Activity (lock screen + Dynamic Island), rendered
+        # by the LoqiWidgets extension.
+        NSSupportsLiveActivities: true
         UILaunchScreen: {}
         UISupportedInterfaceOrientations:
           - UIInterfaceOrientationPortrait
@@ -78,6 +86,11 @@ targets:
     dependencies:
       - package: MLXLM
         product: MLXLLM
+      # Vision-LLM tier (Qwen3-VL): linking MLXVLM is all the load path
+      # needs — loadModelContainer discovers its factory via the
+      # NSClassFromString trampoline in MLXLMCommon.
+      - package: MLXLM
+        product: MLXVLM
       - package: MLXLM
         product: MLXLMCommon
       - package: MLXLM
@@ -92,6 +105,33 @@ targets:
         embed: false
       - framework: ThirdParty/sherpa-onnx/onnxruntime.xcframework
         embed: false
+      - target: LoqiWidgets
+        embed: true
+
+  # Live Activity UI + Control Center toggle. Deliberately lean: no
+  # packages, no bridging header, none of the heavyweight ML deps — only
+  # widget code plus the shared attribute/state types and the intent TYPES
+  # (their perform() bodies are fenced to the app via LOQI_WIDGET; the
+  # system executes them in the app process).
+  LoqiWidgets:
+    type: app-extension
+    platform: iOS
+    sources:
+      - LoqiWidgets
+      - Loqi/Shared
+      - path: Loqi/Intents/RecordingIntents.swift
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.kunzhipeng.loqi.LoqiWidgets
+        CODE_SIGN_ENTITLEMENTS: LoqiWidgets/LoqiWidgets.entitlements
+        SWIFT_ACTIVE_COMPILATION_CONDITIONS: ["$(inherited)", "LOQI_WIDGET"]
+        SKIP_INSTALL: true
+    info:
+      path: LoqiWidgets/Info.plist
+      properties:
+        CFBundleDisplayName: Loqi
+        NSExtension:
+          NSExtensionPointIdentifier: com.apple.widgetkit-extension
 
   LoqiTests:
     type: bundle.unit-test
@@ -108,6 +148,20 @@ targets:
     dependencies:
       - target: Loqi
 
+  # Onboarding smoke test. Its own scheme: XCUITest launches the full app,
+  # so bundling it into the Loqi scheme would slow every `xcodebuild test`.
+  LoqiUITests:
+    type: bundle.ui-testing
+    platform: iOS
+    sources:
+      - LoqiUITests
+    settings:
+      base:
+        GENERATE_INFOPLIST_FILE: true
+        TEST_TARGET_NAME: Loqi
+    dependencies:
+      - target: Loqi
+
 schemes:
   Loqi:
     build:
@@ -116,3 +170,10 @@ schemes:
     test:
       targets:
         - LoqiTests
+  LoqiUITests:
+    build:
+      targets:
+        LoqiUITests: all
+    test:
+      targets:
+        - LoqiUITests

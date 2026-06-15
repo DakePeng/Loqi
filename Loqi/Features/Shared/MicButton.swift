@@ -10,6 +10,8 @@ struct MicButton: View {
     var size: CGFloat = 72
     var action: () -> Void
 
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
     var body: some View {
         Button {
             Haptics.tap()
@@ -31,7 +33,9 @@ struct MicButton: View {
                             style: StrokeStyle(lineWidth: 4, lineCap: .round))
                         .rotationEffect(.degrees(-90))
                         .padding(-8)
-                        .animation(.linear(duration: 0.1), value: level)
+                        // Reduce Motion: the ring still shows the level, it
+                        // just snaps instead of smoothly tracking.
+                        .animation(reduceMotion ? nil : .linear(duration: 0.1), value: level)
                 }
 
                 Image(systemName: isLive ? "stop.fill" : "mic.fill")
