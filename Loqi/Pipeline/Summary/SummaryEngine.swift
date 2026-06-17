@@ -10,11 +10,9 @@ import Foundation
 /// entries past `liveNotesEndEntryID` get mapped, then a single reduce runs
 /// over cached + new notes.
 ///
-/// Detailed summaries don't stop at that single reduce — its caps keep any
-/// one generation short no matter the transcript. The notes are segmented,
-/// each segment gets its own small section generation, and the sections are
-/// stitched after the core summary, so the document scales with the
-/// recording while every individual call stays inside the model's range.
+/// Detailed summaries don't stop at that single reduce — they append
+/// deterministic chronological sections assembled from the map notes, so
+/// the document scales with the recording without another generation pass.
 struct SummaryEngine {
     let llm: LLMService
     /// Hotword matcher for note-glossary injection into the map phase;
@@ -35,12 +33,13 @@ struct SummaryEngine {
     static let summaryMaxTokensHardCap = 900
     static let summaryOverviewHardCap = 6
     static let summarySectionHardCap = 8
-    /// Detailed summaries stitch per-segment sections after the core
-    /// summary; below this many notes the single reduce covers everything.
+    /// Detailed summaries append deterministic chronological note sections
+    /// after the core reduce. The map phase already did the LLM extraction;
+    /// the document assembly itself stays cheap and predictable.
     static let detailStitchMinNotes = 4
-    /// Consecutive notes per stitched section.
-    static let detailSegmentSize = 3
-    /// Bullets per stitched section, parsed and fallback alike.
+    /// Consecutive contentful notes per detailed section.
+    static let detailSegmentSize = 2
+    /// Bullets per deterministic detailed section.
     static let detailSectionPointCap = 6
 
     enum TranscriptSizeTier: Equatable, Sendable {
@@ -264,7 +263,7 @@ struct SummaryEngine {
                 do {
                     let raw = try await llm.generate(
                         system: prompt.system, user: prompt.user,
-                        maxTokens: Self.chunkNoteMaxTokens, temperature: 0.3)
+                        maxTokens: Self.chunkNoteMaxTokens, temperature: 0.1)
                     parsed = prompts.parseChunkNote(raw)
                 } catch is CancellationError {
                     throw CancellationError()
@@ -356,27 +355,28 @@ struct SummaryEngine {
         length == .detailed && noteCount >= detailStitchMinNotes
     }
 
-    /// Split notes into consecutive segments of about `detailSegmentSize`,
-    /// balanced so no trailing one-note runt section appears.
+    /// Split contentful notes into consecutive fixed-size groups. Detailed
+    /// Notes are chronological, so a one-note tail is preferable to
+    /// rebalancing earlier sections and blurring the transcript flow.
     static func segmentNotes(
         _ notes: [SessionRecord.ChunkNote], size: Int = detailSegmentSize
     ) -> [[SessionRecord.ChunkNote]] {
         guard !notes.isEmpty else { return [] }
-        let segmentCount = (notes.count + size - 1) / size
         var segments: [[SessionRecord.ChunkNote]] = []
-        var start = 0
-        for remaining in stride(from: segmentCount, to: 0, by: -1) {
-            let take = (notes.count - start + remaining - 1) / remaining
-            segments.append(Array(notes[start..<(start + take)]))
-            start += take
+        var index = notes.startIndex
+        while index < notes.endIndex {
+            let end = notes.index(index, offsetBy: size, limitedBy: notes.endIndex)
+                ?? notes.endIndex
+            segments.append(Array(notes[index..<end]))
+            index = end
         }
         return segments
     }
 
-    /// Deterministic stand-in when a segment generation fails or answers
-    /// off-format: the section is assembled from the notes themselves, so
-    /// a detailed summary never silently loses a stretch of the recording.
-    static func fallbackSection(
+    /// Deterministic section assembled from existing map notes. This is the
+    /// Detailed Notes document body: no extra LLM pass, no new hallucination
+    /// surface, and no hidden truncation beyond the visible per-section cap.
+    static func detailSection(
         for segment: [SessionRecord.ChunkNote]
     ) -> DetailSection? {
         let points = segment.flatMap { $0.facts + $0.decisions + $0.actions }
@@ -385,6 +385,17 @@ struct SummaryEngine {
         return DetailSection(
             headline: headline,
             points: Array(points.prefix(detailSectionPointCap)))
+    }
+
+    static func detailedSections(
+        for notes: [SessionRecord.ChunkNote],
+        size: Int = detailSegmentSize
+    ) -> [DetailSection] {
+        let contentful = notes.filter {
+            $0.hasContent && $0.isFallback != true
+        }
+        return segmentNotes(contentful, size: size)
+            .compactMap { detailSection(for: $0) }
     }
 
     /// Stitched markdown: numbered "## " sections so the chronological
@@ -400,47 +411,6 @@ struct SummaryEngine {
         return base + "\n\n" + blocks.joined(separator: "\n\n")
     }
 
-    /// One generation per segment; errors and off-format answers fall back
-    /// to the segment's own note lines, and a segment with no content at
-    /// all is skipped. `progress` reports (completedSegments, totalSegments).
-    func detailSections(
-        for segments: [[SessionRecord.ChunkNote]],
-        style: SummaryStyle,
-        in language: AppLanguage,
-        progress: (@MainActor @Sendable (Int, Int) -> Void)? = nil
-    ) async -> [DetailSection] {
-        var sections: [DetailSection] = []
-        for (index, segment) in segments.enumerated() {
-            await progress?(index, segments.count)
-            let prompt = prompts.segmentSectionPrompt(
-                notes: Self.reduceInput(notes: segment, style: style),
-                in: language)
-            // One retry on an off-format (pointless) parse before the note
-            // fallback, mirroring the map and reduce phases.
-            var parsed = PromptBuilder.ParsedSegmentSection()
-            for _ in 0..<2 {
-                if Task.isCancelled { break }
-                if let raw = try? await llm.generate(
-                    system: prompt.system, user: prompt.user,
-                    maxTokens: 280, temperature: 0.3) {
-                    parsed = prompts.parseSegmentSection(raw)
-                }
-                if !parsed.points.isEmpty { break }
-            }
-            if parsed.points.isEmpty {
-                if let fallback = Self.fallbackSection(for: segment) {
-                    sections.append(fallback)
-                }
-            } else {
-                sections.append(DetailSection(
-                    headline: parsed.headline ?? segment.first?.headline ?? "…",
-                    points: parsed.points))
-            }
-        }
-        await progress?(segments.count, segments.count)
-        return sections
-    }
-
     /// Summaries are for the reader: the device language wins, with the
     /// session's target language as fallback.
     static func summaryLanguage(for record: SessionRecord) -> AppLanguage {
@@ -449,10 +419,9 @@ struct SummaryEngine {
     }
 
     /// Reduce phase: the final summary, written from notes alone. With
-    /// `stitchDetails`, a detailed length on enough notes appends the
-    /// per-segment sections; the mid-session "Summary so far" peek turns
-    /// it off to stay a single fast generation. `progress` reports
-    /// stitched-section counts (the core reduce stays a spinner).
+    /// `stitchDetails`, a detailed length appends deterministic
+    /// chronological note sections; the mid-session "Summary so far" peek
+    /// turns it off to stay compact.
     func reduce(
         notes: [SessionRecord.ChunkNote],
         style: SummaryStyle = .meeting,
@@ -484,7 +453,7 @@ struct SummaryEngine {
         for attempt in 0..<2 {
             raw = try await llm.generate(
                 system: reducePrompt.system, user: reducePrompt.user,
-                maxTokens: sizing.maxTokens, temperature: 0.3)
+                maxTokens: sizing.maxTokens, temperature: 0.1)
             parsed = prompts.parseStructuredSummary(raw, style: style, sizing: sizing)
             if !parsed.isEmpty { break }
             if attempt == 0 { try Task.checkCancellation() }
@@ -508,10 +477,9 @@ struct SummaryEngine {
         guard stitchDetails,
               Self.shouldStitchDetailSections(length: length, noteCount: notes.count)
         else { return base }
-        let sections = await detailSections(
-            for: Self.segmentNotes(notes), style: style, in: language,
-            progress: progress)
-        return Self.appendDetailSections(sections, to: base)
+        return Self.appendDetailSections(
+            Self.detailedSections(for: notes),
+            to: base)
     }
 
     /// Best-effort scenario detection for the post-stop selection step.
@@ -549,15 +517,10 @@ struct SummaryEngine {
     ) async throws -> (summary: String, notes: [SessionRecord.ChunkNote]) {
         try await llm.load(policy: .requireDownloaded)
         let (uncovered, cached) = Self.uncoveredEntries(of: record)
-        // Estimate whether stitching will follow the map phase so the
-        // progress denominator is stable from the start and never regresses.
+        // Detailed Notes assembly is deterministic after the reduce, so
+        // progress only tracks real async map work.
         let mapChunks = Self.chunkEntries(uncovered).count
-        let estimatedNoteCount = cached.count + mapChunks
-        let stitchSegments = Self.shouldStitchDetailSections(
-            length: length, noteCount: estimatedNoteCount)
-            ? (estimatedNoteCount + Self.detailSegmentSize - 1) / Self.detailSegmentSize
-            : 0
-        let totalSteps = mapChunks + stitchSegments
+        let totalSteps = mapChunks
         let fresh = try await makeNotes(
             for: uncovered,
             speakerLabel: { record.speakerLabel($0) },

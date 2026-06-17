@@ -4,9 +4,9 @@ import Foundation
 enum TranscriptionEvent: Sendable {
     /// In-progress hypothesis for the current utterance; replaces the
     /// previous volatile text entirely.
-    case volatile(String)
+    case volatile(String, language: AppLanguage?)
     /// The current utterance's text will not change anymore.
-    case finalized(String)
+    case finalized(String, language: AppLanguage?)
     /// The engine stopped (end of session or error).
     case ended(Error?)
     /// Voice activity changed (from the SpeechDetector VAD module).

@@ -17,24 +17,8 @@ import Tokenizers
 /// Weights download from Hugging Face or ModelScope (user-selectable in
 /// Settings; ModelScope for regions where huggingface.co is unreachable).
 /// MLX requires a real Apple-silicon GPU: this never runs in the simulator.
-actor LLMService {
-    enum LoadState: Sendable {
-        case unloaded
-        case downloading(progress: Double)
-        case loading
-        case ready
-        case failed(String)
-    }
-
-    /// Whether `load` may reach the network. Weights are ~0.6–1.8 GB, so
-    /// every user-facing feature asks consent first (`requireDownloaded`)
-    /// and only an explicit download action passes `downloadIfNeeded`.
-    enum LoadPolicy: Sendable {
-        case downloadIfNeeded
-        case requireDownloaded
-    }
-
-    private(set) var loadState: LoadState = .unloaded
+actor LLMService: LLMServicing {
+    private(set) var loadState: LLMLoadState = .unloaded
     private var container: ModelContainer?
     private(set) var model: ModelOption
     private(set) var source: ModelSource
@@ -80,7 +64,7 @@ actor LLMService {
     /// `.modelNotDownloaded` instead of silently pulling gigabytes; joining
     /// a load someone else already started is always allowed.
     func load(
-        policy: LoadPolicy = .downloadIfNeeded,
+        policy: LLMLoadPolicy = .downloadIfNeeded,
         onProgress: (@Sendable (Double) -> Void)? = nil
     ) async throws {
         if case .ready = loadState { return }
@@ -362,8 +346,7 @@ actor LLMService {
         let seconds = Double(elapsed.components.seconds)
             + Double(elapsed.components.attoseconds) / 1e18
         if seconds > 0 {
-            // Rough chars/4 token estimate; good enough for the debug readout.
-            lastTokensPerSecond = Double(result.count) / 4 / seconds
+            lastTokensPerSecond = Self.estimatedDiagnosticTokens(in: result) / seconds
         }
 
         // Hybrid thinking models occasionally leak a think tag despite
@@ -417,6 +400,20 @@ actor LLMService {
         return result.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
+    /// Diagnostic-only token estimate for Settings. Most Loqi generations
+    /// are CJK-heavy notes, where non-punctuation characters average much
+    /// closer to 1.5 chars/token than the English-ish 4 chars/token rule.
+    nonisolated static func estimatedDiagnosticTokens(in text: String) -> Double {
+        let contentCharacters = text.reduce(0) { count, character in
+            let ignored = character.unicodeScalars.allSatisfy { scalar in
+                CharacterSet.punctuationCharacters.contains(scalar)
+                    || CharacterSet.whitespacesAndNewlines.contains(scalar)
+            }
+            return count + (ignored ? 0 : 1)
+        }
+        return Double(contentCharacters) / 1.5
+    }
+
     /// Describe an attached photo. Vision tiers only — text models throw
     /// immediately. Same generation discipline as `generate`; the image is
     /// resized at prepare time to bound image-token prefill.
@@ -463,7 +460,7 @@ actor LLMService {
     }
 
     func available() -> UInt64 {
-        UInt64(max(0, os_proc_available_memory()))
+        SystemResources.availableMemoryBytes()
     }
 }
 

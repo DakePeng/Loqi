@@ -19,7 +19,7 @@ struct OnboardingRegionStep: View {
                     Text("Where should models download from?")
                         .font(.title2.bold())
                         .multilineTextAlignment(.center)
-                    Text("Loqi downloads its speech and AI models once, then runs fully on this iPhone. Pick the source that works best on your network.")
+                    Text("Loqi downloads its speech and AI models once, then runs fully on this device. Pick the source that works best on your network.")
                         .font(.footnote)
                         .foregroundStyle(.secondary)
                         .multilineTextAlignment(.center)
@@ -75,7 +75,7 @@ struct OnboardingRegionStep: View {
             }
             .padding(14)
             .background(
-                Color(.secondarySystemBackground),
+                Color.loqiSecondarySystemBackground,
                 in: RoundedRectangle(cornerRadius: 14, style: .continuous))
             .overlay {
                 if selected == region {

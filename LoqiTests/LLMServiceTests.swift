@@ -52,3 +52,15 @@ struct StripThinkingTests {
             == "纪要：发布定于7月10日")
     }
 }
+
+struct DiagnosticTokenEstimateTests {
+    @Test func usesOnePointFiveContentCharsPerToken() {
+        #expect(LLMService.estimatedDiagnosticTokens(in: "发布定于七月十日") == 8 / 1.5)
+    }
+
+    @Test func ignoresPunctuationAndWhitespace() {
+        let plain = LLMService.estimatedDiagnosticTokens(in: "发布定于七月十日")
+        let punctuated = LLMService.estimatedDiagnosticTokens(in: "发布，定于七月十日。\n")
+        #expect(punctuated == plain)
+    }
+}

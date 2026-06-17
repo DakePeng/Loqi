@@ -423,6 +423,7 @@ final class SummaryJobCenter {
                 archive.update(record)
                 lastCompleted = Completion(id: sessionID, at: .now)
             } catch is CancellationError {
+                hotwords.discardSuggestions(forSession: sessionID)
                 archive.delete(id: sessionID)
             } catch {
                 errors[sessionID] = error.localizedDescription
@@ -603,10 +604,16 @@ final class SummaryJobCenter {
         let builder = PromptBuilder()
         let transcript = record.plainTranscript()
         let budget = PromptBuilder.suggestionBudget(transcriptLength: transcript.count)
-        let prompt = builder.hotwordSuggestionPrompt(transcript: transcript, limit: budget)
+        let direction = record.entries.last?.direction
+        let prompt = builder.hotwordSuggestionPrompt(
+            transcript: transcript,
+            sourceLanguage: direction?.source,
+            targetLanguage: direction?.target,
+            limit: budget)
         guard let raw = try? await llm.generate(
             system: prompt.system, user: prompt.user, maxTokens: 200) else { return }
-        let suggestions = builder.parseHotwordSuggestions(raw, limit: budget)
+        let suggestions = builder.parseHotwordSuggestions(
+            raw, limit: budget, targetLanguage: direction?.target)
             .filter { !hotwords.isKnown($0.term) }
         hotwords.enqueueSuggestions(
             suggestions, sessionID: record.id, sessionTitle: record.title)

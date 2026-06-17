@@ -24,9 +24,13 @@ enum OfflineTranscriber {
     nonisolated static func effectiveBackend(
         engineChoice: String, senseVoiceInstalled: Bool, qwen3Installed: Bool
     ) -> Backend {
+        #if os(macOS)
+        return .apple
+        #else
         if qwen3Installed { return .qwen3ASR }
         if engineChoice == "sensevoice", senseVoiceInstalled { return .senseVoice }
         return .apple
+        #endif
     }
 
     /// Which backend an import should use. Imports never auto-upgrade:
@@ -37,11 +41,15 @@ enum OfflineTranscriber {
     nonisolated static func importBackend(
         choice: String, senseVoiceInstalled: Bool, qwen3Installed: Bool
     ) -> Backend {
+        #if os(macOS)
+        return .apple
+        #else
         switch choice {
         case "qwen3" where qwen3Installed: .qwen3ASR
         case "sensevoice" where senseVoiceInstalled: .senseVoice
         default: .apple
         }
+        #endif
     }
 
     /// The Re-transcribe backend for the current device + settings state.

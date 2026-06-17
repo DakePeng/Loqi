@@ -28,15 +28,6 @@ struct SessionsView: View {
 
     private var isEditing: Bool { isSelecting }
 
-    /// One-way binding: the List can read edit mode but can't reset it
-    /// behind our back (the tab-bar hide transition was causing that).
-    private var editModeBinding: Binding<EditMode> {
-        Binding(
-            get: { isSelecting ? .active : .inactive },
-            set: { isSelecting = ($0 == .active) }
-        )
-    }
-
     private var selectedSessions: [SessionRecord] {
         pipeline.archive.sessions.filter { selection.contains($0.id) }
     }
@@ -77,14 +68,16 @@ struct SessionsView: View {
                     }
                 }
             }
-            .environment(\.editMode, editModeBinding)
+            .loqiSessionEditMode(isSelecting: $isSelecting)
             .searchable(text: $searchQuery, prompt: Text("Search sessions"))
             .tabHeaderTitle("Sessions")
             .toolbar { toolbarContent }
             // The batch actions live in an explicit bottom inset: on iOS 26
             // the floating tab bar and bottom-docked search own the
             // .bottomBar toolbar region, and items placed there never show.
+#if os(iOS)
             .toolbar(isEditing ? .hidden : .automatic, for: .tabBar)
+#endif
             .safeAreaInset(edge: .bottom) {
                 if isEditing {
                     batchActionBar
@@ -155,6 +148,7 @@ struct SessionsView: View {
     @ToolbarContentBuilder
     private var toolbarContent: some ToolbarContent {
         if isEditing {
+#if os(iOS)
             ToolbarItem(placement: .topBarTrailing) {
                 Button("Done") {
                     withAnimation {
@@ -163,7 +157,18 @@ struct SessionsView: View {
                     }
                 }
             }
+#else
+            ToolbarItem(placement: .confirmationAction) {
+                Button("Done") {
+                    withAnimation {
+                        isSelecting = false
+                        selection.removeAll()
+                    }
+                }
+            }
+#endif
         } else {
+#if os(iOS)
             ToolbarItem(placement: .topBarTrailing) {
                 if !pipeline.archive.sessions.isEmpty, trimmedQuery.isEmpty {
                     Button("Select", systemImage: "checkmark.circle") {
@@ -177,6 +182,21 @@ struct SessionsView: View {
                 }
                 .disabled(pipeline.isRunning)
             }
+#else
+            ToolbarItem(placement: .primaryAction) {
+                if !pipeline.archive.sessions.isEmpty, trimmedQuery.isEmpty {
+                    Button("Select", systemImage: "checkmark.circle") {
+                        withAnimation { isSelecting = true }
+                    }
+                }
+            }
+            ToolbarItem(placement: .primaryAction) {
+                Button("Import audio", systemImage: "square.and.arrow.down") {
+                    pickingFile = true
+                }
+                .disabled(pipeline.isRunning)
+            }
+#endif
         }
     }
 
@@ -300,6 +320,7 @@ struct SessionsView: View {
     private func deleteSessions(ids: Set<UUID>) {
         for id in ids {
             pipeline.jobs.cancel(id)
+            pipeline.hotwords.discardSuggestions(forSession: id)
             pipeline.archive.delete(id: id)
         }
         selection.subtract(ids)
@@ -345,6 +366,26 @@ struct SessionsView: View {
             }
         }
     }
+}
+
+private extension View {
+    #if os(iOS)
+    /// One-way binding: the List can read edit mode but can't reset it
+    /// behind our back (the tab-bar hide transition was causing that).
+    func loqiSessionEditMode(isSelecting: Binding<Bool>) -> some View {
+        environment(
+            \.editMode,
+            Binding(
+                get: { isSelecting.wrappedValue ? .active : .inactive },
+                set: { isSelecting.wrappedValue = ($0 == .active) }
+            )
+        )
+    }
+    #else
+    func loqiSessionEditMode(isSelecting: Binding<Bool>) -> some View {
+        self
+    }
+    #endif
 }
 
 /// Live job status under a session row. A separate view so the per-tick

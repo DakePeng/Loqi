@@ -54,4 +54,18 @@ struct TranslationCoordinatorTests {
             LanguagePair(source: .english, target: .japanese)))
         #expect(!coordinator.requiredDirections.contains(zhToJa))
     }
+
+    @Test func addDirectionRestoresCachedPivotAfterDirectionsWereCleared() async {
+        let coordinator = TranslationCoordinator(needsPivot: { pair in
+            pair.source != .english && pair.target != .english
+        })
+        let zhToEn = LanguagePair(source: .chinese, target: .english)
+        let enToJa = LanguagePair(source: .english, target: .japanese)
+
+        await coordinator.setDirections([zhToJa])
+        await coordinator.setDirections([])
+        await coordinator.addDirection(zhToJa)
+
+        #expect(coordinator.requiredDirections == [zhToEn, enToJa])
+    }
 }

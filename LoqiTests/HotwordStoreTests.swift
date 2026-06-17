@@ -61,6 +61,23 @@ struct HotwordStoreTests {
         #expect(store.hotwords.contains { $0.term == "Qwen" && $0.note == "model family" })
     }
 
+    @Test func acceptPromotesSuggestionRenderings() throws {
+        let store = HotwordStore(directory: makeTempDirectory())
+        store.enqueueSuggestions([
+            HotwordSuggestion(
+                term: "咸菜",
+                renderings: [.english: "pickled vegetables"],
+                note: "domain jargon"),
+        ])
+        let suggestion = try #require(store.pending.first)
+        store.accept(suggestion)
+
+        let hotword = try #require(store.hotwords.first)
+        #expect(hotword.term == "咸菜")
+        #expect(hotword.renderings[.english] == "pickled vegetables")
+        #expect(hotword.note == "domain jargon")
+    }
+
     @Test func dismissRemovesWithoutAdding() throws {
         let store = HotwordStore(directory: makeTempDirectory())
         store.enqueueSuggestions([(term: "Qwen", note: "")])
@@ -87,6 +104,20 @@ struct HotwordStoreTests {
         #expect(reloaded.pending.map(\.note) == ["model"])
     }
 
+    @Test func pendingSuggestionRenderingsSurviveReload() {
+        let directory = makeTempDirectory()
+        HotwordStore(directory: directory)
+            .enqueueSuggestions([
+                HotwordSuggestion(
+                    term: "咸菜",
+                    renderings: [.english: "pickled vegetables"],
+                    note: "food term"),
+            ])
+        let reloaded = HotwordStore(directory: directory)
+        #expect(reloaded.pending.first?.term == "咸菜")
+        #expect(reloaded.pending.first?.renderings?[.english] == "pickled vegetables")
+    }
+
     @Test func enqueueSetsSessionFieldsAndCreatedAt() {
         let store = HotwordStore(directory: makeTempDirectory())
         let sid = UUID()
@@ -109,6 +140,24 @@ struct HotwordStoreTests {
             sessionID: s2, sessionTitle: "Session 2")
         store.dismissAll(sessionID: s1)
         #expect(store.pending.map(\.term) == ["C"])
+    }
+
+    @Test func discardSuggestionsForDeletedSessionPersists() {
+        let directory = makeTempDirectory()
+        let s1 = UUID(), s2 = UUID()
+        let store = HotwordStore(directory: directory)
+        store.enqueueSuggestions(
+            [(term: "A", note: "")],
+            sessionID: s1, sessionTitle: "Deleted")
+        store.enqueueSuggestions(
+            [(term: "B", note: "")],
+            sessionID: s2, sessionTitle: "Kept")
+
+        store.discardSuggestions(forSession: s1)
+
+        #expect(store.pending.map(\.term) == ["B"])
+        let reloaded = HotwordStore(directory: directory)
+        #expect(reloaded.pending.map(\.term) == ["B"])
     }
 
     @Test func retireStaleRemovesOldSuggestions() {

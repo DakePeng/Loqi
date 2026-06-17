@@ -1,5 +1,10 @@
-import UIKit
 import Vision
+
+#if os(iOS)
+import UIKit
+#else
+import AppKit
+#endif
 
 /// On-device OCR for attached photos (slides, whiteboards, documents) via
 /// the Vision framework — no model download, no MLX contention. CJK-first:
@@ -43,15 +48,24 @@ enum ImageTextExtractor {
         }
         let scale = storedMaxDimension / longEdge
         let target = CGSize(width: size.width * scale, height: size.height * scale)
+        #if os(iOS)
         let renderer = UIGraphicsImageRenderer(
             size: target, format: UIGraphicsImageRendererFormat.default())
         let scaled = renderer.image { _ in
             image.draw(in: CGRect(origin: .zero, size: target))
         }
         return scaled.jpegData(compressionQuality: 0.8)
+        #else
+        let scaled = NSImage(size: target)
+        scaled.lockFocus()
+        image.draw(in: CGRect(origin: .zero, size: target))
+        scaled.unlockFocus()
+        return scaled.jpegData(compressionQuality: 0.8)
+        #endif
     }
 
     private static func orientation(of image: UIImage) -> CGImagePropertyOrientation {
+        #if os(iOS)
         switch image.imageOrientation {
         case .up: .up
         case .down: .down
@@ -63,5 +77,8 @@ enum ImageTextExtractor {
         case .rightMirrored: .rightMirrored
         @unknown default: .up
         }
+        #else
+        .up
+        #endif
     }
 }

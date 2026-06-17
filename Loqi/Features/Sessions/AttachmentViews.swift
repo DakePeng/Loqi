@@ -1,5 +1,7 @@
 import SwiftUI
+#if os(iOS)
 import UIKit
+#endif
 
 /// Small rounded thumbnail for an attached photo, loaded off the main
 /// thread. Used inline in the live transcript and the session detail.
@@ -10,20 +12,7 @@ struct AttachmentThumbnail: View {
     @State private var image: UIImage?
 
     var body: some View {
-        Group {
-            if let image {
-                Image(uiImage: image)
-                    .resizable()
-                    .scaledToFill()
-            } else {
-                RoundedRectangle(cornerRadius: 10)
-                    .fill(Color(.tertiarySystemFill))
-                    .overlay {
-                        Image(systemName: "photo")
-                            .foregroundStyle(.secondary)
-                    }
-            }
-        }
+        thumbnailContent
         .frame(width: height * 4 / 3, height: height)
         .clipShape(RoundedRectangle(cornerRadius: 10))
         .overlay(alignment: .bottomLeading) {
@@ -38,10 +27,26 @@ struct AttachmentThumbnail: View {
         .task(id: attachment.fileName) {
             let url = SessionArchive.attachmentURL(fileName: attachment.fileName)
             let loaded = await Task.detached(priority: .utility) {
-                UIImage(contentsOfFile: url.path())?
-                    .preparingForDisplay()
+                let image = UIImage(contentsOfFile: url.path(percentEncoded: false))
+                return image?.preparingForDisplay() ?? image
             }.value
             image = loaded
+        }
+    }
+
+    @ViewBuilder
+    private var thumbnailContent: some View {
+        if let image {
+            Image(uiImage: image)
+                .resizable()
+                .scaledToFill()
+        } else {
+            RoundedRectangle(cornerRadius: 10)
+                .fill(Color.loqiTertiarySystemFill)
+                .overlay {
+                    Image(systemName: "photo")
+                        .foregroundStyle(.secondary)
+                }
         }
     }
 }
@@ -77,6 +82,7 @@ struct AttachmentViewer: View {
                 }
             }
             .toolbar {
+                #if os(iOS)
                 ToolbarItem(placement: .topBarLeading) {
                     Button("Done") { dismiss() }
                 }
@@ -98,6 +104,29 @@ struct AttachmentViewer: View {
                         }
                     }
                 }
+                #else
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Done") { dismiss() }
+                }
+                ToolbarItemGroup(placement: .automatic) {
+                    if let text = attachment.ocrText ?? attachment.vlmDescription,
+                       !text.isEmpty {
+                        Button("Extracted text", systemImage: "text.viewfinder") {
+                            showingText = true
+                        }
+                    }
+                    if let image {
+                        ShareLink(
+                            item: Image(uiImage: image),
+                            preview: SharePreview("Photo", image: Image(uiImage: image)))
+                    }
+                    if onDelete != nil {
+                        Button("Delete", systemImage: "trash", role: .destructive) {
+                            confirmDelete = true
+                        }
+                    }
+                }
+                #endif
             }
             .safeAreaInset(edge: .bottom) {
                 if onSaveCaption != nil {
@@ -118,7 +147,9 @@ struct AttachmentViewer: View {
                             .padding()
                     }
                     .navigationTitle("Extracted text")
+                    #if os(iOS)
                     .navigationBarTitleDisplayMode(.inline)
+                    #endif
                 }
                 .presentationDetents([.medium, .large])
             }
@@ -138,7 +169,7 @@ struct AttachmentViewer: View {
             captionDraft = attachment.caption ?? ""
             let url = SessionArchive.attachmentURL(fileName: attachment.fileName)
             image = await Task.detached(priority: .userInitiated) {
-                UIImage(contentsOfFile: url.path())
+                UIImage(contentsOfFile: url.path(percentEncoded: false))
             }.value
         }
     }

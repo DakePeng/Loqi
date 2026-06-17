@@ -19,7 +19,7 @@ struct SessionDetailView: View {
     var autoSummarizeLength: SummaryLength? = nil
 
     @State private var suggesting = false
-    @State private var suggestions: [(term: String, note: String)] = []
+    @State private var suggestions: [HotwordSuggestion] = []
     @State private var actionError: String?
     /// Neutral, self-clearing line for blocked actions (gray, not red).
     @State private var notice: String?
@@ -132,12 +132,15 @@ struct SessionDetailView: View {
             }
         }
         .navigationTitle(session.map { Text($0.title) } ?? Text("Session"))
+#if os(iOS)
         .navigationBarTitleDisplayMode(.inline)
+#endif
         // The playback controller belongs to the whole detail screen, not
         // the bar's List row — a row's onDisappear fires on mere scrolling,
         // which used to kill audio mid-listen.
         .onDisappear { playback.stop() }
         .toolbar {
+#if os(iOS)
             ToolbarItemGroup(placement: .topBarTrailing) {
                 Button("Ask this session", systemImage: "bubble.left.and.text.bubble.right") {
                     showingChat = true
@@ -147,15 +150,28 @@ struct SessionDetailView: View {
                 }
                 actionsMenu
             }
+#else
+            ToolbarItemGroup(placement: .primaryAction) {
+                Button("Ask this session", systemImage: "bubble.left.and.text.bubble.right") {
+                    showingChat = true
+                }
+                if let session {
+                    exportMenu(session)
+                }
+                actionsMenu
+            }
+#endif
         }
         .sheet(isPresented: $showingChat) {
             SessionChatSheet(pipeline: pipeline, sessionID: sessionID)
         }
+        #if os(iOS)
         .fullScreenCover(isPresented: $showingCamera) {
             CameraCaptureView { image in
                 pipeline.attachImage(image, to: sessionID)
             }
         }
+        #endif
         .photosPicker(
             isPresented: $showingPhotoLibrary,
             selection: $photoItem,
@@ -170,12 +186,21 @@ struct SessionDetailView: View {
                 }
             }
         }
+#if os(iOS)
         .fullScreenCover(item: $viewingAttachment) { attachment in
             AttachmentViewer(
                 attachment: attachment,
                 onSaveCaption: { saveCaption($0, for: attachment) },
                 onDelete: { deleteAttachment(attachment) })
         }
+#else
+        .sheet(item: $viewingAttachment) { attachment in
+            AttachmentViewer(
+                attachment: attachment,
+                onSaveCaption: { saveCaption($0, for: attachment) },
+                onDelete: { deleteAttachment(attachment) })
+        }
+#endif
     }
 
     /// Alerts and confirmation dialogs layered over the decorated list.
@@ -281,7 +306,7 @@ struct SessionDetailView: View {
             }
             Button("Cancel", role: .cancel) { pendingDownload = nil }
         } message: {
-            Text("Summaries, chat and suggestions run on a local AI model. It downloads once (\(Self.modelSizeText), Wi-Fi recommended) and everything stays on this iPhone.")
+            Text("Summaries, chat and suggestions run on a local AI model. It downloads once (\(Self.modelSizeText), Wi-Fi recommended) and everything stays on this device.")
         }
     }
 
@@ -486,9 +511,11 @@ struct SessionDetailView: View {
                 Label("Rename session", systemImage: "pencil")
             }
             Menu {
+                #if os(iOS)
                 Button("Take photo", systemImage: "camera") {
                     showingCamera = true
                 }
+                #endif
                 Button("Photo library", systemImage: "photo.on.rectangle") {
                     showingPhotoLibrary = true
                 }
@@ -592,8 +619,9 @@ struct SessionDetailView: View {
                     HStack {
                         VStack(alignment: .leading) {
                             Text(suggestion.term)
-                            if !suggestion.note.isEmpty {
-                                Text(suggestion.note)
+                            let detail = suggestionDetail(suggestion)
+                            if !detail.isEmpty {
+                                Text(detail)
                                     .font(.caption)
                                     .foregroundStyle(.secondary)
                             }
@@ -601,7 +629,10 @@ struct SessionDetailView: View {
                         Spacer()
                         Button("Add") {
                             pipeline.hotwords.add(
-                                Hotword(term: suggestion.term, note: suggestion.note))
+                                Hotword(
+                                    term: suggestion.term,
+                                    renderings: suggestion.renderings,
+                                    note: suggestion.note))
                             suggestions.removeAll { $0.term == suggestion.term }
                         }
                         .buttonStyle(.bordered)
@@ -990,11 +1021,16 @@ struct SessionDetailView: View {
                 let transcript = session.plainTranscript()
                 let budget = PromptBuilder.suggestionBudget(
                     transcriptLength: transcript.count)
+                let direction = session.entries.last?.direction
                 let prompt = builder.hotwordSuggestionPrompt(
-                    transcript: transcript, limit: budget)
+                    transcript: transcript,
+                    sourceLanguage: direction?.source,
+                    targetLanguage: direction?.target,
+                    limit: budget)
                 let raw = try await pipeline.llm.generate(
                     system: prompt.system, user: prompt.user, maxTokens: 200)
-                suggestions = builder.parseHotwordSuggestions(raw, limit: budget)
+                suggestions = builder.parseHotwordSuggestions(
+                    raw, limit: budget, targetLanguage: direction?.target)
                     .filter { !pipeline.hotwords.isKnown($0.term) }
                 if suggestions.isEmpty {
                     actionError = String(localized: "No new terms found.")
@@ -1003,6 +1039,14 @@ struct SessionDetailView: View {
                 actionError = error.localizedDescription
             }
         }
+    }
+
+    private func suggestionDetail(_ suggestion: HotwordSuggestion) -> String {
+        let renderings = AppLanguage.allCases
+            .compactMap { suggestion.renderings[$0] }
+            .filter { !$0.isEmpty && $0 != suggestion.term }
+        return (renderings + [suggestion.note].filter { !$0.isEmpty })
+            .joined(separator: " · ")
     }
 }
 

@@ -56,33 +56,63 @@ struct SummaryLengthTests {
     }
 
     @Test func stitchGateRequiresDetailedAndEnoughNotes() {
+        #expect(!SummaryEngine.shouldStitchDetailSections(length: .detailed, noteCount: 1))
         #expect(SummaryEngine.shouldStitchDetailSections(length: .detailed, noteCount: 4))
-        #expect(!SummaryEngine.shouldStitchDetailSections(length: .detailed, noteCount: 3))
+        #expect(!SummaryEngine.shouldStitchDetailSections(length: .detailed, noteCount: 0))
         #expect(!SummaryEngine.shouldStitchDetailSections(length: .standard, noteCount: 30))
         #expect(!SummaryEngine.shouldStitchDetailSections(length: .concise, noteCount: 30))
     }
 
-    @Test func segmentNotesBalancesConsecutiveGroups() {
+    @Test func segmentNotesKeepsFixedChronologicalPairs() {
         let notes = (1...7).map { note("段落\($0)") }
-        let segments = SummaryEngine.segmentNotes(notes, size: 3)
-        #expect(segments.map(\.count) == [3, 2, 2])
+        let segments = SummaryEngine.segmentNotes(notes, size: 2)
+        #expect(segments.map(\.count) == [2, 2, 2, 1])
         // Order is preserved across the split.
         #expect(segments.flatMap { $0 }.map(\.headline) == notes.map(\.headline))
-        #expect(SummaryEngine.segmentNotes([], size: 3).isEmpty)
-        #expect(SummaryEngine.segmentNotes(Array(notes.prefix(3)), size: 3).count == 1)
+        #expect(SummaryEngine.segmentNotes([], size: 2).isEmpty)
+        #expect(SummaryEngine.segmentNotes(Array(notes.prefix(2)), size: 2).count == 1)
     }
 
-    @Test func fallbackSectionAssemblesNoteLinesCapped() {
+    @Test func detailSectionAssemblesNoteLinesCapped() {
         let segment = [
             note("讨论预算", facts: ["预算一", "预算二"], decisions: ["决定一"]),
             note("讨论排期", facts: ["排期一"], actions: ["待办一", "待办二", "待办三"]),
         ]
-        let section = SummaryEngine.fallbackSection(for: segment)
+        let section = SummaryEngine.detailSection(for: segment)
         #expect(section?.headline == "讨论预算")
         #expect(section?.points.count == SummaryEngine.detailSectionPointCap)
         #expect(section?.points.first == "预算一")
+        #expect(section?.points.contains("决定一") == true)
+        #expect(section?.points.contains("待办一") == true)
 
-        #expect(SummaryEngine.fallbackSection(for: [note("只有标题")]) == nil)
+        #expect(SummaryEngine.detailSection(for: [note("只有标题")]) == nil)
+    }
+
+    @Test func detailedSectionsSkipFallbackStubsAndIncludeAttachments() {
+        let attachment = SessionRecord.Attachment(
+            fileName: "whiteboard.jpg",
+            timestamp: Date(timeIntervalSince1970: 1_000_050),
+            ocrText: "白板写着预算 42 万\n六月发布",
+            caption: "发布白板")
+        let attachmentNote = AttachmentNotes.note(for: attachment)
+        var fallback = note("识别失败片段")
+        fallback.isFallback = true
+        let notes = [
+            note("开场", facts: ["目标是六月发布"], decisions: ["采用小范围灰度"]),
+            fallback,
+            note("预算", facts: ["预算 42 万"], actions: ["王经理下周确认供应商"]),
+        ] + [attachmentNote].compactMap { $0 }
+
+        let sections = SummaryEngine.detailedSections(for: notes, size: 2)
+
+        #expect(sections.map(\.headline) == ["开场", "📷 发布白板"])
+        #expect(sections[0].points == [
+            "目标是六月发布",
+            "采用小范围灰度",
+            "预算 42 万",
+            "王经理下周确认供应商",
+        ])
+        #expect(sections[1].points.contains("发布白板"))
     }
 
     @Test func appendDetailSectionsRendersNumberedSections() {

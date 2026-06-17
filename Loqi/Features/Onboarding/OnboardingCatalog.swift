@@ -73,6 +73,7 @@ enum DownloadRegion: String, CaseIterable, Identifiable {
 /// engine and must work offline even if the user skips every model.
 enum OnboardingItemKind: String, CaseIterable, Identifiable {
     case appleSpeech
+    case translationPacks
     case senseVoice
     case diarizer
     case llm
@@ -83,6 +84,7 @@ enum OnboardingItemKind: String, CaseIterable, Identifiable {
     var title: String {
         switch self {
         case .appleSpeech: String(localized: "Apple speech recognition")
+        case .translationPacks: String(localized: "Translation language packs")
         case .senseVoice: String(localized: "SenseVoice live recognition")
         case .diarizer: String(localized: "Speaker recognition")
         case .llm: String(localized: "Qwen3.5 2B AI model")
@@ -94,6 +96,8 @@ enum OnboardingItemKind: String, CaseIterable, Identifiable {
         switch self {
         case .appleSpeech:
             String(localized: "Built-in live captions — always installed")
+        case .translationPacks:
+            String(localized: "Offline live translation for English, 中文, 日本語 and 한국어")
         case .senseVoice:
             String(localized: "More accurate live captions for 中文, English, 日本語, 한국어")
         case .diarizer:
@@ -105,11 +109,11 @@ enum OnboardingItemKind: String, CaseIterable, Identifiable {
         }
     }
 
-    /// nil for Apple assets: system-managed, size unknown up front, so they
+    /// nil for system-managed assets: size is unknown up front, so they
     /// never count toward the total label.
     var downloadBytes: Int64? {
         switch self {
-        case .appleSpeech: nil
+        case .appleSpeech, .translationPacks: nil
         case .senseVoice: SenseVoiceModelStore.totalExpectedBytes
         case .diarizer: VoiceprintService.approximateDownloadBytes
         case .llm: ModelCatalog.default.downloadBytes
@@ -119,19 +123,33 @@ enum OnboardingItemKind: String, CaseIterable, Identifiable {
 
     var isRecommended: Bool {
         switch self {
-        case .senseVoice, .diarizer, .llm: true
+        case .translationPacks, .senseVoice, .diarizer, .llm: true
         case .appleSpeech, .qwen3ASR: false
         }
     }
 
     var alwaysIncluded: Bool { self == .appleSpeech }
 
-    /// Synchronous on-disk check. Apple assets report false — their status
-    /// is per-language and async; the download loop fast-paths installed
-    /// locales anyway.
+    var usesSystemAssetProgress: Bool {
+        self == .appleSpeech || self == .translationPacks
+    }
+
+    func systemAssetProgressText(_ caption: String) -> String {
+        switch self {
+        case .appleSpeech:
+            String(localized: "Downloading \(caption)…")
+        case .translationPacks:
+            String(localized: "Preparing \(caption)…")
+        case .senseVoice, .diarizer, .llm, .qwen3ASR:
+            caption
+        }
+    }
+
+    /// Synchronous on-disk check. System assets report false — their status
+    /// is async; the download loop fast-paths installed packs/locales.
     var isInstalled: Bool {
         switch self {
-        case .appleSpeech: false
+        case .appleSpeech, .translationPacks: false
         case .senseVoice: SenseVoiceModelStore.isInstalled
         case .diarizer: VoiceprintService.isModelCached
         case .llm: LLMService.isDownloaded(model: ModelCatalog.default)
@@ -145,11 +163,22 @@ enum OnboardingItemKind: String, CaseIterable, Identifiable {
 
     /// The recommended set the model step pre-checks.
     static var defaultSelection: Set<OnboardingItemKind> {
-        [.senseVoice, .diarizer, .llm]
+        [.translationPacks, .senseVoice, .diarizer, .llm]
+    }
+
+    /// Translation packs are system-managed and checked asynchronously, so
+    /// onboarding prepares every ordered v1 pair. Unsupported direct pairs
+    /// are skipped; the coordinator will still pivot those through English.
+    static var translationPairs: [LanguagePair] {
+        AppLanguage.allCases.flatMap { source in
+            AppLanguage.allCases.compactMap { target in
+                source == target ? nil : LanguagePair(source: source, target: target)
+            }
+        }
     }
 
     /// Bytes still to fetch for the total label: checked items that aren't
-    /// already on disk. Apple assets contribute nothing (downloadBytes nil).
+    /// already on disk. System assets contribute nothing (downloadBytes nil).
     static func totalBytes(
         for selection: Set<OnboardingItemKind>,
         installed: Set<OnboardingItemKind>

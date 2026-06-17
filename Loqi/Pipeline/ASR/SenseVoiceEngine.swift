@@ -2,6 +2,7 @@ import AVFoundation
 import Foundation
 import os
 
+#if os(iOS)
 /// High-accuracy live recognition via SenseVoice-small (sherpa-onnx):
 /// silero VAD segments speech, and the non-streaming recognizer is driven in
 /// a pseudo-streaming pattern — the growing utterance is re-decoded every
@@ -10,7 +11,7 @@ import os
 /// in exchange, accuracy (especially zh/ja/ko) is far above the system
 /// recognizer.
 actor SenseVoiceEngine: SpeechEngine {
-    nonisolated let language: AppLanguage
+    nonisolated let sourceSelection: RecognitionLanguageSelection
 
     private var vad: SherpaOnnxVoiceActivityDetectorWrapper?
     private var decoder: SenseVoiceDecoder?
@@ -43,15 +44,15 @@ actor SenseVoiceEngine: SpeechEngine {
 
     private let logger = Logger(subsystem: "com.kunzhipeng.loqi", category: "sensevoice")
 
-    init(language: AppLanguage) {
-        self.language = language
+    init(sourceSelection: RecognitionLanguageSelection) {
+        self.sourceSelection = sourceSelection
     }
 
     func prepare(contextualStrings: [String] = []) async throws -> AVAudioFormat {
         guard SenseVoiceModelStore.isInstalled else {
             throw SenseVoiceError.modelMissing
         }
-        decoder = SenseVoiceDecoder(language: language)
+        decoder = SenseVoiceDecoder(sourceSelection: sourceSelection)
 
         // Threshold + hangover follow the user's pickup preset: far-field
         // speech is reverb-smeared (lower probability, soft tails that a
@@ -81,7 +82,7 @@ actor SenseVoiceEngine: SpeechEngine {
             channels: 1,
             interleaved: false)
         else { throw TranscriptionError.noCompatibleAudioFormat }
-        logger.info("SenseVoice prepared for \(self.language.rawValue)")
+        logger.info("SenseVoice prepared for \(self.sourceSelection.rawValue)")
         return format
     }
 
@@ -177,18 +178,18 @@ actor SenseVoiceEngine: SpeechEngine {
         let snapshot = utterance
         let startedGeneration = generation
         Task { [weak self] in
-            let text = await decoder.decode(snapshot)
-            await self?.deliverPartial(text, from: startedGeneration)
+            let result = await decoder.decode(snapshot)
+            await self?.deliverPartial(result, from: startedGeneration)
         }
     }
 
-    private func deliverPartial(_ text: String, from startedGeneration: Int) {
+    private func deliverPartial(_ result: SenseVoiceRecognitionResult, from startedGeneration: Int) {
         partialInFlight = false
         // A segment finalized while this decode ran: its text supersedes
         // the partial, which must not reopen a volatile entry.
         guard startedGeneration == generation, speaking else { return }
-        if !text.isEmpty {
-            emit(.volatile(text))
+        if !result.text.isEmpty {
+            emit(.volatile(result.text, language: result.language))
         }
     }
 
@@ -201,15 +202,15 @@ actor SenseVoiceEngine: SpeechEngine {
             let previous = finalTail
             finalTail = Task { [weak self] in
                 await previous?.value
-                let text = await decoder.decode(samples)
-                await self?.deliverFinal(text)
+                let result = await decoder.decode(samples)
+                await self?.deliverFinal(result)
             }
         }
     }
 
-    private func deliverFinal(_ text: String) {
-        guard !text.isEmpty else { return }
-        emit(.finalized(text))
+    private func deliverFinal(_ result: SenseVoiceRecognitionResult) {
+        guard !result.text.isEmpty else { return }
+        emit(.finalized(result.text, language: result.language))
     }
 
     private func emit(_ event: TranscriptionEvent) {
@@ -222,18 +223,18 @@ actor SenseVoiceEngine: SpeechEngine {
 /// stay real-time. Shared with `SenseVoiceFileTranscriber` for imports.
 actor SenseVoiceDecoder {
     private var recognizer: SherpaOnnxOfflineRecognizer?
-    private let language: AppLanguage
+    private let sourceSelection: RecognitionLanguageSelection
     private let numThreads: Int
 
     /// `numThreads` defaults to the live engine's 2; the offline file pass
     /// raises it (a batch decode owns the device) so each segment finishes
     /// sooner. The file transcriber sizes it against the decode-pool count.
-    init(language: AppLanguage, numThreads: Int = 2) {
-        self.language = language
+    init(sourceSelection: RecognitionLanguageSelection, numThreads: Int = 2) {
+        self.sourceSelection = sourceSelection
         self.numThreads = numThreads
     }
 
-    func decode(_ samples: [Float]) -> String {
+    func decode(_ samples: [Float]) -> SenseVoiceRecognitionResult {
         if recognizer == nil {
             var config = sherpaOnnxOfflineRecognizerConfig(
                 featConfig: sherpaOnnxFeatureConfig(),
@@ -242,25 +243,32 @@ actor SenseVoiceDecoder {
                     numThreads: numThreads,
                     senseVoice: sherpaOnnxOfflineSenseVoiceModelConfig(
                         model: SenseVoiceModelStore.fileURL("model.int8.onnx").path,
-                        language: language.senseVoiceCode,
+                        language: sourceSelection.senseVoiceCode,
                         useInverseTextNormalization: true)))
             recognizer = SherpaOnnxOfflineRecognizer(config: &config)
         }
-        guard let recognizer else { return "" }
-        return recognizer.decode(samples: samples)
-            .text
-            .trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let recognizer else { return SenseVoiceRecognitionResult(text: "") }
+        let result = recognizer.decode(samples: samples)
+        return SenseVoiceRecognitionResult(
+            text: result.text.trimmingCharacters(in: .whitespacesAndNewlines),
+            language: AppLanguage(speechRecognitionCode: result.lang))
     }
 }
 
-extension AppLanguage {
+struct SenseVoiceRecognitionResult: Sendable {
+    var text: String
+    var language: AppLanguage?
+}
+
+extension RecognitionLanguageSelection {
     /// Language hint for the SenseVoice model.
     var senseVoiceCode: String {
         switch self {
-        case .english: "en"
-        case .chinese: "zh"
-        case .japanese: "ja"
-        case .korean: "ko"
+        case .auto: ""
+        case .language(.english): "en"
+        case .language(.chinese): "zh"
+        case .language(.japanese): "ja"
+        case .language(.korean): "ko"
         }
     }
 }
@@ -272,3 +280,51 @@ enum SenseVoiceError: LocalizedError {
         String(localized: "Download the SenseVoice model in Settings first, or switch to Apple recognition.")
     }
 }
+#else
+actor SenseVoiceEngine: SpeechEngine {
+    nonisolated let sourceSelection: RecognitionLanguageSelection
+    nonisolated var language: AppLanguage { sourceSelection.fallbackLanguage }
+
+    init(sourceSelection: RecognitionLanguageSelection) {
+        self.sourceSelection = sourceSelection
+    }
+
+    func prepare(contextualStrings: [String] = []) async throws -> AVAudioFormat {
+        throw SenseVoiceError.unavailableOnMac
+    }
+
+    func start() async throws -> AsyncStream<TranscriptionEvent> {
+        throw SenseVoiceError.unavailableOnMac
+    }
+
+    func feed(_ chunk: AudioCaptureService.AudioChunk) {}
+    func stop() async {}
+    func applyContextualStrings(_ strings: [String]) async throws {}
+}
+
+actor SenseVoiceDecoder {
+    init(language: AppLanguage, numThreads: Int = 2) {}
+    func decode(_ samples: [Float]) -> SenseVoiceRecognitionResult {
+        SenseVoiceRecognitionResult(text: "")
+    }
+}
+
+struct SenseVoiceRecognitionResult: Sendable {
+    var text: String
+    var language: AppLanguage?
+}
+
+enum SenseVoiceError: LocalizedError {
+    case modelMissing
+    case unavailableOnMac
+
+    var errorDescription: String? {
+        switch self {
+        case .modelMissing:
+            String(localized: "Download the SenseVoice model in Settings first, or switch to Apple recognition.")
+        case .unavailableOnMac:
+            String(localized: "SenseVoice is unavailable in the native Mac app until the sherpa-onnx macOS library is bundled.")
+        }
+    }
+}
+#endif

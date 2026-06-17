@@ -13,7 +13,7 @@ enum SummaryLength: String, Codable, CaseIterable, Identifiable, Sendable {
         switch self {
         case .concise: String(localized: "Concise")
         case .standard: String(localized: "Standard")
-        case .detailed: String(localized: "Detailed")
+        case .detailed: String(localized: "Detailed Notes")
         }
     }
 

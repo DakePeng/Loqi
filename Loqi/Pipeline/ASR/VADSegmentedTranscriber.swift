@@ -1,6 +1,7 @@
 import Foundation
 import os
 
+#if os(iOS)
 /// Shared offline flow behind SenseVoice and Qwen3-ASR file transcription:
 /// silero VAD chops a whole decoded file into speech segments and each
 /// closed segment gets one decode by the supplied recognizer. The VAD
@@ -192,3 +193,32 @@ enum VADSegmentedTranscriber {
         }
     }
 }
+#else
+enum VADSegmentedTranscriber {
+    struct Utterance: Sendable {
+        let text: String
+        let start: TimeInterval
+        let end: TimeInterval
+    }
+
+    static let maxDecoderPool = 1
+
+    static func timeRange(
+        start: Int, n: Int, sampleRate: Int
+    ) -> (start: TimeInterval, end: TimeInterval) {
+        let rate = Double(max(sampleRate, 1))
+        return (Double(start) / rate, Double(start + n) / rate)
+    }
+
+    static func retryHalves(start: Int, count: Int) -> [(start: Int, count: Int)] {
+        let firstHalf = count / 2
+        return [(start, firstHalf), (start + firstHalf, count - firstHalf)]
+    }
+
+    static func decoderPoolSize(
+        freeBytes: UInt64, perInstanceBytes: UInt64, coreCount: Int, hardCap: Int
+    ) -> Int {
+        1
+    }
+}
+#endif

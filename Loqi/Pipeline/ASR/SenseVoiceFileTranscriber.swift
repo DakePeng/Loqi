@@ -1,6 +1,7 @@
 import Foundation
 import os
 
+#if os(iOS)
 /// Offline SenseVoice transcription for imported files. The live engine
 /// pseudo-streams for volatile captions; an import just needs clean finals
 /// with time ranges, so this drives the shared VAD segmentation over the
@@ -39,8 +40,9 @@ actor SenseVoiceFileTranscriber {
         let threads = max(2, cores / poolSize)
         let language = self.language
         let decoders: [@Sendable ([Float]) async -> String] = (0..<poolSize).map { _ in
-            let decoder = SenseVoiceDecoder(language: language, numThreads: threads)
-            return { await decoder.decode($0) }
+            let decoder = SenseVoiceDecoder(
+                sourceSelection: .language(language), numThreads: threads)
+            return { await decoder.decode($0).text }
         }
         let utterances = try await VADSegmentedTranscriber.transcribe(
             samples16k: samples,
@@ -54,3 +56,17 @@ actor SenseVoiceFileTranscriber {
         return utterances
     }
 }
+#else
+actor SenseVoiceFileTranscriber {
+    typealias Utterance = VADSegmentedTranscriber.Utterance
+
+    init(language: AppLanguage) {}
+
+    func transcribe(
+        samples16k samples: [Float],
+        onProgress: @MainActor @Sendable (Double) -> Void
+    ) async throws -> [Utterance] {
+        throw SenseVoiceError.unavailableOnMac
+    }
+}
+#endif

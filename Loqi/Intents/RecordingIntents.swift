@@ -36,15 +36,22 @@ struct StartRecordingIntent: AudioRecordingIntent {
         }
         let pipeline = CaptionPipeline.shared
         guard !pipeline.isRunning else { return }
-        try await pipeline.start(direction: storedDirection())
+        try await pipeline.start(route: storedRoute())
     }
 
     /// Last-used languages — the same defaults the Record tab would use.
     @MainActor
-    static func storedDirection() -> LanguagePair {
-        resolveDirection(
+    static func storedRoute() -> RecognitionRoute {
+        resolveRoute(
             sourceRaw: UserDefaults.standard.string(forKey: "captions.source"),
             translationRaw: UserDefaults.standard.string(forKey: "captions.translation"))
+    }
+
+    /// Last-used languages, collapsed to a concrete direction for legacy
+    /// callers/tests that cannot represent Auto.
+    @MainActor
+    static func storedDirection() -> LanguagePair {
+        storedRoute().fallbackDirection
     }
 
     /// Pure + testable. Raw values follow LiveCaptionsView's @AppStorage
@@ -54,9 +61,16 @@ struct StartRecordingIntent: AudioRecordingIntent {
     static func resolveDirection(
         sourceRaw: String?, translationRaw: String?
     ) -> LanguagePair {
-        let source = sourceRaw.flatMap(AppLanguage.init(rawValue:)) ?? .english
-        let target = translationRaw.flatMap(AppLanguage.init(rawValue:)) ?? source
-        return LanguagePair(source: source, target: target)
+        resolveRoute(sourceRaw: sourceRaw, translationRaw: translationRaw).fallbackDirection
+    }
+
+    static func resolveRoute(
+        sourceRaw: String?, translationRaw: String?
+    ) -> RecognitionRoute {
+        let source = RecognitionLanguageSelection(rawValue: sourceRaw)
+        return RecognitionRoute(
+            source: source,
+            target: translationRaw.flatMap(AppLanguage.init(rawValue:)))
     }
     #endif
 }

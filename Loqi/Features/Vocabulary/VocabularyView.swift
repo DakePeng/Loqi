@@ -32,9 +32,15 @@ struct VocabularyView: View {
             }
             .tabHeaderTitle("Vocabulary")
             .toolbar {
+#if os(iOS)
                 ToolbarItem(placement: .topBarTrailing) {
                     Button("Add", systemImage: "plus") { isAdding = true }
                 }
+#else
+                ToolbarItem(placement: .primaryAction) {
+                    Button("Add", systemImage: "plus") { isAdding = true }
+                }
+#endif
             }
             .sheet(isPresented: $isAdding) {
                 HotwordEditor(hotword: Hotword(term: "")) { store.add($0) }
@@ -61,8 +67,9 @@ struct VocabularyView: View {
                 HStack {
                     VStack(alignment: .leading, spacing: 2) {
                         Text(suggestion.term)
-                        if !suggestion.note.isEmpty {
-                            Text(suggestion.note)
+                        let detail = suggestionDetail(suggestion)
+                        if !detail.isEmpty {
+                            Text(detail)
                                 .font(.caption)
                                 .foregroundStyle(.secondary)
                         }
@@ -126,6 +133,14 @@ struct VocabularyView: View {
         let aliases = (hotword.aliases ?? []).filter { !$0.isEmpty }
         return (renderings + aliases).joined(separator: " · ")
     }
+
+    private func suggestionDetail(_ suggestion: PendingHotword) -> String {
+        let renderings = AppLanguage.allCases
+            .compactMap { suggestion.renderings?[$0] }
+            .filter { !$0.isEmpty && $0 != suggestion.term }
+        return (renderings + [suggestion.note].filter { !$0.isEmpty })
+            .joined(separator: " · ")
+    }
 }
 
 private struct HotwordEditor: View {
@@ -168,7 +183,9 @@ private struct HotwordEditor: View {
                 }
             }
             .navigationTitle(hotword.term.isEmpty ? "New Hotword" : hotword.term)
+#if os(iOS)
             .navigationBarTitleDisplayMode(.inline)
+#endif
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("Cancel") { dismiss() }

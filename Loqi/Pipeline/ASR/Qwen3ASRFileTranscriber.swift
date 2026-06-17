@@ -1,6 +1,7 @@
 import Foundation
 import os
 
+#if os(iOS)
 /// Offline Qwen3-ASR-0.6B transcription — the high-accuracy pass behind
 /// "Re-transcribe & summarize" and imports. Same VAD segmentation as the
 /// SenseVoice path; each segment gets one autoregressive Speech-LLM
@@ -93,3 +94,36 @@ enum Qwen3ASRError: LocalizedError {
         String(localized: "Download the Qwen3-ASR model in Settings first.")
     }
 }
+#else
+actor Qwen3ASRFileTranscriber {
+    nonisolated static let hotwordPrimingEnabled = false
+
+    init(hotwords: [String] = []) {}
+
+    func transcribe(
+        samples16k samples: [Float],
+        onProgress: @MainActor @Sendable (Double) -> Void
+    ) async throws -> [VADSegmentedTranscriber.Utterance] {
+        throw Qwen3ASRError.unavailableOnMac
+    }
+}
+
+actor Qwen3ASRDecoder {
+    init(hotwords: [String] = []) {}
+    func decode(_ samples: [Float]) -> String { "" }
+}
+
+enum Qwen3ASRError: LocalizedError {
+    case modelMissing
+    case unavailableOnMac
+
+    var errorDescription: String? {
+        switch self {
+        case .modelMissing:
+            String(localized: "Download the Qwen3-ASR model in Settings first.")
+        case .unavailableOnMac:
+            String(localized: "Qwen3-ASR is unavailable in the native Mac app until the sherpa-onnx macOS library is bundled.")
+        }
+    }
+}
+#endif

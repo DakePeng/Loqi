@@ -2,11 +2,12 @@ import Foundation
 import Observation
 import SwiftUI
 
-/// Drives the onboarding download step: one strictly sequential queue over
-/// the selected items with per-item status, retry for failures, and a
-/// skip-remaining escape hatch. Every download goes through the exact path
-/// Settings uses, so anything skipped or failed here resumes there from its
-/// partial files.
+/// Drives the onboarding download step. Apple-managed system assets run
+/// one-at-a-time because their download UI lives in OS frameworks; app-owned
+/// models run in parallel so first setup is not artificially serialized.
+/// Every download goes through the same path Settings or Apple's system APIs
+/// use, so skipped model downloads resume from partial files and system packs
+/// can prompt again on first use.
 @MainActor
 @Observable
 final class OnboardingDownloadModel {
@@ -35,9 +36,9 @@ final class OnboardingDownloadModel {
         let kind: OnboardingItemKind
         var status: Status = .pending
         let speedometer = DownloadSpeedometer()
-        /// Apple-assets row only: overall fraction across the languages and
-        /// the one currently downloading (system assets have no byte sizes,
-        /// so the speedometer doesn't apply).
+        /// System-asset rows only: overall fraction across languages/pairs
+        /// and the one currently downloading. These assets have no byte
+        /// sizes, so the speedometer doesn't apply.
         var assetFraction: Double = 0
         var assetCaption: String?
 
@@ -56,8 +57,13 @@ final class OnboardingDownloadModel {
     private let pipeline: CaptionPipeline
     private let assets = AssetManager()
     private var region = DownloadRegion.global
-    private var queue: [OnboardingItemKind] = []
-    private var worker: Task<Void, Never>?
+    private var systemAssetQueue: [OnboardingItemKind] = []
+    private var systemAssetWorker: Task<Void, Never>?
+    private var modelWorkers: [OnboardingItemKind: Task<Void, Never>] = [:]
+    private var translationContinuation: CheckedContinuation<Void, Error>?
+    private var translationTimeout: Task<Void, Never>?
+    private(set) var translationPreparationPair: LanguagePair?
+    private let translationPreparationTimeout: Duration = .seconds(60)
 
     init(pipeline: CaptionPipeline) {
         self.pipeline = pipeline
@@ -94,27 +100,40 @@ final class OnboardingDownloadModel {
             UserDefaults.standard.set("sensevoice", forKey: "asr.engine")
         }
 
-        queue = OnboardingItemKind.queueOrder(selection: selection, installed: installed)
-        startWorkerIfNeeded()
+        let pending = OnboardingItemKind.queueOrder(selection: selection, installed: installed)
+        systemAssetQueue = pending.filter(\.usesSystemAssetProgress)
+        startSystemAssetWorkerIfNeeded()
+        for kind in pending where !kind.usesSystemAssetProgress {
+            startModelWorker(for: kind)
+        }
     }
 
-    /// Failed rows only: back into the queue, behind whatever is running.
+    /// Failed rows only: system assets go behind the current system asset;
+    /// app-owned models restart independently.
     func retry(_ kind: OnboardingItemKind) {
         guard let item = item(for: kind), case .failed = item.status else { return }
         item.status = .pending
-        queue.append(kind)
-        startWorkerIfNeeded()
+        if kind.usesSystemAssetProgress {
+            systemAssetQueue.append(kind)
+            startSystemAssetWorkerIfNeeded()
+        } else {
+            startModelWorker(for: kind)
+        }
     }
 
     /// Settles every unfinished row immediately so the finish button appears.
-    /// The diarizer and Apple assets have no cancel API — their in-flight
+    /// The diarizer and system assets have no cancel API — their in-flight
     /// task may complete in the background, which only populates caches the
     /// app wants anyway.
     func skipRemaining() {
-        queue.removeAll()
-        worker?.cancel()
+        systemAssetQueue.removeAll()
+        systemAssetWorker?.cancel()
+        systemAssetWorker = nil
+        modelWorkers.values.forEach { $0.cancel() }
+        modelWorkers.removeAll()
         senseVoiceStore.cancelDownload()
         qwen3Store.cancelDownload()
+        cancelTranslationPreparation()
         let llm = pipeline.llm
         Task { await llm.cancelLoad() }
         for item in items where !item.status.isSettled {
@@ -122,22 +141,37 @@ final class OnboardingDownloadModel {
         }
     }
 
-    private func startWorkerIfNeeded() {
-        guard worker == nil else { return }
-        worker = Task {
-            while !Task.isCancelled, !queue.isEmpty {
-                let kind = queue.removeFirst()
+    private func startSystemAssetWorkerIfNeeded() {
+        guard systemAssetWorker == nil else { return }
+        systemAssetWorker = Task { [weak self] in
+            guard let self else { return }
+            while !Task.isCancelled, !systemAssetQueue.isEmpty {
+                let kind = systemAssetQueue.removeFirst()
                 guard let item = item(for: kind), item.status == .pending else { continue }
                 item.status = .downloading
                 await download(kind, into: item)
             }
-            worker = nil
+            systemAssetWorker = nil
+        }
+    }
+
+    private func startModelWorker(for kind: OnboardingItemKind) {
+        guard !kind.usesSystemAssetProgress,
+              modelWorkers[kind] == nil,
+              let item = item(for: kind),
+              item.status == .pending else { return }
+        item.status = .downloading
+        modelWorkers[kind] = Task { [weak self, weak item] in
+            guard let self, let item else { return }
+            await download(kind, into: item)
+            modelWorkers[kind] = nil
         }
     }
 
     private func download(_ kind: OnboardingItemKind, into item: Item) async {
         switch kind {
         case .appleSpeech: await downloadAppleAssets(item)
+        case .translationPacks: await downloadTranslationPacks(item)
         case .senseVoice: await downloadSenseVoice(item)
         case .diarizer: await downloadDiarizer(item)
         case .llm: await downloadLLM(item)
@@ -176,6 +210,93 @@ final class OnboardingDownloadModel {
             ? .failed(String(
                 localized: "Some languages didn’t download — check your connection."))
             : .done
+    }
+
+    /// Translation packs can only be prepared through SwiftUI's
+    /// `.translationTask`, so this method coordinates with the hidden host
+    /// view in OnboardingDownloadStep one pair at a time.
+    private func downloadTranslationPacks(_ item: Item) async {
+        let pairs = OnboardingItemKind.translationPairs
+        var anyFailure = false
+
+        for (index, pair) in pairs.enumerated() {
+            if Task.isCancelled {
+                item.status = .skipped
+                return
+            }
+
+            let base = Double(index) / Double(pairs.count)
+            item.assetFraction = base
+            item.assetCaption = pair.displayName
+
+            switch await assets.translationStatus(for: pair) {
+            case .installed, .unsupported:
+                continue
+            case .supported:
+                do {
+                    try await prepareTranslationPack(for: pair)
+                } catch is CancellationError {
+                    item.status = .skipped
+                    return
+                } catch {
+                    anyFailure = true
+                }
+            @unknown default:
+                anyFailure = true
+            }
+        }
+
+        item.assetFraction = 1
+        item.assetCaption = nil
+        item.status = anyFailure
+            ? .failed(String(
+                localized: "Some translation packs didn’t download — check your connection."))
+            : .done
+    }
+
+    private func prepareTranslationPack(for pair: LanguagePair) async throws {
+        try await withCheckedThrowingContinuation { continuation in
+            translationContinuation = continuation
+            translationPreparationPair = pair
+            translationTimeout?.cancel()
+            let timeout = translationPreparationTimeout
+            translationTimeout = Task { [weak self] in
+                do {
+                    try await Task.sleep(for: timeout)
+                } catch {
+                    return
+                }
+                await MainActor.run {
+                    self?.completeTranslationPreparation(
+                        for: pair,
+                        errorMessage: String(localized: "Translation pack download timed out."))
+                }
+            }
+        }
+    }
+
+    func completeTranslationPreparation(for pair: LanguagePair, errorMessage: String?) {
+        guard pair == translationPreparationPair,
+              let continuation = translationContinuation else { return }
+        translationContinuation = nil
+        translationPreparationPair = nil
+        translationTimeout?.cancel()
+        translationTimeout = nil
+
+        if let errorMessage {
+            continuation.resume(throwing: TranslationPackDownloadError.failed(errorMessage))
+        } else {
+            continuation.resume()
+        }
+    }
+
+    private func cancelTranslationPreparation() {
+        translationPreparationPair = nil
+        translationTimeout?.cancel()
+        translationTimeout = nil
+        guard let continuation = translationContinuation else { return }
+        translationContinuation = nil
+        continuation.resume(throwing: CancellationError())
     }
 
     private func downloadSenseVoice(_ item: Item) async {
@@ -248,6 +369,16 @@ final class OnboardingDownloadModel {
             } else {
                 item.status = .failed(error.localizedDescription)
             }
+        }
+    }
+}
+
+private enum TranslationPackDownloadError: LocalizedError {
+    case failed(String)
+
+    var errorDescription: String? {
+        switch self {
+        case .failed(let message): message
         }
     }
 }

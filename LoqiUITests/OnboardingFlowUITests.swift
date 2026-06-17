@@ -46,6 +46,7 @@ final class OnboardingFlowUITests: XCTestCase {
             app.staticTexts["Choose what to download"].waitForExistence(timeout: 5))
         for title in [
             "Apple speech recognition",
+            "Translation language packs",
             "SenseVoice live recognition",
             "Speaker recognition",
             "Qwen3.5 2B AI model",
@@ -75,6 +76,7 @@ final class OnboardingFlowUITests: XCTestCase {
         XCTAssertTrue(
             app.staticTexts["Downloading models"].waitForExistence(timeout: 5))
         XCTAssertTrue(app.staticTexts["Apple speech recognition"].exists)
+        XCTAssertTrue(app.staticTexts["Translation language packs"].exists)
 
         let skipRemaining = app.buttons["Skip remaining"]
         XCTAssertTrue(skipRemaining.waitForExistence(timeout: 5))
@@ -101,6 +103,7 @@ final class OnboardingFlowUITests: XCTestCase {
             app.staticTexts["Choose what to download"].waitForExistence(timeout: 5))
 
         // Leave only SenseVoice checked (Qwen3-ASR starts unchecked).
+        app.staticTexts["Translation language packs"].tap()
         app.staticTexts["Speaker recognition"].tap()
         app.staticTexts["Qwen3.5 2B AI model"].tap()
         app.buttons["Download"].tap()

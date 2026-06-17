@@ -65,6 +65,11 @@ struct PromptBuilderTests {
         #expect(builder.cleanResponse(raw) == "你好。")
     }
 
+    @Test func cleanResponseStripsLeakedModelTags() {
+        let raw = "<summary>\nO: Ship the app\n</summary>"
+        #expect(builder.cleanResponse(raw) == "O: Ship the app")
+    }
+
     @Test func cleanResponseKeepsInternalQuotes() {
         #expect(builder.cleanResponse("He said \"hi\" to me") == "He said \"hi\" to me")
     }
@@ -173,6 +178,18 @@ struct PromptBuilderTests {
         #expect(parsed.items("A") == ["王经理周五前提交预算"])
     }
 
+    @Test func structuredSummaryScrubsRandomTagsFromValues() {
+        let parsed = builder.parseStructuredSummary("""
+        <answer>
+        O: <summary>团队确认了发布日期</summary>
+        T: 发布计划<|im_end|>ignored junk
+        </answer>
+        """)
+        #expect(parsed.overview == ["团队确认了发布日期"])
+        #expect(parsed.items("T") == ["发布计划"])
+        #expect(!parsed.joinedValues.contains("<"))
+    }
+
     @Test func rendersSummaryMarkdownSkippingEmptySections() {
         var parsed = PromptBuilder.ParsedStructuredSummary()
         parsed.overview = ["First sentence.", "Second sentence."]
@@ -232,6 +249,17 @@ struct PromptBuilderTests {
         #expect(prompt.user.contains("- the Qwen rollout"))
         // Output contract shared with parseHotwordSuggestions.
         #expect(prompt.system.contains("term | short note"))
+    }
+
+    @Test func hotwordSuggestionPromptAsksForSourceTermAndRendering() {
+        let prompt = builder.hotwordSuggestionPrompt(
+            transcript: "咸菜 → pickles",
+            sourceLanguage: .chinese,
+            targetLanguage: .english)
+        #expect(prompt.system.contains("source-language terms"))
+        #expect(prompt.system.contains("Chinese"))
+        #expect(prompt.system.contains("English"))
+        #expect(prompt.system.contains("source term | target rendering or blank | short note"))
     }
 
     @Test func qaPromptNamesLanguageAndCarriesQuestion() {

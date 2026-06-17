@@ -18,7 +18,8 @@ struct SummaryStyleTests {
         lines: first 1-3 lines "O: <overview sentence>", then up to 4 lines \
         "T: <main topic>", up to 4 lines "D: <decision>", up to 5 lines \
         "A: <action item, keep who does what>". Use only information from \
-        the notes; never invent names, numbers, or events. Keep names, \
+        the notes; keep O lines high-level; do not repeat the same details \
+        that you put in the tagged section lines. Never invent names, numbers, or events. Keep names, \
         numbers, and dates exactly as written in the notes. Skip categories \
         with nothing to report. Merge duplicates. No other text.
         """)

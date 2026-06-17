@@ -206,15 +206,17 @@ struct SessionRecordTests {
         let builder = PromptBuilder()
         let raw = """
         Zhipeng | person name
-        - Qwen | model family
+        - Qwen | 通义千问 | model family
         2. Loqi | app name
         toolongtoolongtoolongtoolongtoolongtoolongtoolong | nope
         """
-        let parsed = builder.parseHotwordSuggestions(raw)
+        let parsed = builder.parseHotwordSuggestions(raw, targetLanguage: .chinese)
         #expect(parsed.count == 3)
         #expect(parsed[0].term == "Zhipeng")
         #expect(parsed[0].note == "person name")
         #expect(parsed[1].term == "Qwen")
+        #expect(parsed[1].renderings[.chinese] == "通义千问")
+        #expect(parsed[1].note == "model family")
         #expect(parsed[2].term == "Loqi")
     }
 

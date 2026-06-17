@@ -1,5 +1,22 @@
 import PhotosUI
 import SwiftUI
+#if os(iOS)
+import UIKit
+#endif
+
+enum RecordingElapsedFormatter {
+    static func string(since startedAt: Date, now: Date) -> String {
+        let totalSeconds = max(0, Int(now.timeIntervalSince(startedAt)))
+        let hours = totalSeconds / 3600
+        let minutes = (totalSeconds % 3600) / 60
+        let seconds = totalSeconds % 60
+
+        if hours > 0 {
+            return String(format: "%d:%02d:%02d", hours, minutes, seconds)
+        }
+        return String(format: "%d:%02d", minutes, seconds)
+    }
+}
 
 /// One-way live captions: listen in one language, read another.
 /// The newest translation renders large; auto-scroll follows the live edge
@@ -8,7 +25,7 @@ struct LiveCaptionsView: View {
     @Bindable var pipeline: CaptionPipeline
     var switchToSessions: () -> Void = {}
 
-    @AppStorage("captions.source") private var source: AppLanguage = .english
+    @AppStorage("captions.source") private var sourceRaw = AppLanguage.english.rawValue
     /// Translation is opt-in: empty = off (plain transcription, the default).
     @AppStorage("captions.translation") private var translationRaw = ""
     @AppStorage("captions.speakerCount") private var speakerCount = 0
@@ -46,9 +63,12 @@ struct LiveCaptionsView: View {
     /// Cards stay "little": cap utterances per card.
     private static let segmentMaxEntries = 4
 
+    private var sourceSelection: RecognitionLanguageSelection {
+        RecognitionLanguageSelection(rawValue: sourceRaw)
+    }
     private var translationTarget: AppLanguage? { AppLanguage(rawValue: translationRaw) }
-    private var direction: LanguagePair {
-        LanguagePair(source: source, target: translationTarget ?? source)
+    private var route: RecognitionRoute {
+        RecognitionRoute(source: sourceSelection, target: translationTarget)
     }
 
     @Environment(\.verticalSizeClass) private var verticalSizeClass
@@ -63,7 +83,9 @@ struct LiveCaptionsView: View {
             HorizontalCaptionView(pipeline: pipeline, entries: entries) {
                 toggleSession()
             }
+            #if os(iOS)
             .toolbar(.hidden, for: .tabBar)
+            #endif
             .alert("Couldn't start", isPresented: .init(
                 get: { errorMessage != nil },
                 set: { if !$0 { errorMessage = nil } }
@@ -114,31 +136,45 @@ struct LiveCaptionsView: View {
                 // No mid-recording "Clear": the transcript on screen IS
                 // the session being archived, and the store resets
                 // itself at the next session start.
-                if pipeline.isRunning, pipeline.liveNotes.count >= 2 {
+                if pipeline.lastFinishedSessionID == nil {
+                    if pipeline.isRunning, pipeline.liveNotes.count >= 2 {
+                        #if os(iOS)
+                        ToolbarItem(placement: .topBarTrailing) {
+                            Button("Summary so far", systemImage: "sparkles") {
+                                showingSummarySoFar = true
+                            }
+                        }
+                        ToolbarSpacer(.fixed, placement: .topBarTrailing)
+                        #else
+                        ToolbarItem(placement: .automatic) {
+                            Button("Summary so far", systemImage: "sparkles") {
+                                showingSummarySoFar = true
+                            }
+                        }
+                        #endif
+                    }
+                    #if os(iOS)
                     ToolbarItem(placement: .topBarTrailing) {
-                        Button("Summary so far", systemImage: "sparkles") {
-                            showingSummarySoFar = true
+                        // Rotation lock is common; this forces landscape
+                        // caption mode without it. Declared last = outermost,
+                        // so its spot is stable when sparkles appears.
+                        Button("Landscape", systemImage: "iphone.landscape") {
+                            Self.rotate(to: .landscapeRight)
                         }
                     }
-                    ToolbarSpacer(.fixed, placement: .topBarTrailing)
-                }
-                ToolbarItem(placement: .topBarTrailing) {
-                    // Rotation lock is common; this forces landscape
-                    // caption mode without it. Declared last = outermost,
-                    // so its spot is stable when sparkles appears.
-                    Button("Landscape", systemImage: "iphone.landscape") {
-                        Self.rotate(to: .landscapeRight)
-                    }
+                    #endif
                 }
             }
             .sheet(isPresented: $showingSummarySoFar) {
                 SummarySoFarSheet(pipeline: pipeline)
             }
+            #if os(iOS)
             .fullScreenCover(isPresented: $showingCamera) {
                 CameraCaptureView { image in
                     pipeline.attachImage(image)
                 }
             }
+            #endif
             .photosPicker(
                 isPresented: $showingPhotoLibrary,
                 selection: $photoItem,
@@ -153,10 +189,17 @@ struct LiveCaptionsView: View {
                     }
                 }
             }
+            #if os(iOS)
             .fullScreenCover(item: $viewingAttachment) { attachment in
                 // Live view is read-only; captions/delete live in the detail.
                 AttachmentViewer(attachment: attachment)
             }
+            #else
+            .sheet(item: $viewingAttachment) { attachment in
+                // Live view is read-only; captions/delete live in the detail.
+                AttachmentViewer(attachment: attachment)
+            }
+            #endif
             .alert("Couldn't start", isPresented: .init(
                 get: { errorMessage != nil },
                 set: { if !$0 { errorMessage = nil } }
@@ -330,7 +373,7 @@ struct LiveCaptionsView: View {
                     ContentUnavailableView(
                         "Ready to listen",
                         systemImage: "waveform",
-                        description: Text("Tap the mic — everything is transcribed privately on this iPhone."))
+                        description: Text("Everything is transcribed privately on this iPhone."))
                 }
             }
             .animation(.easeInOut(duration: 0.2), value: isAtLiveEdge)
@@ -346,7 +389,7 @@ struct LiveCaptionsView: View {
                 LiveLevelMicButton(pipeline: pipeline, isLive: false, size: 108) {
                     toggleSession()
                 }
-                Text("Tap the mic — everything stays on this iPhone.")
+                Text("Everything stays on this iPhone.")
                     .font(.subheadline)
                     .foregroundStyle(.secondary)
                     .multilineTextAlignment(.center)
@@ -392,72 +435,117 @@ struct LiveCaptionsView: View {
     /// live indicators swap for a paused one — a ticking timer over a dead
     /// mic reads as "still recording".
     private var recordingBar: some View {
-        HStack(spacing: 12) {
-            if pipeline.isPaused {
+        ViewThatFits(in: .horizontal) {
+            HStack(spacing: 12) {
+                recordingStatus
+                Spacer(minLength: 8)
+                recordingInlineControls
+                Spacer(minLength: 8)
+                stopRecordingButton
+            }
+
+            VStack(alignment: .leading, spacing: 8) {
+                recordingStatus
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                HStack(spacing: 12) {
+                    recordingInlineControls
+                    Spacer(minLength: 8)
+                    stopRecordingButton
+                }
+            }
+        }
+        .padding(.horizontal, 16)
+    }
+
+    @ViewBuilder
+    private var recordingStatus: some View {
+        if pipeline.isPaused {
+            HStack(spacing: 8) {
                 Image(systemName: "pause.fill")
                     .font(.system(size: 11))
                     .foregroundStyle(.orange)
                 Text("Paused")
                     .font(.callout.weight(.medium))
                     .foregroundStyle(.orange)
-            } else {
+            }
+            .lineLimit(1)
+            .fixedSize(horizontal: true, vertical: false)
+        } else {
+            HStack(spacing: 8) {
                 Image(systemName: "circle.fill")
                     .font(.system(size: 9))
                     .foregroundStyle(.red)
                     .symbolEffect(.pulse, options: .repeating, isActive: !reduceMotion)
                 if let startedAt = pipeline.sessionStartedAt {
-                    Text(startedAt, style: .timer)
-                        .font(.callout.monospacedDigit())
-                        .foregroundStyle(.primary)
+                    RecordingElapsedText(startedAt: startedAt)
                 }
             }
+            .lineLimit(1)
+            .fixedSize(horizontal: true, vertical: false)
+            .layoutPriority(1)
+        }
+    }
 
-            Spacer()
-            Menu {
-                Button("Take photo", systemImage: "camera") {
-                    showingCamera = true
-                }
-                Button("Photo library", systemImage: "photo.on.rectangle") {
-                    showingPhotoLibrary = true
-                }
-            } label: {
-                Image(systemName: "camera")
-                    .font(.body)
-                    .frame(minWidth: 44, minHeight: 44)
-                    .contentShape(Rectangle())
-            }
-            .accessibilityLabel("Add photo")
+    private var recordingInlineControls: some View {
+        HStack(spacing: 12) {
+            addPhotoButton
             pickupBarButton
             speakersChip
+            translationBarButton
             BatteryHint()
-            Spacer()
-
-            Button(role: .destructive) {
-                toggleSession()
-            } label: {
-                Label("Stop", systemImage: "stop.fill")
-                    .font(.subheadline.weight(.semibold))
-            }
-            .buttonStyle(.borderedProminent)
-            .tint(.red)
-            .controlSize(.small)
         }
-        .padding(.horizontal, 16)
+        .fixedSize(horizontal: true, vertical: false)
+    }
+
+    private var addPhotoButton: some View {
+        Menu {
+            #if os(iOS)
+            Button("Take photo", systemImage: "camera") {
+                showingCamera = true
+            }
+            #endif
+            Button("Photo library", systemImage: "photo.on.rectangle") {
+                showingPhotoLibrary = true
+            }
+        } label: {
+            Image(systemName: "camera")
+                .font(.body)
+                .frame(minWidth: 44, minHeight: 44)
+                .contentShape(Rectangle())
+        }
+        .accessibilityLabel("Add photo")
+    }
+
+    private var stopRecordingButton: some View {
+        Button(role: .destructive) {
+            toggleSession()
+        } label: {
+            Image(systemName: "stop.fill")
+                .font(.system(size: 16, weight: .semibold))
+                .foregroundStyle(.white)
+                .frame(width: 58, height: 58)
+                .background(Color.red, in: Circle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel("Stop")
     }
 
     private var languageChip: some View {
         Menu {
-            Picker("Language", selection: $source) {
+            Picker("Language", selection: $sourceRaw) {
+                Text("Auto").tag(RecognitionLanguageSelection.autoRawValue)
                 ForEach(AppLanguage.allCases) { language in
-                    Text(language.displayName).tag(language)
+                    Text(language.displayName).tag(language.rawValue)
                 }
             }
         } label: {
-            chip(icon: "waveform", text: source.displayName)
+            chip(icon: "waveform", text: sourceSelection.displayName)
         }
-        .onChange(of: source) {
+        .onChange(of: sourceRaw) {
             // Translating into the spoken language makes no sense.
-            if translationRaw == source.rawValue { translationRaw = "" }
+            if sourceSelection != .auto, translationRaw == sourceSelection.rawValue {
+                translationRaw = ""
+            }
         }
     }
 
@@ -543,17 +631,45 @@ struct LiveCaptionsView: View {
 
     private var translationChip: some View {
         Menu {
-            Picker("Translation", selection: $translationRaw) {
-                Text("Off").tag("")
-                ForEach(AppLanguage.allCases.filter { $0 != source }) { language in
-                    Text(language.displayName).tag(language.rawValue)
-                }
-            }
+            translationPicker
         } label: {
             chip(
                 icon: "globe",
                 text: translationTarget?.displayName ?? String(localized: "Translate"),
                 active: translationTarget != nil)
+        }
+        .onChange(of: translationRaw) {
+            pipeline.updateTranslationTarget(translationTarget)
+        }
+    }
+
+    private var translationBarButton: some View {
+        Menu {
+            translationPicker
+        } label: {
+            Image(systemName: "globe")
+                .font(.body)
+                .foregroundStyle(translationTarget != nil
+                    ? AnyShapeStyle(.tint) : AnyShapeStyle(.primary))
+                .contentTransition(.symbolEffect(.replace))
+                .animation(.default, value: translationRaw)
+                .frame(minWidth: 44, minHeight: 44)
+                .contentShape(Rectangle())
+        }
+        .accessibilityLabel("Translation")
+        .onChange(of: translationRaw) {
+            pipeline.updateTranslationTarget(translationTarget)
+        }
+    }
+
+    private var translationPicker: some View {
+        Picker("Translation", selection: $translationRaw) {
+            Text("Off").tag("")
+            ForEach(AppLanguage.allCases.filter { language in
+                sourceSelection == .auto || language.rawValue != sourceRaw
+            }) { language in
+                Text(language.displayName).tag(language.rawValue)
+            }
         }
     }
 
@@ -571,7 +687,7 @@ struct LiveCaptionsView: View {
         .padding(.horizontal, 12)
         .padding(.vertical, 8)
         .foregroundStyle(active ? AnyShapeStyle(.tint) : AnyShapeStyle(.primary))
-        .background(Color(.secondarySystemBackground), in: Capsule())
+        .background(Color.loqiSecondarySystemBackground, in: Capsule())
     }
 
     /// One card: speaker chip (when separating), then the segment's
@@ -591,7 +707,7 @@ struct LiveCaptionsView: View {
                 } label: {
                     HStack(spacing: 5) {
                         Circle()
-                            .fill(accent ?? Color(.systemGray3))
+                            .fill(accent ?? Color.loqiTertiarySystemFill)
                             .frame(width: 7, height: 7)
                         Text(segment.speaker.map {
                             pipeline.speakerNames[$0]
@@ -617,7 +733,7 @@ struct LiveCaptionsView: View {
         .padding(.vertical, 10)
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(
-            Color(.secondarySystemBackground)
+            Color.loqiSecondarySystemBackground
                 .opacity(isLive ? 1 : 0.6),
             in: RoundedRectangle(cornerRadius: 16, style: .continuous))
         .overlay(alignment: .leading) {
@@ -634,12 +750,14 @@ struct LiveCaptionsView: View {
 
     /// Programmatic rotation works even with the orientation lock on,
     /// which is exactly when the button is needed.
+    #if os(iOS)
     static func rotate(to orientation: UIInterfaceOrientationMask) {
         let scene = UIApplication.shared.connectedScenes
             .compactMap { $0 as? UIWindowScene }
             .first
         scene?.requestGeometryUpdate(.iOS(interfaceOrientations: orientation))
     }
+    #endif
 
     private func toggleSession() {
         Task {
@@ -653,7 +771,7 @@ struct LiveCaptionsView: View {
                     return
                 }
                 do {
-                    try await pipeline.start(direction: direction)
+                    try await pipeline.start(route: route)
                 } catch {
                     errorIsPermission = false
                     errorMessage = error.localizedDescription
@@ -667,12 +785,25 @@ struct LiveCaptionsView: View {
     private var startErrorButtons: some View {
         if errorIsPermission {
             Button("Open Settings") {
-                if let url = URL(string: UIApplication.openSettingsURLString) {
-                    UIApplication.shared.open(url)
-                }
+                SystemSettings.openMicrophonePrivacy()
             }
         }
         Button("OK", role: .cancel) {}
+    }
+}
+
+private struct RecordingElapsedText: View {
+    let startedAt: Date
+
+    var body: some View {
+        TimelineView(.periodic(from: startedAt, by: 1)) { timeline in
+            Text(RecordingElapsedFormatter.string(since: startedAt, now: timeline.date))
+                .font(.callout.monospacedDigit())
+                .foregroundStyle(.primary)
+                .lineLimit(1)
+                .fixedSize(horizontal: true, vertical: false)
+                .accessibilityLabel("Recording duration")
+        }
     }
 }
 
@@ -709,11 +840,19 @@ private struct SummarySoFarSheet: View {
                 }
             }
             .navigationTitle("Summary so far")
+            #if os(iOS)
             .navigationBarTitleDisplayMode(.inline)
+            #endif
             .toolbar {
+                #if os(iOS)
                 ToolbarItem(placement: .topBarTrailing) {
                     Button("Done") { dismiss() }
                 }
+                #else
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("Done") { dismiss() }
+                }
+                #endif
             }
         }
         .presentationDetents([.medium, .large])

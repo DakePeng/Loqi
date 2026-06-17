@@ -59,8 +59,17 @@ struct PromptBuilder: Sendable {
         var rest = cleaned.dropFirst()
         while rest.first == " " { rest = rest.dropFirst() }   // tolerate "F :"
         guard let colon = rest.first, colon == ":" || colon == "：" else { return nil }
-        let value = rest.dropFirst().trimmingCharacters(in: .whitespaces)
+        let value = cleanTaggedValue(String(rest.dropFirst()))
         return value.isEmpty ? nil : value
+    }
+
+    /// Tag values are rendered directly into summaries/translations after
+    /// parsing. Small hybrid models can leak XML-ish wrappers (`<summary>`,
+    /// `</answer>`) despite the prompt contract; remove those from the value
+    /// before it reaches any renderer.
+    private func cleanTaggedValue(_ raw: String) -> String {
+        Self.stripModelTags(raw)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
     /// Strip the formatting small models add around tagged lines so the tag
@@ -192,20 +201,43 @@ struct PromptBuilder: Sendable {
     /// through, surrounding quotes, and label prefixes the model might add.
     func cleanResponse(_ raw: String) -> String {
         var text = raw
-        if let start = text.range(of: "<think>"),
-           let end = text.range(of: "</think>") {
-            text.removeSubrange(start.lowerBound..<end.upperBound)
+        while let start = text.range(
+            of: "<think>", options: [.caseInsensitive]
+        ) {
+            if let end = text.range(
+                of: "</think>",
+                options: [.caseInsensitive],
+                range: start.upperBound..<text.endIndex) {
+                text.removeSubrange(start.lowerBound..<end.upperBound)
+            } else {
+                text.removeSubrange(start.lowerBound..<text.endIndex)
+            }
         }
         // A literal special token means generation ran past its stop token;
         // everything from the first one on is junk.
         if let junk = text.range(of: "<|") {
             text = String(text[..<junk.lowerBound])
         }
+        text = Self.stripModelTags(text)
         text = text.trimmingCharacters(in: .whitespacesAndNewlines)
         if text.hasPrefix("\"") && text.hasSuffix("\"") && text.count > 1 {
             text = String(text.dropFirst().dropLast())
         }
         return text.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    /// Remove XML-ish tags that sometimes leak from small models. This keeps
+    /// the enclosed words (`<summary>ship it</summary>` -> `ship it`) but
+    /// drops standalone wrappers/control tags so the summary renderer never
+    /// sees them as literal text.
+    static func stripModelTags(_ text: String) -> String {
+        let pattern = #"</?[A-Za-z][A-Za-z0-9_-]{0,31}(?:\s+[^<>]*)?>"#
+        guard let regex = try? NSRegularExpression(pattern: pattern) else {
+            return text
+        }
+        let range = NSRange(text.startIndex..<text.endIndex, in: text)
+        return regex.stringByReplacingMatches(
+            in: text, range: range, withTemplate: "")
     }
 
     // MARK: Session-level prompts
@@ -298,7 +330,9 @@ struct PromptBuilder: Sendable {
             + "Plain text, no markdown. Output ONLY tagged lines: "
             + "first 1-\(overviewCap) lines \"O: <\(spec.overviewHint)>\", "
             + "then \(sectionClauses). Use only information from the notes; "
-            + "never invent names, numbers, or events. Keep names, numbers, "
+            + "keep O lines high-level; do not repeat the same details that "
+            + "you put in the tagged section lines. "
+            + "Never invent names, numbers, or events. Keep names, numbers, "
             + "and dates exactly as written in the notes. "
             + "Skip categories with nothing to report. "
             + "Merge duplicates. No other text."
@@ -521,18 +555,35 @@ struct PromptBuilder: Sendable {
     /// `limit` to both — small models treat the count as a quota to fill,
     /// so the parser has to enforce it.
     func hotwordSuggestionPrompt(
-        transcript: String, limit: Int = 8
+        transcript: String,
+        sourceLanguage: AppLanguage? = nil,
+        targetLanguage: AppLanguage? = nil,
+        limit: Int = 8
     ) -> (system: String, user: String) {
+        let sourceClause = sourceLanguage.map {
+            "The display term must be in \($0.promptName), the spoken/source language. "
+        } ?? ""
+        let renderingClause: String
+        if let targetLanguage, targetLanguage != sourceLanguage {
+            renderingClause = "When the transcript also shows a \(targetLanguage.promptName) "
+                + "translation after an arrow, include that translated rendering in "
+                + "the middle field; otherwise leave the middle field blank. "
+        } else {
+            renderingClause = "Leave the middle field blank. "
+        }
         let system = """
         Find terms in the transcript that a speech recognizer likely got \
         wrong or will get wrong: person names, company/product names, and \
         domain jargon with unusual spelling or pronunciation. Only include \
-        a term if a recognizer could plausibly confuse or garble it. Skip \
+        source-language terms, not their translations. \(sourceClause)\
+        Include a term only if a recognizer could plausibly confuse or garble it. Skip \
         everyday words, famous names, brands and places every recognizer \
         already knows, numbers, and anything longer than a few words. \
+        \(renderingClause)\
         Fewer is better — if nothing qualifies, output nothing. \
         Output at most \(limit) lines, each exactly: \
-        term | short note (e.g. person name). Output nothing else.
+        source term | target rendering or blank | short note (e.g. person name). \
+        Output nothing else.
         """
         return (system, "Transcript:\n\(transcript)")
     }
@@ -559,15 +610,17 @@ struct PromptBuilder: Sendable {
     }
 
     func parseHotwordSuggestions(
-        _ raw: String, limit: Int = 8
-    ) -> [(term: String, note: String)] {
+        _ raw: String, limit: Int = 8, targetLanguage: AppLanguage? = nil
+    ) -> [HotwordSuggestion] {
         // Small models repeat themselves; dedupe or SwiftUI gets duplicate
         // ForEach identities downstream.
         var seen = Set<String>()
-        let parsed: [(term: String, note: String)] = cleanResponse(raw)
+        let parsed: [HotwordSuggestion] = cleanResponse(raw)
             .split(separator: "\n")
             .compactMap { line in
-                let parts = line.split(separator: "|", maxSplits: 1)
+                let parts = line.split(
+                    separator: "|", maxSplits: 2,
+                    omittingEmptySubsequences: false)
                 guard let first = parts.first else { return nil }
                 let term = first.trimmingCharacters(in: .whitespaces)
                     .trimmingCharacters(in: CharacterSet(charactersIn: "-•*1234567890. "))
@@ -577,9 +630,18 @@ struct PromptBuilder: Sendable {
                       term.rangeOfCharacter(from: .letters) != nil,
                       term.split(separator: " ").count <= 4,
                       seen.insert(term.lowercased()).inserted else { return nil }
-                let note = parts.count > 1
+                let rendering = parts.count > 2
                     ? parts[1].trimmingCharacters(in: .whitespaces) : ""
-                return (term, note)
+                let notePart = parts.count > 2 ? parts[2] : (parts.dropFirst().first ?? "")
+                let note = notePart.trimmingCharacters(in: .whitespaces)
+                var renderings: [AppLanguage: String] = [:]
+                if let targetLanguage,
+                   !rendering.isEmpty,
+                   rendering.caseInsensitiveCompare(term) != .orderedSame {
+                    renderings[targetLanguage] = rendering
+                }
+                return HotwordSuggestion(
+                    term: term, renderings: renderings, note: note)
             }
         return Array(parsed.prefix(limit))
     }

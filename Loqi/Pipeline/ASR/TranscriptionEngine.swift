@@ -8,7 +8,7 @@ import os
 /// (Apple SpeechAnalyzer = instant word-by-word, SenseVoice = higher
 /// accuracy in ~1s pulses).
 protocol SpeechEngine: Actor {
-    nonisolated var language: AppLanguage { get }
+    nonisolated var sourceSelection: RecognitionLanguageSelection { get }
     /// Build the recognition stack; returns the audio format to feed.
     func prepare(contextualStrings: [String]) async throws -> AVAudioFormat
     func start() async throws -> AsyncStream<TranscriptionEvent>
@@ -25,6 +25,7 @@ protocol SpeechEngine: Actor {
 /// SpeechAnalyzer cannot be restarted, so prepare() always rebuilds.
 actor TranscriptionEngine: SpeechEngine {
     let language: AppLanguage
+    nonisolated var sourceSelection: RecognitionLanguageSelection { .language(language) }
 
     private var analyzer: SpeechAnalyzer?
     private var transcriber: SpeechTranscriber?
@@ -113,9 +114,9 @@ actor TranscriptionEngine: SpeechEngine {
                     }
                     logger.debug("result isFinal=\(result.isFinal): \(text, privacy: .private)")
                     if result.isFinal {
-                        await self?.emit(.finalized(text))
+                        await self?.emit(.finalized(text, language: self?.language))
                     } else {
-                        await self?.emit(.volatile(text))
+                        await self?.emit(.volatile(text, language: self?.language))
                     }
                 }
                 logger.info("results stream ended")

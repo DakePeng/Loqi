@@ -63,6 +63,7 @@ struct HorizontalCaptionView: View {
                         .font(.callout.monospacedDigit())
                         .foregroundStyle(Color(white: 0.5))
                 }
+                #if os(iOS)
                 Button {
                     LiveCaptionsView.rotate(to: .portrait)
                 } label: {
@@ -73,6 +74,7 @@ struct HorizontalCaptionView: View {
                         .background(Color(white: 0.16), in: Circle())
                 }
                 .accessibilityLabel("Portrait")
+                #endif
                 Button(action: toggle) {
                     Image(systemName: pipeline.isRunning ? "stop.fill" : "mic.fill")
                         .font(.body.weight(.semibold))
@@ -101,7 +103,9 @@ struct HorizontalCaptionView: View {
             }
             .padding(.top, 12)
         }
+#if os(iOS)
         .statusBarHidden()
+#endif
         .persistentSystemOverlays(.hidden)
     }
 

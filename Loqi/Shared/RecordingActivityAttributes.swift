@@ -1,3 +1,4 @@
+#if os(iOS)
 import ActivityKit
 import Foundation
 
@@ -20,3 +21,4 @@ struct RecordingActivityAttributes: ActivityAttributes {
     /// transcribe-only).
     var sessionTitle: String
 }
+#endif

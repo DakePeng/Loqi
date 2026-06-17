@@ -6,6 +6,9 @@ import Foundation
 struct PendingHotword: Identifiable, Codable, Sendable, Equatable {
     var id = UUID()
     var term: String
+    /// Preferred renderings mined alongside the source-language term.
+    /// Optional so existing suggestion files keep loading.
+    var renderings: [AppLanguage: String]?
     var note: String = ""
     /// Where the suggestion was mined, so the inbox can group one session's
     /// batch and offer "Ignore all". Optional: suggestions persisted before
@@ -17,4 +20,13 @@ struct PendingHotword: Identifiable, Codable, Sendable, Equatable {
     /// When the suggestion was mined. Nil for legacy items persisted before
     /// this field existed — those are exempt from auto-retirement.
     var createdAt: Date?
+}
+
+/// A candidate vocabulary item mined by the LLM. `term` is the source-
+/// language display/canonical form; `renderings` carries translated forms
+/// so accepting a suggestion can teach both sides of a language pair.
+struct HotwordSuggestion: Sendable, Equatable {
+    var term: String
+    var renderings: [AppLanguage: String] = [:]
+    var note: String = ""
 }

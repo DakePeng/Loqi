@@ -13,7 +13,7 @@ struct ImportAudioSheet: View {
     @Bindable var pipeline: CaptionPipeline
     @Environment(\.dismiss) private var dismiss
 
-    @AppStorage("captions.source") private var source: AppLanguage = .english
+    @AppStorage("captions.source") private var sourceRaw = AppLanguage.english.rawValue
     /// Shared with the Record screen: empty = transcribe only (default).
     @AppStorage("captions.translation") private var translationRaw = ""
     @AppStorage("captions.speakerCount") private var speakerCount = 0
@@ -28,6 +28,7 @@ struct ImportAudioSheet: View {
     @State private var showSpeakerDownloadPrompt = false
 
     private var translationTarget: AppLanguage? { AppLanguage(rawValue: translationRaw) }
+    private var source: AppLanguage { AppLanguage(rawValue: sourceRaw) ?? .english }
 
     /// Diarization is requested but the model isn't on disk yet.
     private var needsSpeakerModelConsent: Bool {
@@ -50,10 +51,12 @@ struct ImportAudioSheet: View {
             Form {
                 Section {
                     LabeledContent("File", value: url.lastPathComponent)
-                    Picker("Language", selection: $source) {
-                        ForEach(AppLanguage.allCases) { Text($0.displayName).tag($0) }
+                    Picker("Language", selection: $sourceRaw) {
+                        ForEach(AppLanguage.allCases) {
+                            Text($0.displayName).tag($0.rawValue)
+                        }
                     }
-                    .onChange(of: source) {
+                    .onChange(of: sourceRaw) {
                         if translationRaw == source.rawValue { translationRaw = "" }
                     }
                     Picker("Translation", selection: $translationRaw) {
@@ -85,7 +88,9 @@ struct ImportAudioSheet: View {
                 }
             }
             .navigationTitle("Import Audio")
+            #if os(iOS)
             .navigationBarTitleDisplayMode(.inline)
+            #endif
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("Cancel") { dismiss() }

@@ -1,4 +1,5 @@
 import SwiftUI
+import Translation
 
 /// Onboarding step: the selected models download one after another with a
 /// row per item. Failures don't block the queue — each failed row offers
@@ -39,6 +40,9 @@ struct OnboardingDownloadStep: View {
         .onChange(of: model.qwen3Store.progress) { _, fraction in
             model.item(for: .qwen3ASR)?.speedometer.update(fraction)
         }
+        .background {
+            OnboardingTranslationPackHost(model: model)
+        }
     }
 
     private func itemRow(_ item: OnboardingDownloadModel.Item) -> some View {
@@ -52,10 +56,10 @@ struct OnboardingDownloadStep: View {
 
             switch item.status {
             case .downloading:
-                if item.kind == .appleSpeech {
+                if item.kind.usesSystemAssetProgress {
                     ProgressView(value: item.assetFraction)
                     if let language = item.assetCaption {
-                        Text("Downloading \(language)…")
+                        Text(item.kind.systemAssetProgressText(language))
                             .font(.footnote)
                             .foregroundStyle(.secondary)
                     }
@@ -77,7 +81,7 @@ struct OnboardingDownloadStep: View {
         }
         .padding(14)
         .background(
-            Color(.secondarySystemBackground),
+            Color.loqiSecondarySystemBackground,
             in: RoundedRectangle(cornerRadius: 14, style: .continuous))
     }
 
@@ -107,7 +111,7 @@ struct OnboardingDownloadStep: View {
         VStack(spacing: 10) {
             if model.allSettled {
                 if model.anyUnfinished {
-                    Text("Some downloads didn’t finish. You can get them anytime in Settings.")
+                    Text("Some downloads didn’t finish. Models stay in Settings. System packs prompt again on first use.")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                         .multilineTextAlignment(.center)
@@ -128,5 +132,62 @@ struct OnboardingDownloadStep: View {
         .frame(maxWidth: .infinity)
         .padding()
         .background(.bar)
+    }
+}
+
+private struct OnboardingTranslationPackHost: View {
+    let model: OnboardingDownloadModel
+
+    var body: some View {
+        if let pair = model.translationPreparationPair {
+            TranslationPackPreparationHost(pair: pair, model: model)
+                .id(pair)
+        }
+    }
+}
+
+private struct TranslationPackPreparationHost: View {
+    let pair: LanguagePair
+    let model: OnboardingDownloadModel
+
+    @State private var configuration: TranslationSession.Configuration?
+    @State private var completed = false
+
+    var body: some View {
+        Color.clear
+            .frame(width: 0, height: 0)
+            .translationTask(configuration) { session in
+                let box = TranslationSessionBox(session: session)
+                do {
+                    try await box.prepare()
+                    finish(errorMessage: nil)
+                } catch is CancellationError {
+                    finish(errorMessage: String(
+                        localized: "Translation pack download was cancelled."))
+                } catch {
+                    finish(errorMessage: error.localizedDescription)
+                }
+            }
+            .onAppear {
+                configuration = TranslationSession.Configuration(
+                    source: pair.source.translationLanguage,
+                    target: pair.target.translationLanguage)
+            }
+            .onDisappear {
+                guard !completed else { return }
+                Task {
+                    model.completeTranslationPreparation(
+                        for: pair,
+                        errorMessage: String(
+                            localized: "Translation pack download was cancelled."))
+                }
+            }
+    }
+
+    @MainActor
+    private func finish(errorMessage: String?) {
+        guard !completed else { return }
+        completed = true
+        model.completeTranslationPreparation(for: pair, errorMessage: errorMessage)
     }
 }

@@ -142,6 +142,23 @@ struct CaptionStoreTests {
         #expect(store.entries.isEmpty)
     }
 
+    @Test func targetSwapOnlyAffectsNewEntries() {
+        let store = CaptionStore()
+        let oldDirection = LanguagePair(source: .english, target: .chinese)
+        let newDirection = LanguagePair(source: .english, target: .japanese)
+
+        store.applyVolatile(text: "first", direction: oldDirection)
+        let first = store.finalizeActive(text: "first", direction: oldDirection)
+        store.setDraft("第一", for: first!.id)
+
+        store.applyVolatile(text: "second", direction: newDirection)
+        let second = store.finalizeActive(text: "second", direction: newDirection)
+
+        #expect(store.entry(for: first!.id)?.direction == oldDirection)
+        #expect(store.entry(for: first!.id)?.displayTranslation == "第一")
+        #expect(store.entry(for: second!.id)?.direction == newDirection)
+    }
+
     @Test func speakerAttribution() {
         let store = CaptionStore()
         store.applyVolatile(text: "hi", direction: enToZh)

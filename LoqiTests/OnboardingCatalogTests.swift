@@ -56,8 +56,13 @@ struct OnboardingCatalogTests {
 
     // MARK: Item lineup
 
-    @Test func recommendedSelectionIsSenseVoiceDiarizerLLM() {
-        #expect(OnboardingItemKind.defaultSelection == [.senseVoice, .diarizer, .llm])
+    @Test func recommendedSelectionIncludesTranslationPacks() {
+        #expect(OnboardingItemKind.defaultSelection == [
+            .translationPacks,
+            .senseVoice,
+            .diarizer,
+            .llm,
+        ])
     }
 
     @Test func appleSpeechIsAlwaysIncludedAndSizeless() {
@@ -66,17 +71,35 @@ struct OnboardingCatalogTests {
         #expect(OnboardingItemKind.allCases.filter(\.alwaysIncluded) == [.appleSpeech])
     }
 
+    @Test func translationPacksAreRecommendedAndSizeless() {
+        #expect(OnboardingItemKind.translationPacks.isRecommended)
+        #expect(!OnboardingItemKind.translationPacks.alwaysIncluded)
+        #expect(OnboardingItemKind.translationPacks.downloadBytes == nil)
+    }
+
     @Test func everyModelItemKnowsItsSize() {
-        for kind in OnboardingItemKind.allCases where kind != .appleSpeech {
+        for kind in OnboardingItemKind.allCases
+            where kind != .appleSpeech && kind != .translationPacks {
             #expect((kind.downloadBytes ?? 0) > 0)
         }
+    }
+
+    @Test func translationPackPairsCoverEveryOrderedLanguagePair() {
+        #expect(OnboardingItemKind.translationPairs.count == 12)
+        #expect(!OnboardingItemKind.translationPairs.contains {
+            $0.source == $0.target
+        })
+        #expect(OnboardingItemKind.translationPairs.contains(
+            LanguagePair(source: .english, target: .chinese)))
+        #expect(OnboardingItemKind.translationPairs.contains(
+            LanguagePair(source: .korean, target: .japanese)))
     }
 
     // MARK: Total label
 
     @Test func totalSumsSelectedUninstalledItems() {
         let total = OnboardingItemKind.totalBytes(
-            for: [.senseVoice, .diarizer, .llm], installed: [])
+            for: [.translationPacks, .senseVoice, .diarizer, .llm], installed: [])
         let expected = SenseVoiceModelStore.totalExpectedBytes
             + VoiceprintService.approximateDownloadBytes
             + ModelCatalog.default.downloadBytes
@@ -97,8 +120,22 @@ struct OnboardingCatalogTests {
 
     @Test func queueRunsFallbackEngineFirstAndOptionalLast() {
         let queue = OnboardingItemKind.queueOrder(
-            selection: [.qwen3ASR, .llm, .diarizer, .senseVoice], installed: [])
-        #expect(queue == [.appleSpeech, .senseVoice, .diarizer, .llm, .qwen3ASR])
+            selection: [
+                .translationPacks,
+                .qwen3ASR,
+                .llm,
+                .diarizer,
+                .senseVoice,
+            ],
+            installed: [])
+        #expect(queue == [
+            .appleSpeech,
+            .translationPacks,
+            .senseVoice,
+            .diarizer,
+            .llm,
+            .qwen3ASR,
+        ])
     }
 
     @Test func queueDropsInstalledAndUnselected() {

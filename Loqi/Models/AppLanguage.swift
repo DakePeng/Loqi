@@ -69,6 +69,16 @@ enum AppLanguage: String, CaseIterable, Identifiable, Codable, Sendable {
         }
         return nil
     }
+
+    init?(speechRecognitionCode: String) {
+        switch speechRecognitionCode {
+        case "en": self = .english
+        case "zh", "yue": self = .chinese
+        case "ja": self = .japanese
+        case "ko": self = .korean
+        default: return nil
+        }
+    }
 }
 
 struct LanguagePair: Hashable, Codable, Sendable {
@@ -78,4 +88,85 @@ struct LanguagePair: Hashable, Codable, Sendable {
     var reversed: LanguagePair { LanguagePair(source: target, target: source) }
 
     var displayName: String { "\(source.displayName) → \(target.displayName)" }
+}
+
+enum RecognitionLanguageSelection: Hashable, Codable, Sendable {
+    static let autoRawValue = "auto"
+
+    case auto
+    case language(AppLanguage)
+
+    init(rawValue: String?) {
+        if rawValue == Self.autoRawValue {
+            self = .auto
+        } else if let rawValue, let language = AppLanguage(rawValue: rawValue) {
+            self = .language(language)
+        } else {
+            self = .language(.english)
+        }
+    }
+
+    var rawValue: String {
+        switch self {
+        case .auto: Self.autoRawValue
+        case .language(let language): language.rawValue
+        }
+    }
+
+    var displayName: String {
+        switch self {
+        case .auto: String(localized: "Auto")
+        case .language(let language): language.displayName
+        }
+    }
+
+    /// Fallback for APIs that still need a concrete locale before speech
+    /// arrives, including the current Apple SpeechAnalyzer wrapper.
+    var fallbackLanguage: AppLanguage {
+        switch self {
+        case .auto: AppLanguage.devicePreferred ?? .english
+        case .language(let language): language
+        }
+    }
+}
+
+struct RecognitionRoute: Hashable, Sendable {
+    var source: RecognitionLanguageSelection
+    /// nil means transcribe-only: each utterance targets its detected source.
+    var target: AppLanguage?
+
+    var fallbackDirection: LanguagePair {
+        let fallback = source.fallbackLanguage
+        return LanguagePair(source: fallback, target: target ?? fallback)
+    }
+
+    var displayName: String {
+        if let target {
+            "\(source.displayName) → \(target.displayName)"
+        } else {
+            source.displayName
+        }
+    }
+
+    var possibleTranslationDirections: Set<LanguagePair> {
+        guard let target else { return [] }
+        switch source {
+        case .auto:
+            return Set(AppLanguage.allCases.compactMap { language in
+                language == target ? nil : LanguagePair(source: language, target: target)
+            })
+        case .language(let language):
+            return language == target ? [] : [LanguagePair(source: language, target: target)]
+        }
+    }
+
+    /// Translation sessions are system-owned SwiftUI tasks. In Auto mode,
+    /// don't mount every possible source→target task up front; create the
+    /// concrete direction lazily when speech detection yields a language.
+    var eagerTranslationDirections: Set<LanguagePair> {
+        switch source {
+        case .auto: []
+        case .language: possibleTranslationDirections
+        }
+    }
 }

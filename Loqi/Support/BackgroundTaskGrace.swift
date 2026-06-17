@@ -1,4 +1,6 @@
+#if os(iOS)
 import UIKit
+#endif
 
 /// Best-effort extra runtime when the app backgrounds mid-job: a UIKit
 /// background task buys ~30 seconds before suspension freezes the work
@@ -7,6 +9,7 @@ import UIKit
 /// the expiration handler ends synchronously, as the watchdog demands.
 @MainActor
 final class BackgroundTaskGrace {
+    #if os(iOS)
     private var identifier: UIBackgroundTaskIdentifier = .invalid
 
     func begin(name: String) {
@@ -21,4 +24,8 @@ final class BackgroundTaskGrace {
         UIApplication.shared.endBackgroundTask(identifier)
         identifier = .invalid
     }
+    #else
+    func begin(name: String) {}
+    func end() {}
+    #endif
 }

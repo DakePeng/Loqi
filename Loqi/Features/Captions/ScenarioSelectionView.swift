@@ -59,19 +59,6 @@ struct ScenarioSelectionView: View {
             .padding(20)
             .frame(maxWidth: .infinity)
         }
-        .confirmationDialog(
-            "Delete this session?",
-            isPresented: $confirmDiscard,
-            titleVisibility: .visible
-        ) {
-            Button("Delete recording, transcript and notes", role: .destructive) {
-                pipeline.archive.delete(id: sessionID)
-                pipeline.clearLastFinishedSession()
-            }
-            Button("Cancel", role: .cancel) {}
-        } message: {
-            Text("This can't be undone.")
-        }
         .task(id: sessionID) {
             // Suggestion only — never woken by a model download: detection
             // is skipped entirely until the weights exist.
@@ -131,7 +118,7 @@ struct ScenarioSelectionView: View {
             .frame(maxWidth: .infinity, alignment: .leading)
             .padding(12)
             .background(
-                Color(.secondarySystemBackground),
+                Color.loqiSecondarySystemBackground,
                 in: RoundedRectangle(cornerRadius: 12, style: .continuous))
         }
     }
@@ -210,7 +197,7 @@ struct ScenarioSelectionView: View {
             .frame(maxWidth: .infinity, minHeight: 72)
             .padding(.vertical, 12)
             .background(
-                Color(.secondarySystemBackground),
+                Color.loqiSecondarySystemBackground,
                 in: RoundedRectangle(cornerRadius: 14, style: .continuous))
             .overlay {
                 if style == suggestedStyle {
@@ -263,6 +250,20 @@ struct ScenarioSelectionView: View {
                     .font(.footnote)
             }
             .buttonStyle(.borderless)
+            .confirmationDialog(
+                "Delete this session?",
+                isPresented: $confirmDiscard,
+                titleVisibility: .visible
+            ) {
+                Button("Delete recording, transcript and notes", role: .destructive) {
+                    pipeline.hotwords.discardSuggestions(forSession: sessionID)
+                    pipeline.archive.delete(id: sessionID)
+                    pipeline.clearLastFinishedSession()
+                }
+                Button("Cancel", role: .cancel) {}
+            } message: {
+                Text("This can't be undone.")
+            }
         }
     }
 

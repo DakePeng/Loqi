@@ -27,7 +27,18 @@ final class AudioCaptureService: @unchecked Sendable {
     private(set) var isRunning = false
 
     static func requestPermission() async -> Bool {
+        #if os(iOS)
         await AVAudioApplication.requestRecordPermission()
+        #else
+        switch AVCaptureDevice.authorizationStatus(for: .audio) {
+        case .authorized:
+            return true
+        case .notDetermined:
+            return await AVCaptureDevice.requestAccess(for: .audio)
+        default:
+            return false
+        }
+        #endif
     }
 
     /// Start the engine. Returns a stream of buffers in `outputFormat`
@@ -38,6 +49,7 @@ final class AudioCaptureService: @unchecked Sendable {
     ) throws -> (buffers: AsyncStream<AudioChunk>, levels: AsyncStream<Levels>) {
         precondition(!isRunning, "AudioCaptureService started twice")
 
+        #if os(iOS)
         let session = AVAudioSession.sharedInstance()
         // Capture-only session (.playAndRecord dated from the deleted TTS
         // feature; saved-session playback runs its own .playback session).
@@ -51,6 +63,7 @@ final class AudioCaptureService: @unchecked Sendable {
         try session.setCategory(.record, mode: .default)
         try session.setActive(true)
         Self.tuneForRoomCapture(session)
+        #endif
 
         // Fresh adaptation per turn — a stale boost from the previous room
         // shouldn't color the first seconds — with the reach the user's
@@ -113,9 +126,12 @@ final class AudioCaptureService: @unchecked Sendable {
         levelContinuation = nil
         converter = nil
         isRunning = false
+        #if os(iOS)
         try? AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
+        #endif
     }
 
+#if os(iOS)
     /// Meeting-room tuning for the built-in mic: the default data source
     /// runs a directional pattern favoring the device holder, so ask for
     /// omnidirectional pickup (and full input gain where settable) to give
@@ -140,6 +156,7 @@ final class AudioCaptureService: @unchecked Sendable {
             try? session.setInputGain(1)
         }
     }
+#endif
 }
 
 /// Adaptive far-field boost. The system mic chain (AGC included) is tuned

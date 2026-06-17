@@ -74,9 +74,8 @@ final class TranslationCoordinator {
     /// observes `requiredDirections` and mounts the new session view.
     func addDirection(_ direction: LanguagePair) async {
         guard direction.source != direction.target,
-              !requiredDirections.contains(direction),
-              !pivotPairs.contains(direction) else { return }
-        if await needsPivot(direction) {
+              !requiredDirections.contains(direction) else { return }
+        if pivotPairs.contains(direction) || await needsPivot(direction) {
             pivotPairs.insert(direction)
             requiredDirections.insert(LanguagePair(source: direction.source, target: .english))
             requiredDirections.insert(LanguagePair(source: .english, target: direction.target))

@@ -115,3 +115,52 @@ struct ProcessingETATests {
         #expect(eta.remaining == nil)
     }
 }
+
+struct RecordingElapsedFormatterTests {
+    @Test func formatsSubHourDurationsOnOneLine() {
+        let startedAt = Date(timeIntervalSinceReferenceDate: 100)
+
+        #expect(RecordingElapsedFormatter.string(
+            since: startedAt,
+            now: startedAt.addingTimeInterval(0)) == "0:00")
+        #expect(RecordingElapsedFormatter.string(
+            since: startedAt,
+            now: startedAt.addingTimeInterval(65)) == "1:05")
+    }
+
+    @Test func formatsHourDurationsWithHours() {
+        let startedAt = Date(timeIntervalSinceReferenceDate: 100)
+
+        #expect(RecordingElapsedFormatter.string(
+            since: startedAt,
+            now: startedAt.addingTimeInterval(3_661)) == "1:01:01")
+    }
+
+    @Test func clampsNegativeDurationsToZero() {
+        let startedAt = Date(timeIntervalSinceReferenceDate: 100)
+
+        #expect(RecordingElapsedFormatter.string(
+            since: startedAt,
+            now: startedAt.addingTimeInterval(-5)) == "0:00")
+    }
+}
+
+struct RecordCopyTests {
+    @Test func recordNotesDoNotReferToTappingTheMic() throws {
+        let repoRoot = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+        let files = [
+            repoRoot.appending(path: "Loqi/Features/Captions/LiveCaptionsView.swift"),
+            repoRoot.appending(path: "Loqi/Localizable.xcstrings"),
+        ]
+        let forbiddenPhrases = ["Tap the mic", "点按麦克风"]
+
+        for file in files {
+            let contents = try String(contentsOf: file, encoding: .utf8)
+            for phrase in forbiddenPhrases {
+                #expect(!contents.contains(phrase))
+            }
+        }
+    }
+}

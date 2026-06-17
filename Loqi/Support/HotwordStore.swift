@@ -104,7 +104,7 @@ final class HotwordStore {
     /// stale unreviewed suggestions shouldn't churn. Tag the source session
     /// so the inbox can group the batch and offer "Ignore all".
     func enqueueSuggestions(
-        _ items: [(term: String, note: String)],
+        _ items: [HotwordSuggestion],
         sessionID: UUID? = nil,
         sessionTitle: String? = nil
     ) {
@@ -118,12 +118,25 @@ final class HotwordStore {
                   })
             else { continue }
             pending.append(PendingHotword(
-                term: trimmed, note: item.note,
+                term: trimmed,
+                renderings: item.renderings.isEmpty ? nil : item.renderings,
+                note: item.note,
                 sessionID: sessionID, sessionTitle: sessionTitle,
                 createdAt: Date()))
             changed = true
         }
         if changed { persistPending() }
+    }
+
+    func enqueueSuggestions(
+        _ items: [(term: String, note: String)],
+        sessionID: UUID? = nil,
+        sessionTitle: String? = nil
+    ) {
+        enqueueSuggestions(
+            items.map { HotwordSuggestion(term: $0.term, note: $0.note) },
+            sessionID: sessionID,
+            sessionTitle: sessionTitle)
     }
 
     /// Promote a suggestion to a real hotword and remove it from the queue.
@@ -132,7 +145,10 @@ final class HotwordStore {
         persistPending()
         // A raced manual add may have made it known meanwhile.
         guard !isKnown(suggestion.term) else { return }
-        add(Hotword(term: suggestion.term, note: suggestion.note))
+        add(Hotword(
+            term: suggestion.term,
+            renderings: suggestion.renderings ?? [:],
+            note: suggestion.note))
     }
 
     func dismiss(_ suggestion: PendingHotword) {
@@ -147,6 +163,12 @@ final class HotwordStore {
         pending.removeAll { $0.sessionID == sessionID }
         guard pending.count != before else { return }
         persistPending()
+    }
+
+    /// A deleted session should not leave its mined recommendations behind
+    /// in the Vocabulary inbox.
+    func discardSuggestions(forSession sessionID: UUID) {
+        dismissAll(sessionID: sessionID)
     }
 
     /// Drop suggestions that have sat unreviewed past the retirement window.

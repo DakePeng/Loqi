@@ -2,9 +2,10 @@ import SwiftUI
 
 /// First-run flow: mic permission, then a guided model setup — pick a
 /// download region, choose models (recommended: SenseVoice + speaker model
-/// + Qwen3.5 2B, with Qwen3-ASR optional), and watch them install. Apple
-/// speech assets ride along as the always-included fallback live engine.
-/// Every download is skippable; Settings manages them all afterwards.
+/// + Qwen3.5 2B + translation packs, with Qwen3-ASR optional), and watch
+/// them install. Apple speech assets ride along as the always-included
+/// fallback live engine. Every download is skippable; models remain in
+/// Settings and system packs can prompt again on first use.
 struct OnboardingView: View {
     let pipeline: CaptionPipeline
     let onComplete: () -> Void
@@ -85,9 +86,7 @@ struct OnboardingView: View {
                     .font(.footnote)
                     .foregroundStyle(.red)
                 Button("Open Settings") {
-                    if let url = URL(string: UIApplication.openSettingsURLString) {
-                        UIApplication.shared.open(url)
-                    }
+                    SystemSettings.openMicrophonePrivacy()
                 }
                 Button("Continue anyway") { step = .region }
                     .buttonStyle(.borderedProminent)

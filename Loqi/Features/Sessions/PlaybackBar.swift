@@ -37,8 +37,10 @@ final class AudioPlaybackController {
             isPlaying = false
             ticker?.cancel()
         } else {
+            #if os(iOS)
             try? AVAudioSession.sharedInstance().setCategory(.playback)
             try? AVAudioSession.sharedInstance().setActive(true)
+            #endif
             player.play()
             isPlaying = true
             startTicker()
@@ -58,8 +60,10 @@ final class AudioPlaybackController {
         isPlaying = false
         currentTime = 0
         duration = 0
+        #if os(iOS)
         try? AVAudioSession.sharedInstance().setActive(
             false, options: .notifyOthersOnDeactivation)
+        #endif
     }
 
     private func startTicker() {

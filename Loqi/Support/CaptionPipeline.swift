@@ -1,22 +1,25 @@
 import AVFoundation
 import Foundation
 import Observation
+import os
+
+#if os(iOS)
 import UIKit
 import WidgetKit
-import os
+#endif
 
 /// Explicit session lifecycle. nil-checks on activeDirection used to encode
 /// three different states ("no session" / "turn released" / "interrupted"),
 /// which let interruption recovery fire from the wrong state.
 enum SessionPhase: Equatable {
     case idle
-    case listening(LanguagePair)
+    case listening(RecognitionRoute)
     case paused(PauseReason)
 }
 
 enum PauseReason: Equatable {
     /// Phone call / Siri took the mic; remembers what to resume.
-    case interrupted(resume: LanguagePair)
+    case interrupted(resume: RecognitionRoute)
 }
 
 /// Wires the whole pipeline together for one listening session:
@@ -67,7 +70,11 @@ final class CaptionPipeline {
         return false
     }
     var activeDirection: LanguagePair? {
-        if case .listening(let direction) = phase { return direction }
+        if case .listening(let route) = phase { return route.fallbackDirection }
+        return nil
+    }
+    var activeRoute: RecognitionRoute? {
+        if case .listening(let route) = phase { return route }
         return nil
     }
 
@@ -122,7 +129,7 @@ final class CaptionPipeline {
 
     private let audio = AudioCaptureService()
     private let segmenter = TranscriptSegmenter()
-    private var engines: [AppLanguage: any SpeechEngine] = [:]
+    private var engines: [RecognitionLanguageSelection: any SpeechEngine] = [:]
     /// Which backend the cached engines were built for; a Settings change
     /// invalidates them.
     private var enginesKind = ""
@@ -257,16 +264,18 @@ final class CaptionPipeline {
         // shed-thrashed the LLM (unload → silence-gap reload → pressure →
         // unload…) and killed in-flight summaries. Only shed when OUR
         // headroom is actually gone.
+        #if os(iOS)
         let pressure = DispatchSource.makeMemoryPressureSource(
             eventMask: .critical, queue: .main)
         pressure.setEventHandler { [weak self] in
             MainActor.assumeIsolated {
-                guard os_proc_available_memory() < Self.memoryShedFloor else { return }
+                    guard SystemResources.availableMemoryBytes() < Self.memoryShedFloor else { return }
                 self?.handleMemoryWarning()
             }
         }
         pressure.activate()
         memoryPressureSource = pressure
+        #endif
     }
 
     /// Per-app free-memory floor under which a critical system-pressure
@@ -286,8 +295,10 @@ final class CaptionPipeline {
         defer {
             // The crashed process never reset the widget state; without
             // this the Control Center toggle keeps claiming "recording".
+            #if os(iOS)
             RecordingSharedState.write(.init(isRunning: false, startedAt: nil))
             ControlCenter.shared.reloadControls(ofKind: RecordingSharedState.controlKind)
+            #endif
         }
         // The crash may have raced the clean shutdown's journal clear.
         guard !archive.sessions.contains(where: { $0.id == record.id }) else { return }
@@ -331,8 +342,11 @@ final class CaptionPipeline {
     /// Refresh contextual strings on every built engine (live ones included)
     /// after the user edits the hotword list.
     private func pushHotwordsToEngines() {
-        for (language, engine) in engines {
-            let strings = hotwords.biasStrings(for: language)
+        for (source, engine) in engines {
+            let strings: [String] = switch source {
+            case .auto: []
+            case .language(let language): hotwords.biasStrings(for: language)
+            }
             Task { try? await engine.applyContextualStrings(strings) }
         }
     }
@@ -361,17 +375,24 @@ final class CaptionPipeline {
 
     /// Start a recording session.
     func start(direction: LanguagePair) async throws {
+        try await start(route: RecognitionRoute(
+            source: .language(direction.source),
+            target: direction.source == direction.target ? nil : direction.target))
+    }
+
+    /// Start a recording session.
+    func start(route: RecognitionRoute) async throws {
         try await serialized { [self] in
             guard phase == .idle else { return }
-            try await beginSession(direction: direction)
+            try await beginSession(route: route)
         }
     }
 
-    private func beginSession(direction: LanguagePair) async throws {
+    private func beginSession(route: RecognitionRoute) async throws {
         lastError = nil
         statusMessages.removeAll()
 
-        await translator.setDirections([direction])
+        await translator.setDirections(route.eagerTranslationDirections)
         store.currentMode = sessionMode
         // Fresh page per session: the previous session's transcript (already
         // archived — or deliberately discarded) must not lead the new one,
@@ -419,10 +440,10 @@ final class CaptionPipeline {
             await voiceprint.stopDiarization()
         }
 
-        ensureEngine(for: direction.source)
+        ensureEngine(for: route.source)
 
         do {
-            try await beginTurn(direction: direction)
+            try await beginTurn(route: route)
         } catch {
             // Unwind everything beginSession set up, or a failed start
             // leaks state for a session that doesn't exist.
@@ -440,9 +461,11 @@ final class CaptionPipeline {
         // First journal heartbeat: from here on, a dead process leaves
         // enough on disk to recover the session.
         writeJournal()
-        publishSessionStarted(direction: direction)
+        publishSessionStarted(route: route)
         installSystemObservers()
+        #if os(iOS)
         UIApplication.shared.isIdleTimerDisabled = true
+        #endif
         watchThermalPolicy()
         // The LLM load (~1.3GB of memory traffic) is deferred to the first
         // silence gap so it can't lag the captions; this is the fallback in
@@ -597,7 +620,9 @@ final class CaptionPipeline {
         guard phase != .idle else { return }
         await endTurn()
         phase = .idle
+        #if os(iOS)
         UIApplication.shared.isIdleTimerDisabled = false
+        #endif
         thermalWatch?.cancel()
         thermalWatch = nil
         removeSystemObservers()
@@ -677,26 +702,28 @@ final class CaptionPipeline {
 
     /// Mirror session state to the lock screen (Live Activity) and the
     /// widget extension (Control Center toggle reads the app group).
-    private func publishSessionStarted(direction: LanguagePair) {
-        let title = direction.source == direction.target
-            ? direction.source.displayName
-            : direction.displayName
-        liveActivity.start(startedAt: sessionStartedAt ?? .now, title: title)
+    private func publishSessionStarted(route: RecognitionRoute) {
+        liveActivity.start(startedAt: sessionStartedAt ?? .now, title: route.displayName)
+        #if os(iOS)
         RecordingSharedState.write(.init(isRunning: true, startedAt: sessionStartedAt))
         ControlCenter.shared.reloadControls(ofKind: RecordingSharedState.controlKind)
+        #endif
     }
 
     /// `label` lets the "Saved" state show the session's first note
     /// headline when live mapping produced one — content beats boilerplate.
     private func publishSessionEnded(label: String? = nil) {
         liveActivity.end(finalLabel: label ?? String(localized: "Saved"))
+        #if os(iOS)
         RecordingSharedState.write(.init(isRunning: false, startedAt: nil))
         ControlCenter.shared.reloadControls(ofKind: RecordingSharedState.controlKind)
+        #endif
     }
 
     // MARK: System events (interruptions, route changes, backgrounding)
 
     private func installSystemObservers() {
+        #if os(iOS)
         guard systemObservers.isEmpty else { return }
         let center = NotificationCenter.default
 
@@ -739,6 +766,7 @@ final class CaptionPipeline {
                 }
             }
         })
+        #endif
     }
 
     private func removeSystemObservers() {
@@ -753,10 +781,10 @@ final class CaptionPipeline {
             try? await self.serialized { [self] in
                 // Only a live turn pauses; released/idle states are not
                 // "interrupted" (resuming them would open the mic unasked).
-                guard case .listening(let direction) = phase else { return }
+                guard case .listening(let route) = phase else { return }
                 logger.info("audio interrupted (call/Siri); pausing session")
                 await endTurn()
-                phase = .paused(.interrupted(resume: direction))
+                phase = .paused(.interrupted(resume: route))
                 setStatus(.interruption, String(
                     localized: "Paused — another app is using the microphone"))
                 liveActivity.update(
@@ -780,7 +808,7 @@ final class CaptionPipeline {
                 }
                 logger.info("interruption ended; resuming \(resume.source.rawValue)")
                 do {
-                    try await beginTurn(direction: resume)
+                    try await beginTurn(route: resume)
                     liveActivity.update(
                         statusLabel: String(localized: "Recording"), isPaused: false)
                 } catch {
@@ -794,11 +822,11 @@ final class CaptionPipeline {
     private func restartCurrentTurn(reason: String) {
         Task {
             try? await self.serialized { [self] in
-                guard case .listening(let direction) = phase else { return }
+                guard case .listening(let route) = phase else { return }
                 logger.info("restarting turn: \(reason)")
                 await endTurn()
                 do {
-                    try await beginTurn(direction: direction)
+                    try await beginTurn(route: route)
                 } catch {
                     lastError = error.localizedDescription
                     await endSession()
@@ -858,7 +886,7 @@ final class CaptionPipeline {
         jobs.setBackgrounded(false)
         backgroundUnload?.cancel()
         backgroundUnload = nil
-        if os_proc_available_memory() >= Self.memoryShedFloor {
+        if SystemResources.availableMemoryBytes() >= Self.memoryShedFloor {
             lastMemoryShed = nil
             // Drop the "paused (low memory)" banner once headroom is back —
             // outside a live session nothing else clears it.
@@ -888,8 +916,19 @@ final class CaptionPipeline {
     /// backend when its model is installed, falling back to Apple with a
     /// status pill otherwise. Changing the setting invalidates cached
     /// engines (they are rebuilt per session via prepare anyway).
-    private func ensureEngine(for language: AppLanguage) {
+    private func engineKey(
+        for source: RecognitionLanguageSelection, kind: String? = nil
+    ) -> RecognitionLanguageSelection {
+        let kind = kind ?? enginesKind
+        return kind == "apple" ? .language(source.fallbackLanguage) : source
+    }
+
+    private func ensureEngine(for source: RecognitionLanguageSelection) {
+        #if os(macOS)
+        let wantsSenseVoice = false
+        #else
         let wantsSenseVoice = UserDefaults.standard.string(forKey: "asr.engine") == "sensevoice"
+        #endif
         let kind: String
         if wantsSenseVoice, SenseVoiceModelStore.isInstalled {
             kind = "sensevoice"
@@ -904,24 +943,30 @@ final class CaptionPipeline {
             engines.removeAll()
             enginesKind = kind
         }
-        if engines[language] == nil {
-            engines[language] = kind == "sensevoice"
-                ? SenseVoiceEngine(language: language)
-                : TranscriptionEngine(language: language)
+        let key = engineKey(for: source, kind: kind)
+        if engines[key] == nil {
+            engines[key] = kind == "sensevoice"
+                ? SenseVoiceEngine(sourceSelection: source)
+                : TranscriptionEngine(language: key.fallbackLanguage)
         }
     }
 
-    private func beginTurn(direction: LanguagePair) async throws {
+    private func beginTurn(route: RecognitionRoute) async throws {
         // Self-heal: a turn can ask for a direction the session was not
         // started with. Build whatever is missing on demand.
-        ensureEngine(for: direction.source)
-        await translator.addDirection(direction)
-        guard let engine = engines[direction.source] else {
-            throw TranscriptionError.assetsUnavailable(direction.source)
+        ensureEngine(for: route.source)
+        for direction in route.eagerTranslationDirections {
+            await translator.addDirection(direction)
+        }
+        let key = engineKey(for: route.source)
+        guard let engine = engines[key] else {
+            throw TranscriptionError.assetsUnavailable(route.source.fallbackLanguage)
         }
 
         let format = try await engine.prepare(
-            contextualStrings: hotwords.biasStrings(for: direction.source))
+            contextualStrings: route.source == .auto
+                ? []
+                : hotwords.biasStrings(for: route.source.fallbackLanguage))
         let (buffers, levels) = try audio.start(outputFormat: format)
         let events: AsyncStream<TranscriptionEvent>
         do {
@@ -930,7 +975,7 @@ final class CaptionPipeline {
             audio.stop()
             throw error
         }
-        phase = .listening(direction)
+        phase = .listening(route)
 
         // Anchor the audio timeline before buffers start flowing: audio
         // written so far ↔ now. Skipped without a recorder (no file to map).
@@ -966,7 +1011,7 @@ final class CaptionPipeline {
         }
         eventsTask = Task { [weak self] in
             for await event in events {
-                await self?.handle(event, direction: direction)
+                await self?.handle(event, route: route)
             }
         }
     }
@@ -977,8 +1022,8 @@ final class CaptionPipeline {
     /// Callers set the next phase afterwards.
     private func endTurn() async {
         audio.stop()  // finishes the buffer + level streams
-        if case .listening(let direction) = phase {
-            await engines[direction.source]?.stop()  // flushes + finishes events
+        if case .listening(let route) = phase {
+            await engines[engineKey(for: route.source)]?.stop()  // flushes + finishes events
         }
         await feedTask?.value
         feedTask = nil
@@ -1007,7 +1052,7 @@ final class CaptionPipeline {
 
     // MARK: Event handling
 
-    private func handle(_ event: TranscriptionEvent, direction: LanguagePair) async {
+    private func handle(_ event: TranscriptionEvent, route: RecognitionRoute) async {
         // ASR failures arrive as events, not thrown errors — surface them
         // or the session dies silently with the mic still "live".
         if case .ended(let error) = event, let error {
@@ -1032,12 +1077,18 @@ final class CaptionPipeline {
             return
         }
 
-        guard let output = segmenter.process(event, language: direction.source) else { return }
+        guard let output = segmenter.process(
+            event, fallbackLanguage: route.source.fallbackLanguage)
+        else { return }
+        let direction = LanguagePair(
+            source: output.language,
+            target: route.target ?? output.language)
 
         switch output.kind {
         case .volatileUpdate:
             let entryID = store.applyVolatile(text: output.text, direction: direction)
             if direction.source != direction.target {
+                await translator.addDirection(direction)
                 translator.draftDebounced(
                     output.text, direction: direction, entryID: entryID, store: store)
             }
@@ -1046,7 +1097,11 @@ final class CaptionPipeline {
             // Tier-0: deterministically restore near-miss hotwords before
             // anything else sees the text — the draft benefits too.
             let matcher = hotwords.matcher
-            let text = matcher.fixup(output.text, language: direction.source)
+            let shouldUseLanguageSpecificHotwords = route.source != .auto
+                || output.languageWasDetected
+            let text = shouldUseLanguageSpecificHotwords
+                ? matcher.fixup(output.text, language: direction.source)
+                : output.text
             guard let entry = store.finalizeActive(text: text, direction: direction)
             else { return }
             // Captions diarization: attribute the utterance to a voice slot,
@@ -1083,7 +1138,8 @@ final class CaptionPipeline {
             // Hotword near-misses force refinement even for short
             // utterances — names usually appear in exactly those.
             let wantsRefinement = refine
-                || matcher.shouldForceRefine(text, language: direction.source)
+                || (shouldUseLanguageSpecificHotwords
+                    && matcher.shouldForceRefine(text, language: direction.source))
             // !isBackgrounded: the paused queue silently DROPS enqueued
             // jobs — a backgrounded entry marked refining would spin
             // forever. It takes the draft path instead.
@@ -1102,8 +1158,9 @@ final class CaptionPipeline {
                     draft: draft,
                     direction: direction,
                     history: history,
-                    glossary: matcher.glossaryLines(
-                        direction: direction, sourceText: text)))
+                    glossary: shouldUseLanguageSpecificHotwords
+                        ? matcher.glossaryLines(direction: direction, sourceText: text)
+                        : []))
             } else {
                 store.setRefined(nil, for: entry.id)
             }
@@ -1117,6 +1174,7 @@ final class CaptionPipeline {
     /// translate, and store. Returns nil and marks the entry on failure.
     private func produceDraft(for entry: CaptionEntry) async -> String? {
         translator.cancelPending(entryID: entry.id)
+        await translator.addDirection(entry.direction)
         do {
             let draft = try await translator.draft(
                 entry.sourceText, direction: entry.direction)
@@ -1219,6 +1277,29 @@ final class CaptionPipeline {
     func updateMicSensitivity() {
         guard isRunning else { return }
         restartCurrentTurn(reason: "mic pickup preset changed")
+    }
+
+    /// Apply a new translation target live. Existing transcript entries keep
+    /// their concrete directions/translations; the next turn uses the new
+    /// target.
+    func updateTranslationTarget(_ target: AppLanguage?) {
+        guard isRunning else { return }
+        Task {
+            try? await self.serialized { [self] in
+                guard case .listening(let route) = phase else { return }
+                let next = RecognitionRoute(source: route.source, target: target)
+                guard next != route else { return }
+                logger.info("restarting turn: translation target changed")
+                await endTurn()
+                do {
+                    try await beginTurn(route: next)
+                    liveActivity.update(statusLabel: next.displayName, isPaused: false)
+                } catch {
+                    lastError = error.localizedDescription
+                    await endSession()
+                }
+            }
+        }
     }
 
     // MARK: LLM + thermal management

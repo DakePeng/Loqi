@@ -1,5 +1,7 @@
-import ActivityKit
 import Foundation
+
+#if os(iOS)
+import ActivityKit
 
 /// Thin ActivityKit wrapper for the recording Live Activity (lock screen +
 /// Dynamic Island, rendered by the LoqiWidgets extension). Update traffic
@@ -66,3 +68,12 @@ final class RecordingActivityController {
         }
     }
 }
+#else
+@MainActor
+final class RecordingActivityController {
+    func start(startedAt: Date, title: String) {}
+    func update(statusLabel: String, isPaused: Bool) {}
+    func end(finalLabel: String) {}
+    static func endAllStale() async {}
+}
+#endif

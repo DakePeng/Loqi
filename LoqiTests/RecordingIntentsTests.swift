@@ -26,6 +26,20 @@ struct RecordingIntentsTests {
             sourceRaw: "klingon", translationRaw: "elvish")
         #expect(direction == LanguagePair(source: .english, target: .english))
     }
+
+    @Test func autoSourceResolvesToRoute() {
+        let route = StartRecordingIntent.resolveRoute(
+            sourceRaw: "auto", translationRaw: "japanese")
+        #expect(route.source == .auto)
+        #expect(route.target == .japanese)
+    }
+
+    @Test func autoDirectionFallsBackSafelyForLegacyCallers() {
+        let direction = StartRecordingIntent.resolveDirection(
+            sourceRaw: "auto", translationRaw: "korean")
+        #expect(direction.source == (AppLanguage.devicePreferred ?? .english))
+        #expect(direction.target == .korean)
+    }
 }
 
 struct RecordingSharedStateTests {

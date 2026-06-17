@@ -75,8 +75,11 @@ struct SessionChatSheet: View {
                 inputBar
             }
             .navigationTitle("Ask this session")
+#if os(iOS)
             .navigationBarTitleDisplayMode(.inline)
+#endif
             .toolbar {
+#if os(iOS)
                 ToolbarItem(placement: .topBarLeading) {
                     Button("Clear chat", systemImage: "trash", role: .destructive) {
                         clearChat()
@@ -86,6 +89,17 @@ struct SessionChatSheet: View {
                 ToolbarItem(placement: .topBarTrailing) {
                     Button("Done") { dismiss() }
                 }
+#else
+                ToolbarItem(placement: .destructiveAction) {
+                    Button("Clear chat", systemImage: "trash", role: .destructive) {
+                        clearChat()
+                    }
+                    .disabled(messages.isEmpty || answering)
+                }
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("Done") { dismiss() }
+                }
+#endif
             }
         }
         .onAppear {
@@ -135,7 +149,7 @@ struct SessionChatSheet: View {
                 .background(
                     message.isUser
                         ? AnyShapeStyle(.tint)
-                        : AnyShapeStyle(Color(.secondarySystemBackground)),
+                        : AnyShapeStyle(Color.loqiSecondarySystemBackground),
                     in: RoundedRectangle(cornerRadius: 14, style: .continuous))
             if !message.isUser { Spacer(minLength: 48) }
         }
@@ -175,7 +189,7 @@ struct SessionChatSheet: View {
                     .padding(.horizontal, 12)
                     .padding(.vertical, 8)
                     .background(
-                        Color(.secondarySystemBackground),
+                        Color.loqiSecondarySystemBackground,
                         in: RoundedRectangle(cornerRadius: 18, style: .continuous))
                     .onSubmit { send(input) }
                     .disabled(sendBlockedReason != nil)

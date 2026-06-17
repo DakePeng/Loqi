@@ -1,5 +1,7 @@
 import SwiftUI
+#if os(iOS)
 import UIKit
+#endif
 
 /// The app's primary control: a circular mic button whose ring visualizes
 /// live input level, doubling as the stop button while running.
@@ -64,25 +66,33 @@ struct BatteryHint: View {
             }
         }
         .onAppear {
+            #if os(iOS)
             UIDevice.current.isBatteryMonitoringEnabled = true
             level = UIDevice.current.batteryLevel
+            #endif
         }
+        #if os(iOS)
         .onReceive(NotificationCenter.default.publisher(
             for: UIDevice.batteryLevelDidChangeNotification)
         ) { _ in
             level = UIDevice.current.batteryLevel
         }
+        #endif
     }
 }
 
 enum Haptics {
     @MainActor
     static func tap() {
+        #if os(iOS)
         UIImpactFeedbackGenerator(style: .medium).impactOccurred()
+        #endif
     }
 
     @MainActor
     static func turnSwitch() {
+        #if os(iOS)
         UIImpactFeedbackGenerator(style: .rigid).impactOccurred()
+        #endif
     }
 }

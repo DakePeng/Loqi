@@ -15,7 +15,9 @@ struct LoqiApp: App {
         // A force-quit/jetsam mid-recording leaves a zombie "Recording"
         // Live Activity on the lock screen. Sweep before anything (an App
         // Intent included) can start a new session.
+        #if os(iOS)
         Task { await RecordingActivityController.endAllStale() }
+        #endif
     }
 
     var body: some Scene {
@@ -63,11 +65,13 @@ struct RootView: View {
         // Translation sessions only exist while their host views are
         // attached, so the stack lives at the root for the app's lifetime.
         .background(TranslationHostStack(coordinator: pipeline.translator))
+        #if os(iOS)
         .onReceive(NotificationCenter.default.publisher(
             for: UIApplication.didReceiveMemoryWarningNotification)
         ) { _ in
             pipeline.handleMemoryWarning()
         }
+        #endif
         .onOpenURL { url in
             sharedAudioURL = url
         }
