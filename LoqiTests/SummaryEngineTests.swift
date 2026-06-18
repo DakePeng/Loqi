@@ -57,70 +57,6 @@ struct SummaryEngineTests {
         #expect(chunks.count == 1)
     }
 
-    // MARK: Chunk-note parsing
-
-    @Test func parsesTaggedChunkNote() {
-        let raw = """
-        H: 讨论项目归属
-        F: 项目可以算公司项目
-        D: 决定先内部试用
-        A: 王经理 下周发合同
-        T: Loqi
-        """
-        let note = PromptBuilder().parseChunkNote(raw)
-        #expect(note.headline == "讨论项目归属")
-        #expect(note.facts == ["项目可以算公司项目"])
-        #expect(note.decisions == ["决定先内部试用"])
-        #expect(note.actions == ["王经理 下周发合同"])
-        #expect(note.terms == ["Loqi"])
-    }
-
-    @Test func chunkNoteToleratesFullwidthColonsAndNoise() {
-        let raw = """
-        Here are the notes:
-        H：标题在这里
-        F：一个事实
-        """
-        let note = PromptBuilder().parseChunkNote(raw)
-        #expect(note.headline == "标题在这里")
-        #expect(note.facts == ["一个事实"])
-    }
-
-    @Test func chunkNoteParserKeepsRicherNotesForLongerSummaries() {
-        let raw = """
-        H: 讨论发布计划
-        F: 事实一
-        F: 事实二
-        F: 事实三
-        F: 事实四
-        F: 事实五
-        F: 事实六
-        D: 决定一
-        D: 决定二
-        D: 决定三
-        D: 决定四
-        D: 决定五
-        D: 决定六
-        A: 待办一
-        A: 待办二
-        A: 待办三
-        A: 待办四
-        A: 待办五
-        A: 待办六
-        T: 术语一
-        T: 术语二
-        T: 术语三
-        T: 术语四
-        T: 术语五
-        T: 术语六
-        """
-        let note = PromptBuilder().parseChunkNote(raw)
-        #expect(note.facts.count == 6)
-        #expect(note.decisions.count == 6)
-        #expect(note.actions.count == 6)
-        #expect(note.terms.count == 6)
-    }
-
     // MARK: Refinement output parsing (translation only — source rewriting
     // was removed; an "S:" line from an old prompt shape is ignored)
 
@@ -160,5 +96,182 @@ struct SummaryEngineTests {
         let original = "短句"
         let restored = String(repeating: "解释一下这个短句的意思", count: 5)
         #expect(!PromptBuilder().isAcceptableHotwordRestore(restored, original: original))
+    }
+
+    // MARK: Summary records
+
+    @Test func chunkRecordPromptSeparatesContextFromTarget() {
+        let prompt = PromptBuilder().chunkRecordPrompt(
+            chunkID: "c003",
+            timeRange: "04:00-06:00",
+            contextOnly: "m000\tEarlier overlap",
+            target: "m031\t小模型直接做开放式总结时容易产生幻觉",
+            vocabulary: ["Loqi (product name)"],
+            in: .chinese)
+
+        #expect(prompt.system.contains("context_only"))
+        #expect(prompt.system.contains("target"))
+        #expect(prompt.system.contains("forbidden") || prompt.system.contains("禁止"))
+        #expect(prompt.system.contains("TSV"))
+        #expect(prompt.user.contains("chunk_id: c003"))
+        #expect(prompt.user.contains("context_only:"))
+        #expect(prompt.user.contains("target:"))
+        #expect(prompt.user.contains("Known terms: Loqi (product name)"))
+    }
+
+    @Test func parsesSummaryRecordTSVAndRejectsInvalidLines() {
+        let raw = """
+        T	c003	04:00-06:00	摘要去重	讨论本地摘要中的幻觉和重复
+        P	c003	m031,m032	小模型开放式总结容易产生幻觉
+        D	c003	m033	最终阶段不再使用模型合并
+        A	c003	m034	王经理	设计字符串拼接流程	周五
+        Q	c003	m035	如何减少 overlap 重复
+        R	c003	m036	最终合并会引入新幻觉
+        P	c999	m031	错误 chunk 被丢弃
+        P	c003	m999	错误 source 被丢弃
+        A	c003	m034	字段不够
+        """
+
+        let records = PromptBuilder().parseSummaryRecords(
+            raw,
+            chunkID: "c003",
+            validSourceIDs: ["m031", "m032", "m033", "m034", "m035", "m036"],
+            source: .transcript,
+            timestamp: Date(timeIntervalSince1970: 1_000_000))
+
+        #expect(records.map(\.kind) == [
+            .topic, .point, .decision, .action, .question, .risk,
+        ])
+        #expect(records[0].topicTitle == "摘要去重")
+        #expect(records[0].timeRange == "04:00-06:00")
+        #expect(records[1].sourceIDs == ["m031", "m032"])
+        #expect(records[3].owner == "王经理")
+        #expect(records[3].deadline == "周五")
+    }
+
+    @Test func deterministicRendererDedupesAndLabelsPhotoOnlyRecords() {
+        let t0 = Date(timeIntervalSince1970: 1_000_000)
+        #expect(SummaryEngine.dedupKey("讨论六月发布计划") == "讨论六月发布计划")
+        let records: [SessionRecord.SummaryRecord] = [
+            .init(
+                kind: .topic,
+                source: .transcript,
+                sourceIDs: ["m001"],
+                sourceIndex: 0,
+                timestamp: t0,
+                text: "讨论六月发布计划",
+                topicTitle: "发布计划",
+                timeRange: "00:00-02:00"),
+            .init(
+                kind: .point,
+                source: .transcript,
+                sourceIDs: ["m002"],
+                sourceIndex: 1,
+                timestamp: t0.addingTimeInterval(5),
+                text: "预算是 42 万"),
+            .init(
+                kind: .point,
+                source: .transcript,
+                sourceIDs: ["m003"],
+                sourceIndex: 2,
+                timestamp: t0.addingTimeInterval(10),
+                text: "预算是42万"),
+            .init(
+                kind: .point,
+                source: .photo,
+                sourceIDs: ["p001"],
+                sourceIndex: 3,
+                timestamp: t0.addingTimeInterval(20),
+                text: "白板写着六月发布",
+                sourceLabel: "Photo 10:24"),
+        ]
+
+        let summary = SummaryRecordReducer.render(
+            records: records,
+            style: .meeting,
+            length: .standard,
+            in: .chinese,
+            stitchDetails: false)
+
+        #expect(summary.contains("讨论六月发布计划"))
+        #expect(summary.contains("预算是 42 万"))
+        #expect(!summary.contains("预算是42万"))
+        #expect(summary.contains("[Photo 10:24] 白板写着六月发布"))
+    }
+
+    @Test func rendererDoesNotRepeatSameContentAcrossSections() {
+        let text = "测试录音中手机语言识别"
+        let records: [SessionRecord.SummaryRecord] = [
+            .init(
+                kind: .topic,
+                source: .transcript,
+                sourceIDs: ["m001"],
+                sourceIndex: 0,
+                timestamp: Date(timeIntervalSince1970: 1_000_000),
+                text: text,
+                topicTitle: text,
+                timeRange: "00:00-00:05"),
+            .init(
+                kind: .point,
+                source: .transcript,
+                sourceIDs: ["m001"],
+                sourceIndex: 1,
+                timestamp: Date(timeIntervalSince1970: 1_000_001),
+                text: text),
+        ]
+
+        let summary = SummaryRecordReducer.render(
+            records: records,
+            style: .memo,
+            length: .detailed,
+            in: .chinese)
+
+        #expect(summary.components(separatedBy: text).count - 1 == 1)
+    }
+
+    @Test func legacyChunkNotesConvertToRecords() {
+        let note = SessionRecord.ChunkNote(
+            headline: "预算讨论",
+            startedAt: Date(timeIntervalSince1970: 1_000_000),
+            facts: ["预算是 42 万"],
+            decisions: ["六月发布"],
+            actions: ["王经理确认供应商"],
+            terms: ["Loqi"])
+
+        let records = SummaryRecordReducer.records(from: [note])
+
+        #expect(records.map(\.kind) == [
+            .topic, .point, .decision, .action, .term,
+        ])
+        #expect(records.first?.text == "预算讨论")
+        #expect(records[1].text == "预算是 42 万")
+    }
+
+    @Test func crossKindDedupKeepsMoreSpecificClassification() {
+        let t0 = Date(timeIntervalSince1970: 1_000_000)
+        let records: [SessionRecord.SummaryRecord] = [
+            .init(
+                kind: .topic, source: .transcript, sourceIDs: ["m001"],
+                sourceIndex: 0, timestamp: t0, text: "发布计划讨论",
+                topicTitle: "发布计划"),
+            .init(
+                kind: .point, source: .transcript, sourceIDs: ["m002"],
+                sourceIndex: 1, timestamp: t0.addingTimeInterval(5),
+                text: "六月发布"),
+            .init(
+                kind: .decision, source: .transcript, sourceIDs: ["m003"],
+                sourceIndex: 2, timestamp: t0.addingTimeInterval(10),
+                text: "六月发布"),
+        ]
+
+        let summary = SummaryRecordReducer.render(
+            records: records, style: .meeting, length: .standard,
+            in: .chinese, stitchDetails: false)
+
+        // Point and decision share text → one bullet, classified as the
+        // decision (more specific), so it renders once as a section bullet
+        // instead of appearing in both the Topics and Decisions sections.
+        #expect(summary.components(separatedBy: "六月发布").count - 1 == 1)
+        #expect(summary.contains("- 六月发布"))
     }
 }

@@ -52,6 +52,20 @@ enum OfflineTranscriber {
         #endif
     }
 
+    /// Auto post-process for new recordings: use downloaded high-accuracy
+    /// engines only. nil means keep the live transcript and summarize.
+    nonisolated static func postProcessBackend(
+        senseVoiceInstalled: Bool, qwen3Installed: Bool
+    ) -> Backend? {
+        #if os(macOS)
+        return nil
+        #else
+        if qwen3Installed { return .qwen3ASR }
+        if senseVoiceInstalled { return .senseVoice }
+        return nil
+        #endif
+    }
+
     /// The Re-transcribe backend for the current device + settings state.
     static func currentBackend() -> Backend {
         effectiveBackend(

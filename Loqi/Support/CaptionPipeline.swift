@@ -111,8 +111,35 @@ final class CaptionPipeline {
     }
     private(set) var statusMessages: [StatusKey: String] = [:]
     var statusBanner: [String] {
-        statusMessages.sorted { $0.key < $1.key }.map(\.value)
+        Self.visibleStatusMessages(from: statusMessages)
     }
+
+    static func visibleStatusMessages(from messages: [StatusKey: String]) -> [String] {
+        let resourceKeys: [StatusKey] = [.memory, .thermal, .llm]
+        let visibleResourceKey = resourceKeys.first { messages[$0] != nil }
+
+        return messages.sorted { $0.key < $1.key }.compactMap { key, value in
+            if resourceKeys.contains(key) {
+                return key == visibleResourceKey ? value : nil
+            }
+            return value
+        }
+    }
+
+    static func shouldUnloadVoiceprintOnMemoryWarning(
+        isRunning: Bool,
+        diarizationActive: Bool
+    ) -> Bool {
+        !(isRunning && diarizationActive)
+    }
+
+    static func shouldRunLiveDiarization(
+        diarizationActive: Bool,
+        isBackgrounded: Bool
+    ) -> Bool {
+        diarizationActive && !isBackgrounded
+    }
+
     private func setStatus(_ key: StatusKey, _ message: String?) {
         if let message {
             statusMessages[key] = message
@@ -146,9 +173,8 @@ final class CaptionPipeline {
     /// Serializes crash-journal writes off the main actor, coalescing the
     /// per-utterance snapshots so encoding + disk I/O never blocks captions.
     private let journalWriter = JournalWriter()
-    /// Scene is in the background. While true, no LLM work may start (no
-    /// loads, no refinement, no note generation) — captions and the
-    /// recorder run alone.
+    /// Scene is in the background. While true, no Metal-backed work may
+    /// start — captions and the recorder run alone.
     private(set) var isBackgrounded = false
 
     /// Lock screen / Dynamic Island presence while recording.
@@ -190,9 +216,10 @@ final class CaptionPipeline {
     }
 
     /// Captions-mode speaker picker value; 0/1 = diarization off, -1 =
-    /// Auto, 2+ = hard cap (see VoiceprintService.clusterCap).
+    /// Auto, 2+ = hard cap (see VoiceprintService.clusterCap). Unset defaults
+    /// to Auto, matching the picker's @AppStorage default.
     var captionSpeakerCount: Int {
-        UserDefaults.standard.integer(forKey: "captions.speakerCount")
+        (UserDefaults.standard.object(forKey: "captions.speakerCount") as? Int) ?? -1
     }
 
     /// Persisted download source for the speaker model (Settings key
@@ -200,6 +227,7 @@ final class CaptionPipeline {
     var diarizerSource: DiarizerSource { .current }
 
     private var diarizationActive = false
+    private var diarizationPausedForSceneExit = false
 
     /// All live sessions are captions-mode now; the enum survives for old
     /// archived records.
@@ -237,6 +265,7 @@ final class CaptionPipeline {
         describeQueue = AttachmentDescribeQueue(llm: self.llm) { [weak self] text, attachmentID, sessionID in
             self?.updateAttachment(attachmentID, sessionID: sessionID) {
                 $0.vlmDescription = text
+                $0.summaryRecords = nil
             }
         }
         jobs = SummaryJobCenter(
@@ -547,12 +576,26 @@ final class CaptionPipeline {
         }
     }
 
+    /// Remove a photo from the running session. Any in-flight OCR/description
+    /// for it lands on nothing (updateAttachment no-ops once it's gone).
+    func removeAttachment(_ id: UUID) {
+        guard let index = liveAttachments.firstIndex(where: { $0.id == id }) else { return }
+        let fileName = liveAttachments[index].fileName
+        liveAttachments.remove(at: index)
+        try? FileManager.default.removeItem(
+            at: SessionArchive.attachmentURL(fileName: fileName))
+        writeJournal()
+    }
+
     /// Deliver an OCR result to wherever the attachment lives now: the
     /// live session if it's still running, the archived record otherwise.
     private func applyAttachmentText(
         _ text: String, attachmentID: UUID, sessionID: UUID
     ) {
-        updateAttachment(attachmentID, sessionID: sessionID) { $0.ocrText = text }
+        updateAttachment(attachmentID, sessionID: sessionID) {
+            $0.ocrText = text
+            $0.summaryRecords = nil
+        }
     }
 
     /// Mutate an attachment wherever it lives now: the running session's
@@ -586,7 +629,20 @@ final class CaptionPipeline {
             attachmentID: attachment.id,
             sessionID: sessionID,
             fileURL: SessionArchive.attachmentURL(fileName: attachment.fileName),
-            language: language))
+            language: language,
+            context: recentTranscriptContext()))
+    }
+
+    /// Last few finalized transcript lines, for grounding a photo description
+    /// in what was being discussed. Empty before any speech is finalized.
+    private func recentTranscriptContext() -> String {
+        let text = store.entries(in: sessionMode)
+            .filter { $0.state != .volatile }
+            .suffix(4)
+            .map(\.sourceText)
+            .joined(separator: " ")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        return String(text.suffix(400))
     }
 
     /// Snapshot the running session to the crash journal: a ready-to-archive
@@ -604,6 +660,7 @@ final class CaptionPipeline {
                 startedAt: startedAt,
                 timeline: audioAnchors.isEmpty ? nil : AudioTimeline(anchors: audioAnchors)),
             speakerNames: speakerNames)
+        record.recordingSpeakerCount = captionSpeakerCount
         if recorder != nil {
             record.audioFileName = SessionRecorder.fileName(for: sessionID)
         }
@@ -654,6 +711,7 @@ final class CaptionPipeline {
                     audioFileName: audioFileName,
                     chunkNotes: liveNotes,
                     notesEndEntryID: notesEndEntryID,
+                    speakerCount: captionSpeakerCount,
                     timeline: audioFileName != nil && !audioAnchors.isEmpty
                         ? AudioTimeline(anchors: audioAnchors) : nil,
                     attachments: liveAttachments))
@@ -835,21 +893,25 @@ final class CaptionPipeline {
         }
     }
 
+    /// Scene is leaving the foreground. Stop live speaker separation before
+    /// background: its FluidAudio/CoreML path submits Metal command buffers,
+    /// and iOS kills background submissions instead of handing us an error.
+    func handleInactive() {
+        pauseLiveDiarizationForSceneExit()
+    }
+
     /// Scene went to background. A running session keeps capturing — the
-    /// audio background mode keeps ASR, the AAC recorder, and diarization
-    /// alive with the screen locked — but ALL LLM work pauses: submitting
-    /// Metal work from the background risks process termination, so this
-    /// is a hard requirement, not a battery preference. Refinement jobs
-    /// fall back to their drafts; note jobs are held for foreground
-    /// catch-up. Idle in background frees the big models instead.
+    /// audio background mode keeps ASR and the AAC recorder alive with the
+    /// screen locked — but ALL Metal-backed work pauses. Refinement jobs
+    /// fall back to their drafts; note jobs are held for foreground catch-up.
+    /// Idle in background frees the big models instead.
     func handleBackground() {
+        pauseLiveDiarizationForSceneExit()
         isBackgrounded = true
         // No Metal work may run in the background — it aborts the process
         // uncatchably. Park new generations at the model, and cancel any
-        // post-hoc LLM job already mid-generation (summarize / a
-        // re-transcribe's summary phase). Imports and ASR keep running under
-        // their grace — they never touch Metal — and park if they reach the
-        // LLM. This is the post-hoc twin of the live-session pausing below.
+        // post-hoc summarize/re-transcribe job that could reach LLM or
+        // FluidAudio work. Imports keep their existing grace path.
         Task { [llm] in await llm.setBackgrounded(true) }
         jobs.setBackgrounded(true)
         // Photo descriptions pause in BOTH branches: post-hoc jobs can be
@@ -869,9 +931,9 @@ final class CaptionPipeline {
             backgroundUnload = Task { [llm, voiceprint, weak self] in
                 try? await Task.sleep(for: .seconds(120))
                 guard !Task.isCancelled else { return }
-                // A background import/re-transcribe may still be running in
-                // its grace window — unloading voiceprint would race its
-                // diarization. The job's own teardown frees memory instead.
+                // A background import may still be running in its grace
+                // window — unloading voiceprint would race its diarization.
+                // The job's own teardown frees memory instead.
                 guard self?.jobs.hasActiveWork != true else { return }
                 await llm.unload()
                 await voiceprint.unload()
@@ -881,6 +943,7 @@ final class CaptionPipeline {
 
     func handleForeground() {
         isBackgrounded = false
+        resumeLiveDiarizationAfterSceneExit()
         // Un-park the model and restart any LLM job background cancelled.
         Task { [llm] in await llm.setBackgrounded(false) }
         jobs.setBackgrounded(false)
@@ -906,6 +969,39 @@ final class CaptionPipeline {
                 // A background memory warning may have unloaded the LLM;
                 // the load's success path unpauses both queues.
                 self.loadLLMIfAllowed()
+            }
+        }
+    }
+
+    private func pauseLiveDiarizationForSceneExit() {
+        guard isRunning, diarizationActive else { return }
+        diarizationPausedForSceneExit = true
+        diarizationActive = false
+        setStatus(.diarizer, nil)
+        Task { [voiceprint] in await voiceprint.unload() }
+    }
+
+    private func resumeLiveDiarizationAfterSceneExit() {
+        guard diarizationPausedForSceneExit else { return }
+        diarizationPausedForSceneExit = false
+        guard isRunning,
+              let speakerCap = VoiceprintService.clusterCap(
+                forPickerValue: captionSpeakerCount)
+        else { return }
+        diarizationActive = true
+        Task { [weak self] in
+            guard let self else { return }
+            if await self.voiceprint.state != .ready {
+                self.setStatus(.diarizer, String(localized: "Preparing speaker separation…"))
+                try? await self.voiceprint.loadIfNeeded(source: self.diarizerSource)
+                self.setStatus(.diarizer, nil)
+            }
+            guard Self.shouldRunLiveDiarization(
+                diarizationActive: self.diarizationActive,
+                isBackgrounded: self.isBackgrounded) else { return }
+            let relabels = await self.voiceprint.startDiarization(maxSpeakers: speakerCap)
+            for (entryID, slot) in relabels {
+                self.store.setSpeaker(slot, for: entryID)
             }
         }
     }
@@ -990,7 +1086,9 @@ final class CaptionPipeline {
                 await engine.feed(chunk)
                 // Checked live (not captured): the speaker-count picker can
                 // enable diarization mid-turn and the tee must follow.
-                if self.diarizationActive {
+                if Self.shouldRunLiveDiarization(
+                    diarizationActive: self.diarizationActive,
+                    isBackgrounded: self.isBackgrounded) {
                     await voiceprint.ingest(chunk)
                 }
                 if let recorder = self.recorder {
@@ -1066,11 +1164,17 @@ final class CaptionPipeline {
             await refinement?.setSpeechActive(active)
             await noteQueue?.setSpeechActive(active)
             await describeQueue?.setSpeechActive(active)
-            if active {
-                chunkGapTimer?.cancel()
-                await voiceprint.beginUtterance()
-            } else {
-                await voiceprint.endUtterance()
+            chunkGapTimer?.cancel()
+            if Self.shouldRunLiveDiarization(
+                diarizationActive: diarizationActive,
+                isBackgrounded: isBackgrounded) {
+                if active {
+                    await voiceprint.beginUtterance()
+                } else {
+                    await voiceprint.endUtterance()
+                }
+            }
+            if !active {
                 loadLLMIfAllowed()
                 scheduleChunkGapClose()
             }
@@ -1095,18 +1199,18 @@ final class CaptionPipeline {
 
         case .finalized(let refine):
             // Tier-0: deterministically restore near-miss hotwords before
-            // anything else sees the text — the draft benefits too.
+            // anything else sees the text — the draft benefits too. Runs even
+            // in auto-language mode: matching is script-aware, so the
+            // detected-or-fallback source language is good enough.
             let matcher = hotwords.matcher
-            let shouldUseLanguageSpecificHotwords = route.source != .auto
-                || output.languageWasDetected
-            let text = shouldUseLanguageSpecificHotwords
-                ? matcher.fixup(output.text, language: direction.source)
-                : output.text
+            let text = matcher.fixup(output.text, language: direction.source)
             guard let entry = store.finalizeActive(text: text, direction: direction)
             else { return }
             // Captions diarization: attribute the utterance to a voice slot,
             // and apply any retroactive corrections to earlier entries.
-            if diarizationActive,
+            if Self.shouldRunLiveDiarization(
+                diarizationActive: diarizationActive,
+                isBackgrounded: isBackgrounded),
                let result = await voiceprint.assignSpeaker(entryID: entry.id) {
                 store.setSpeaker(result.slot, for: entry.id)
                 for (entryID, slot) in result.relabels {
@@ -1138,8 +1242,7 @@ final class CaptionPipeline {
             // Hotword near-misses force refinement even for short
             // utterances — names usually appear in exactly those.
             let wantsRefinement = refine
-                || (shouldUseLanguageSpecificHotwords
-                    && matcher.shouldForceRefine(text, language: direction.source))
+                || matcher.shouldForceRefine(text, language: direction.source)
             // !isBackgrounded: the paused queue silently DROPS enqueued
             // jobs — a backgrounded entry marked refining would spin
             // forever. It takes the draft path instead.
@@ -1158,9 +1261,8 @@ final class CaptionPipeline {
                     draft: draft,
                     direction: direction,
                     history: history,
-                    glossary: shouldUseLanguageSpecificHotwords
-                        ? matcher.glossaryLines(direction: direction, sourceText: text)
-                        : []))
+                    glossary: matcher.glossaryLines(
+                        direction: direction, sourceText: text)))
             } else {
                 store.setRefined(nil, for: entry.id)
             }
@@ -1221,11 +1323,12 @@ final class CaptionPipeline {
                 return
             }
         }
-        let text = chunk.map { entry in
+        let sourceIDs = chunk.indices.map { String(format: "m%03d", $0 + 1) }
+        let text = zip(sourceIDs, chunk).map { id, entry in
             let label = entry.speaker.map {
                 speakerNames[$0] ?? String(localized: "Speaker \($0 + 1)")
             }
-            return (label.map { "[\($0)] " } ?? "") + entry.sourceText
+            return "\(id)\t" + (label.map { "[\($0)] " } ?? "") + entry.sourceText
         }.joined(separator: "\n")
         let language = AppLanguage.devicePreferred ?? chunk[0].direction.target
         // Scored against the chunk's source language, where the
@@ -1239,7 +1342,22 @@ final class CaptionPipeline {
             startedAt: chunk[0].createdAt,
             fallbackHeadline: String(chunk[0].sourceText.prefix(24)),
             language: language,
+            chunkID: "c" + chunk[0].id.uuidString.prefix(8),
+            timeRange: liveChunkTimeRange(chunk),
+            sourceIDs: sourceIDs,
             vocabulary: vocabulary))
+    }
+
+    private func liveChunkTimeRange(_ chunk: [CaptionEntry]) -> String {
+        guard let first = chunk.first else { return "未明确" }
+        let base = sessionStartedAt ?? first.createdAt
+        let start = max(0, first.createdAt.timeIntervalSince(base))
+        let end = max(start, chunk.last?.createdAt.timeIntervalSince(base) ?? start)
+        func clock(_ seconds: TimeInterval) -> String {
+            let total = max(0, Int(seconds.rounded()))
+            return String(format: "%02d:%02d", total / 60, total % 60)
+        }
+        return "\(clock(start))-\(clock(end))"
     }
 
     /// Change the speaker count, live: existing utterances are re-clustered
@@ -1335,12 +1453,21 @@ final class CaptionPipeline {
         // The background guard also blocks the 10s deferred load at session
         // start when the user locks immediately: 1.3GB of weights must not
         // load (and Metal must not warm) with the screen off.
-        if let shed = lastMemoryShed, shed.duration(to: .now) < .seconds(60) { return }
-        guard llmEnabled, thermal.policy != .llmUnloaded, !isBackgrounded else { return }
+        if let shed = lastMemoryShed, shed.duration(to: .now) < .seconds(60) {
+            setStatus(.llm, nil)
+            return
+        }
+        guard llmEnabled, thermal.policy == .full, !isBackgrounded else {
+            setStatus(.llm, nil)
+            return
+        }
         Task { [llm] in
             // Called on every silence gap; only show status when there is
             // actually a load to do (llm.load joins in-flight loads).
-            if case .ready = await llm.loadState { return }
+            if case .ready = await llm.loadState {
+                self.setStatus(.llm, nil)
+                return
+            }
             self.setStatus(.llm, String(localized: "Warming up the AI model…"))
             do {
                 // Never auto-download mid-session: weights are gigabytes and
@@ -1356,6 +1483,14 @@ final class CaptionPipeline {
                 self.setStatus(.memory, nil)
                 self.setStatus(.llm, String(
                     localized: "AI model not downloaded — transcribing only (see Settings)"))
+            } catch LLMServiceError.insufficientMemory {
+                self.lastMemoryShed = .now
+                await self.refinement?.setPaused(true)
+                self.setStatus(.llm, nil)
+                self.setStatus(.memory, String(
+                    localized: "AI features paused (low memory)"))
+            } catch is CancellationError {
+                self.setStatus(.llm, nil)
             } catch {
                 self.setStatus(.memory, nil)
                 self.setStatus(.llm, String(localized: "AI features unavailable"))
@@ -1379,11 +1514,13 @@ final class CaptionPipeline {
                         self.setStatus(.thermal, nil)
                     case .refinementPaused:
                         await self.refinement?.setPaused(true)
+                        self.setStatus(.llm, nil)
                         self.setStatus(.thermal, String(
                             localized: "AI features paused (device warm)"))
                     case .llmUnloaded:
                         await self.refinement?.setPaused(true)
                         await self.llm.unload()
+                        self.setStatus(.llm, nil)
                         self.setStatus(.thermal, String(
                             localized: "AI features off (device hot)"))
                     }
@@ -1408,10 +1545,15 @@ final class CaptionPipeline {
         lastMemoryShed = .now
         setStatus(.llm, nil)
         setStatus(.memory, String(localized: "AI features paused (low memory)"))
-        Task { [llm, voiceprint, refinement] in
+        let shouldUnloadVoiceprint = Self.shouldUnloadVoiceprintOnMemoryWarning(
+            isRunning: isRunning,
+            diarizationActive: diarizationActive)
+        Task { [llm, voiceprint, refinement, shouldUnloadVoiceprint] in
             await refinement?.setPaused(true)
             await llm.unload()
-            await voiceprint.unload()
+            if shouldUnloadVoiceprint {
+                await voiceprint.unload()
+            }
         }
     }
 }

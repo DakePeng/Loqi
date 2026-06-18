@@ -11,10 +11,10 @@ import Foundation
 struct HotwordMatcher: Sendable {
     let hotwords: [Hotword]
 
-    /// Similarity required before tier-0 *replaces* text. High on purpose:
+    /// Similarity required before tier-0 *replaces* text. Kept fairly high:
     /// a wrong replacement is worse than a missed one (the LLM still gets
     /// a shot at anything ≥ `refineThreshold`).
-    var replaceThreshold = 0.84
+    var replaceThreshold = 0.75
     /// Similarity that forces tier-2 refinement even for short utterances.
     var refineThreshold = 0.7
     /// Glossary inclusion cutoff and cap (prompt budget).
@@ -30,7 +30,7 @@ struct HotwordMatcher: Sendable {
         var best = 0.0
         for form in hotword.recognitionForms(for: language) {
             if language.usesCJKScript, form.contains(where: \.isCJK) {
-                if cjkWindowMatch(form: form, in: text) { return 1.0 }
+                best = max(best, cjkWindowSimilarity(form: form, in: text))
             }
             best = max(best, latinBestSimilarity(form: form, in: text))
         }
@@ -91,7 +91,7 @@ struct HotwordMatcher: Sendable {
         for hotword in hotwords {
             for (form, replacement) in hotword.fixupPairs(for: language) {
                 if language.usesCJKScript, form.contains(where: \.isCJK) {
-                    result = replaceCJKHomophones(
+                    result = replaceCJKNearMisses(
                         of: form, with: replacement, in: result)
                 } else {
                     result = replaceLatinNearMisses(
@@ -182,20 +182,25 @@ struct HotwordMatcher: Sendable {
 
     // MARK: CJK matching
 
-    private func cjkWindowMatch(form: String, in text: String) -> Bool {
+    /// Best toneless-pinyin similarity of `form` against any same-length
+    /// window of `text`. Fuzzy (not exact equality) so non-homophone
+    /// near-misses are caught too: 志鹏 (zhipeng) vs a 治平 (zhiping) mishear.
+    private func cjkWindowSimilarity(form: String, in text: String) -> Double {
         let formPinyin = Self.pinyin(form)
-        guard !formPinyin.isEmpty, form.count >= 2 else { return false }
+        guard !formPinyin.isEmpty, form.count >= 2 else { return 0 }
         let characters = Array(text)
         let length = form.count
-        guard characters.count >= length else { return false }
+        guard characters.count >= length else { return 0 }
+        var best = 0.0
         for start in 0...(characters.count - length) {
             let window = String(characters[start..<(start + length)])
-            if Self.pinyin(window) == formPinyin { return true }
+            best = max(best, Self.similarity(Self.pinyin(window), formPinyin))
+            if best == 1 { return 1 }
         }
-        return false
+        return best
     }
 
-    private func replaceCJKHomophones(
+    private func replaceCJKNearMisses(
         of form: String, with rendering: String, in text: String
     ) -> String {
         let formPinyin = Self.pinyin(form)
@@ -209,7 +214,8 @@ struct HotwordMatcher: Sendable {
         while index < characters.count {
             if index + length <= characters.count {
                 let window = String(characters[index..<(index + length)])
-                if window != rendering, Self.pinyin(window) == formPinyin {
+                if window != rendering,
+                   Self.similarity(Self.pinyin(window), formPinyin) >= replaceThreshold {
                     output.append(contentsOf: rendering)
                     index += length
                     continue

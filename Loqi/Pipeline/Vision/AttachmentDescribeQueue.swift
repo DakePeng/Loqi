@@ -13,6 +13,7 @@ actor AttachmentDescribeQueue {
         var sessionID: UUID
         var fileURL: URL
         var language: AppLanguage
+        var context: String = ""
         var retries = 0
     }
 
@@ -85,7 +86,8 @@ actor AttachmentDescribeQueue {
             guard var job = pending.first else { break }
             pending.removeFirst()
 
-            let prompt = prompts.imageDescriptionPrompt(in: job.language)
+            let prompt = prompts.imageDescriptionPrompt(
+                in: job.language, context: job.context)
             let task = Task { [llm, job] in
                 try await llm.describeImage(
                     at: job.fileURL, system: prompt.system, user: prompt.user)
@@ -94,7 +96,7 @@ actor AttachmentDescribeQueue {
             do {
                 let raw = try await task.value
                 generation = nil
-                let text = prompts.cleanResponse(raw)
+                let text = prompts.plainDescription(raw)
                 guard !text.isEmpty, !PromptBuilder.hasDegenerateRepetition(text)
                 else { continue }
                 let delivered = job

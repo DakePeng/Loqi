@@ -15,6 +15,9 @@ actor ChunkNoteQueue {
         var startedAt: Date
         var fallbackHeadline: String
         var language: AppLanguage
+        var chunkID = "c000"
+        var timeRange = "未明确"
+        var sourceIDs: [String] = []
         /// Hotword glossary lines scored against this chunk at enqueue
         /// time, so notes keep the correct spellings of known terms.
         var vocabulary: [String] = []
@@ -102,8 +105,16 @@ actor ChunkNoteQueue {
             guard var job = pending.first else { break }
             pending.removeFirst()
 
-            let prompt = prompts.chunkNotePrompt(
-                chunkText: job.chunkText, vocabulary: job.vocabulary,
+            // Live notes map one chunk at a time as speech arrives, so there's
+            // no prior-topic context to feed (batch summarize threads it via
+            // `previousTopic`). The reduce-time dedup collapses any repeated
+            // topics this produces across the live/batch seam.
+            let prompt = prompts.chunkRecordPrompt(
+                chunkID: job.chunkID,
+                timeRange: job.timeRange,
+                contextOnly: "",
+                target: job.chunkText,
+                vocabulary: job.vocabulary,
                 in: job.language)
             let task = Task { [llm] in
                 try await llm.generate(
@@ -115,7 +126,13 @@ actor ChunkNoteQueue {
             do {
                 let raw = try await task.value
                 generation = nil
-                deliverNote(parsed: prompts.parseChunkNote(raw), job: job)
+                let records = prompts.parseSummaryRecords(
+                    raw,
+                    chunkID: job.chunkID,
+                    validSourceIDs: job.sourceIDs,
+                    source: .transcript,
+                    timestamp: job.startedAt)
+                deliverNote(parsed: prompts.parsedChunkNote(records: records), job: job)
             } catch is CancellationError {
                 generation = nil
                 job.retries += 1
@@ -149,6 +166,7 @@ actor ChunkNoteQueue {
             decisions: parsed.decisions,
             actions: parsed.actions,
             terms: parsed.terms,
+            summaryRecords: parsed.summaryRecords.isEmpty ? nil : parsed.summaryRecords,
             isFallback: parsed.isEmpty ? true : nil)
         let endID = job.endEntryID
         Task { @MainActor [deliver] in deliver(note, endID) }

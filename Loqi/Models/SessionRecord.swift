@@ -30,6 +30,43 @@ struct SessionRecord: Identifiable, Codable, Sendable {
         var isUser: Bool { role == "user" }
     }
 
+    /// One extracted, source-grounded record from the map phase. These are
+    /// persisted beside chunk notes and photo attachments so the final
+    /// summary can be rendered locally without a model reduce pass.
+    struct SummaryRecord: Codable, Sendable, Identifiable, Equatable {
+        enum Kind: String, Codable, Sendable {
+            case topic
+            case point
+            case decision
+            case action
+            case question
+            case risk
+            case term
+            case reflection
+        }
+
+        enum Source: String, Codable, Sendable {
+            case transcript
+            case photo
+        }
+
+        var id = UUID()
+        var kind: Kind
+        var source: Source
+        var sourceIDs: [String] = []
+        /// Stable chronological order within the generated record set.
+        var sourceIndex: Int = 0
+        var timestamp: Date
+        var text: String
+        var topicTitle: String?
+        var timeRange: String?
+        var owner: String?
+        var task: String?
+        var deadline: String?
+        /// Human-facing provenance, e.g. "Photo 10:24".
+        var sourceLabel: String?
+    }
+
     /// One map-phase note per transcript chunk; powers the outline and the
     /// reduce step, and is cached so re-summarizing is cheap.
     struct ChunkNote: Codable, Sendable, Identifiable {
@@ -42,13 +79,17 @@ struct SessionRecord: Identifiable, Codable, Sendable {
         var decisions: [String] = []
         var actions: [String] = []
         var terms: [String] = []
+        /// New map-only summary records. Optional so records saved before
+        /// this field keep decoding; legacy arrays above are converted at
+        /// render time when this is absent.
+        var summaryRecords: [SummaryRecord]?
         /// True when extraction failed and this note is a headline-only
         /// stub; summarize re-maps such chunks instead of trusting them.
         /// Optional so records saved before this field keep decoding.
         var isFallback: Bool?
 
         var hasContent: Bool {
-            !facts.isEmpty || !decisions.isEmpty
+            !(summaryRecords ?? []).isEmpty || !facts.isEmpty || !decisions.isEmpty
                 || !actions.isEmpty || !terms.isEmpty
         }
     }
@@ -71,6 +112,9 @@ struct SessionRecord: Identifiable, Codable, Sendable {
         /// Vision-LLM description, when a vision-capable model tier is
         /// active. Preferred over thin OCR (diagrams, photos).
         var vlmDescription: String?
+        /// Derived visual summary records. Optional for old records and for
+        /// attachments whose text has not been mapped yet.
+        var summaryRecords: [SummaryRecord]?
     }
 
     var id = UUID()
@@ -80,6 +124,8 @@ struct SessionRecord: Identifiable, Codable, Sendable {
     var entries: [Entry]
     /// User-assigned names for diarization slots ("Speaker 1" → "王经理").
     var speakerNames: [Int: String] = [:]
+    /// Speaker picker value active while recording. nil for old records/imports.
+    var recordingSpeakerCount: Int?
     /// On-device LLM summary, cached once generated. Lightweight markdown:
     /// overview paragraph, then "## Heading" sections of "- " bullets.
     var summary: String?
@@ -190,33 +236,6 @@ struct SessionRecord: Identifiable, Codable, Sendable {
         lines.append("")
         let timeFormatter = DateFormatter()
         timeFormatter.timeStyle = .short
-        // Photos render at their anchor entry; ones without a (surviving)
-        // anchor trail the transcript.
-        var attachmentsByAnchor: [UUID: [Attachment]] = [:]
-        var unanchored: [Attachment] = []
-        let entryIDs = Set(entries.map(\.id))
-        for attachment in attachments ?? [] {
-            if let anchor = attachment.anchorEntryID, entryIDs.contains(anchor) {
-                attachmentsByAnchor[anchor, default: []].append(attachment)
-            } else {
-                unanchored.append(attachment)
-            }
-        }
-        func appendAttachment(_ attachment: Attachment) {
-            lines.append("**🖼 Photo \(timeFormatter.string(from: attachment.timestamp))**")
-            lines.append("")
-            if let caption = attachment.caption, !caption.isEmpty {
-                lines.append("*\(caption)*")
-                lines.append("")
-            }
-            let text = attachment.ocrText ?? attachment.vlmDescription
-            if let text, !text.isEmpty {
-                for line in text.split(separator: "\n") {
-                    lines.append("> \(line)")
-                }
-                lines.append("")
-            }
-        }
         var lastSpeaker: Int? = -1
         for entry in entries {
             if entry.speaker != lastSpeaker, let label = speakerLabel(entry.speaker) {
@@ -230,21 +249,44 @@ struct SessionRecord: Identifiable, Codable, Sendable {
                 lines.append("> \(translation)")
             }
             lines.append("")
-            for attachment in attachmentsByAnchor[entry.id] ?? [] {
-                appendAttachment(attachment)
-                lastSpeaker = -1  // re-label the next speaker after the break
-            }
         }
-        for attachment in unanchored {
-            appendAttachment(attachment)
+        // All photos collected in one section — description first, raw OCR as
+        // the quoted detail.
+        let photos = (attachments ?? []).sorted { $0.timestamp < $1.timestamp }
+        if !photos.isEmpty {
+            lines.append("## Photos")
+            lines.append("")
+            for attachment in photos {
+                lines.append("**🖼 Photo \(timeFormatter.string(from: attachment.timestamp))**")
+                lines.append("")
+                if let caption = attachment.caption, !caption.isEmpty {
+                    lines.append("*\(caption)*")
+                    lines.append("")
+                }
+                if let description = attachment.vlmDescription, !description.isEmpty {
+                    for line in description.split(separator: "\n") {
+                        lines.append(String(line))
+                    }
+                    lines.append("")
+                }
+                if let ocr = attachment.ocrText, !ocr.isEmpty {
+                    for line in ocr.split(separator: "\n") {
+                        lines.append("> \(line)")
+                    }
+                    lines.append("")
+                }
+            }
         }
         return lines.joined(separator: "\n")
     }
 
     /// Plain transcript for LLM prompts (summary, hotword mining).
-    func plainTranscript(limit: Int = 6000) -> String {
+    func plainTranscript(limit: Int = 6000, includeSpeakers: Bool = true) -> String {
         var text = entries.map { entry in
-            let speaker = speakerLabel(entry.speaker).map { "[\($0)] " } ?? ""
+            // Speaker labels are auto-generated UI scaffolding ("Speaker 1");
+            // vocabulary mining must omit them or it suggests "speaker" itself.
+            let speaker = includeSpeakers
+                ? speakerLabel(entry.speaker).map { "[\($0)] " } ?? "" : ""
             let translation = entry.translation.map { " → \($0)" } ?? ""
             return "\(speaker)\(entry.sourceText)\(translation)"
         }.joined(separator: "\n")

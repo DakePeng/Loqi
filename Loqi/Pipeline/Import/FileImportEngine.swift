@@ -77,7 +77,7 @@ final class FileImportEngine {
             senseVoiceInstalled: SenseVoiceModelStore.isInstalled,
             qwen3Installed: Qwen3ASRModelStore.isInstalled)
         if backend == .qwen3ASR { await llm?.unload() }
-        let utterances = try await OfflineTranscriber.transcribe(
+        let rawUtterances = try await OfflineTranscriber.transcribe(
             audioFile,
             language: direction.source,
             backend: backend,
@@ -85,6 +85,9 @@ final class FileImportEngine {
         ) { fraction in
             onPhase(.transcribing(fraction))
         }
+        // Drop punctuation-only finals ("." / "。") before they become entries;
+        // filtering here keeps utterances index-aligned with diarization below.
+        let utterances = rawUtterances.filter { $0.text.hasSpeechContent }
         logger.info("import: \(utterances.count) utterances from \(Int(duration))s file")
 
         var entries = utterances.map { utterance in

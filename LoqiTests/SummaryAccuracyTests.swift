@@ -10,33 +10,6 @@ struct SummaryAccuracyTests {
 
     // MARK: Map-phase vocabulary injection
 
-    @Test func chunkNotePromptCarriesVocabularyOnlyWhenPresent() {
-        let bare = builder.chunkNotePrompt(chunkText: "text", in: .english)
-        #expect(!bare.system.contains("known terms"))
-        #expect(!bare.user.contains("Known terms:"))
-        #expect(bare.user == "Excerpt:\ntext")
-
-        let primed = builder.chunkNotePrompt(
-            chunkText: "text",
-            vocabulary: ["志鹏 (person name)", "Qwen (model family)"],
-            in: .english)
-        #expect(primed.system.contains("mis-hearing of one of the known terms"))
-        #expect(primed.user == """
-        Known terms: 志鹏 (person name); Qwen (model family)
-        Excerpt:
-        text
-        """)
-    }
-
-    @Test func chunkNotePromptDemandsVerbatimSpecifics() {
-        let prompt = builder.chunkNotePrompt(chunkText: "x", in: .chinese)
-        #expect(prompt.system.contains(
-            "Copy names, numbers, dates, and amounts exactly"))
-        #expect(prompt.system.contains(
-            "Do not add anything that is not in the excerpt."))
-        #expect(prompt.system.contains("Write in Chinese."))
-    }
-
     @Test func noteGlossaryListsOnlyPlausiblyPresentTerms() {
         let matcher = HotwordMatcher(hotwords: [
             Hotword(
@@ -58,83 +31,42 @@ struct SummaryAccuracyTests {
             language: .english, text: "nothing relevant here").isEmpty)
     }
 
-    // MARK: Reduce-phase grounding
-
-    @Test func everyStyleReducePromptIsGrounded() {
-        for style in SummaryStyle.allCases {
-            let system = builder.reduceSummaryPrompt(
-                notes: "x", style: style, in: .english).system
-            #expect(system.contains(
-                "Use only information from the notes; never invent names, "
-                + "numbers, or events."))
-            #expect(system.contains(
-                "Keep names, numbers, and dates exactly as written in the notes."))
-        }
-    }
-
-    @Test func segmentSectionPromptIsGrounded() {
-        let system = builder.segmentSectionPrompt(notes: "x", in: .english).system
-        #expect(system.contains(
-            "Use only information from the notes; never invent names, "
-            + "numbers, or events."))
-    }
-
     // MARK: Fallback stubs
 
-    @Test func reduceInputSkipsHeadlineOnlyStubs() {
-        let full = SessionRecord.ChunkNote(
-            headline: "Pricing review", startedAt: .now,
-            facts: ["Plan costs ¥30"])
-        let stub = SessionRecord.ChunkNote(
-            headline: "嗯那个我们今天", startedAt: .now, isFallback: true)
-        let input = SummaryEngine.reduceInput(
-            notes: [stub, full], style: .meeting)
-        #expect(input == """
-        [1] Pricing review
-        fact: Plan costs ¥30
-        """)
-    }
-
-    @Test func reduceInputKeepsHeadlinesWhenEveryNoteIsAStub() {
-        let stubs = [
-            SessionRecord.ChunkNote(headline: "Opening", startedAt: .now),
-            SessionRecord.ChunkNote(headline: "Closing", startedAt: .now),
-        ]
-        let input = SummaryEngine.reduceInput(notes: stubs, style: .meeting)
-        #expect(input == "[1] Opening\n[2] Closing")
-    }
-
-    @Test func reduceInputDropsCrossNoteDuplicateBullets() {
-        // The same fact restated in a later chunk (here only case/punctuation
-        // differs) is dropped; distinct facts and both headlines survive.
+    @Test func renderDropsCrossKindAndParaphrasedDuplicates() {
+        // The same statement extracted as a point in one chunk and a decision
+        // in another (kinds differ, so deduped() keeps both) must render once;
+        // a near-paraphrase of it is also suppressed. Distinct facts survive.
         let notes = [
             SessionRecord.ChunkNote(
                 headline: "A", startedAt: .now,
-                facts: ["Ship June 10", "Budget is ¥30"]),
+                facts: ["Ship the release on June 10"]),
             SessionRecord.ChunkNote(
-                headline: "B", startedAt: .now,
-                facts: ["ship june 10.", "Hire two engineers"]),
+                headline: "B", startedAt: Date().addingTimeInterval(1),
+                facts: ["Hire two engineers"],
+                decisions: ["Ship the release on June 10."]),
         ]
-        let input = SummaryEngine.reduceInput(notes: notes, style: .meeting)
-        #expect(input == """
-        [1] A
-        fact: Ship June 10
-        fact: Budget is ¥30
-        [2] B
-        fact: Hire two engineers
-        """)
+        let output = SummaryRecordReducer.render(
+            records: SummaryRecordReducer.records(from: notes),
+            style: .meeting, length: .standard, in: .english)
+        let occurrences = output.components(separatedBy: "Ship the release on June 10")
+            .count - 1
+        #expect(occurrences == 1)
+        #expect(output.contains("Hire two engineers"))
     }
 
-    @Test func reduceInputKeepsDistinctSimilarBullets() {
-        // "决定一" / "决定二" are distinct (one-char differences below the
-        // near-duplicate threshold) and must not be merged.
-        let note = SessionRecord.ChunkNote(
-            headline: "A", startedAt: .now,
-            decisions: ["决定一", "决定二", "决定三"])
-        let input = SummaryEngine.reduceInput(notes: [note], style: .meeting)
-        #expect(input.contains("decision: 决定一"))
-        #expect(input.contains("decision: 决定二"))
-        #expect(input.contains("decision: 决定三"))
+    @Test func renderKeepsDistinctRecords() {
+        // Guard against over-merging: two clearly different facts both survive.
+        let notes = [
+            SessionRecord.ChunkNote(
+                headline: "A", startedAt: .now,
+                facts: ["Budget is ¥30", "Launch in Tokyo first"]),
+        ]
+        let output = SummaryRecordReducer.render(
+            records: SummaryRecordReducer.records(from: notes),
+            style: .meeting, length: .standard, in: .english)
+        #expect(output.contains("Budget is ¥30"))
+        #expect(output.contains("Launch in Tokyo first"))
     }
 
     @Test func parsedChunkNoteIsEmptyOnlyWhenFullyEmpty() {

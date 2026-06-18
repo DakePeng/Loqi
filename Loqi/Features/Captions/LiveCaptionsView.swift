@@ -28,7 +28,9 @@ struct LiveCaptionsView: View {
     @AppStorage("captions.source") private var sourceRaw = AppLanguage.english.rawValue
     /// Translation is opt-in: empty = off (plain transcription, the default).
     @AppStorage("captions.translation") private var translationRaw = ""
-    @AppStorage("captions.speakerCount") private var speakerCount = 0
+    // -1 = Auto (diarize, up to 8). Default on so speaker separation works
+    // without configuring; 0/1 = single speaker (no diarization).
+    @AppStorage("captions.speakerCount") private var speakerCount = -1
     @AppStorage(MicSensitivity.defaultsKey) private var sensitivityRaw
         = MicSensitivity.balanced.rawValue
     @State private var errorMessage: String?
@@ -191,13 +193,16 @@ struct LiveCaptionsView: View {
             }
             #if os(iOS)
             .fullScreenCover(item: $viewingAttachment) { attachment in
-                // Live view is read-only; captions/delete live in the detail.
-                AttachmentViewer(attachment: attachment)
+                // Live view allows delete; captions stay in the detail.
+                AttachmentViewer(
+                    attachment: attachment,
+                    onDelete: { pipeline.removeAttachment(attachment.id) })
             }
             #else
             .sheet(item: $viewingAttachment) { attachment in
-                // Live view is read-only; captions/delete live in the detail.
-                AttachmentViewer(attachment: attachment)
+                AttachmentViewer(
+                    attachment: attachment,
+                    onDelete: { pipeline.removeAttachment(attachment.id) })
             }
             #endif
             .alert("Couldn't start", isPresented: .init(
@@ -487,11 +492,16 @@ struct LiveCaptionsView: View {
     }
 
     private var recordingInlineControls: some View {
-        HStack(spacing: 12) {
-            addPhotoButton
-            pickupBarButton
-            speakersChip
-            translationBarButton
+        HStack(spacing: 8) {
+            // Group the secondary toggles into one toolbar pill so the bar
+            // reads as status · controls · stop instead of loose mixed icons.
+            HStack(spacing: 2) {
+                addPhotoButton
+                pickupBarButton
+                speakersBarButton
+                translationBarButton
+            }
+            .background(.regularMaterial, in: Capsule())
             BatteryHint()
         }
         .fixedSize(horizontal: true, vertical: false)
@@ -575,6 +585,35 @@ struct LiveCaptionsView: View {
                     : speakerCount >= 2 ? "\(speakerCount)" : "1",
                 active: diarizationOn)
         }
+        .onChange(of: speakerCount) {
+            pipeline.updateSpeakerCount(speakerCount)
+        }
+    }
+
+    /// Same picker, icon-only — matches the other slim-bar toggles. The
+    /// glyph carries the mode (one voice / auto / fixed count); the exact
+    /// number lives in the menu.
+    private var speakersBarButton: some View {
+        Menu {
+            Picker("Speakers", selection: $speakerCount) {
+                Label("One voice", systemImage: "person").tag(0)
+                Label("Auto", systemImage: "person.2.wave.2").tag(-1)
+                ForEach(2...6, id: \.self) { count in
+                    Label("\(count) speakers", systemImage: "person.2").tag(count)
+                }
+            }
+        } label: {
+            Image(systemName: speakerCount == -1
+                ? "person.2.wave.2" : diarizationOn ? "person.2" : "person")
+                .font(.body)
+                .foregroundStyle(diarizationOn
+                    ? AnyShapeStyle(.tint) : AnyShapeStyle(.primary))
+                .contentTransition(.symbolEffect(.replace))
+                .animation(.default, value: speakerCount)
+                .frame(minWidth: 44, minHeight: 44)
+                .contentShape(Rectangle())
+        }
+        .accessibilityLabel("Speakers")
         .onChange(of: speakerCount) {
             pipeline.updateSpeakerCount(speakerCount)
         }
@@ -863,17 +902,14 @@ private struct SummarySoFarSheet: View {
                 pipeline.liveNotes, attachments: pipeline.liveAttachments)
             let language = AppLanguage.devicePreferred
                 ?? pipeline.activeDirection?.target ?? .english
-            let transcriptCharacters = pipeline.store.entries(in: .captions)
-                .reduce(0) { $0 + $1.sourceText.count }
             do {
                 let engine = SummaryEngine(llm: pipeline.llm)
-                // Mid-session peek stays one fast generation — no stitched
-                // detail sections while ASR competes for the model.
+                // Mid-session peek is a local render of live records — no
+                // stitched detail sections while capture is still running.
                 summary = try await engine.reduce(
                     notes: notes,
                     style: SummaryStyle(rawValue: defaultStyleRaw) ?? .meeting,
                     length: SummaryLength(rawValue: defaultLengthRaw) ?? .standard,
-                    transcriptCharacterCount: transcriptCharacters,
                     in: language,
                     stitchDetails: false)
             } catch LLMServiceError.modelNotLoaded {

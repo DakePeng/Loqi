@@ -67,6 +67,19 @@ struct SessionRecordTests {
         let decoded = try decoder.decode(SessionRecord.self, from: data)
         #expect(decoded.unseen == nil)
         #expect(decoded.importing == nil)
+        #expect(decoded.recordingSpeakerCount == nil)
+    }
+
+    @Test func recordingSpeakerCountRoundTrips() throws {
+        var record = makeRecord()
+        record.recordingSpeakerCount = -1
+        let encoder = JSONEncoder()
+        encoder.dateEncodingStrategy = .iso8601
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        let decoded = try decoder.decode(
+            SessionRecord.self, from: encoder.encode(record))
+        #expect(decoded.recordingSpeakerCount == -1)
     }
 
     @Test func markdownIncludesSummaryWhenPresent() {
@@ -189,6 +202,18 @@ struct SessionRecordTests {
         #expect(text.contains("499"))   // newest content survives
     }
 
+    @Test func plainTranscriptCanOmitSpeakerLabels() {
+        let record = makeRecord()
+        let withSpeakers = record.plainTranscript()
+        #expect(withSpeakers.contains("[王老师]"))
+        // Mining transcript drops the labels so "speaker" isn't mined as a term.
+        let mining = record.plainTranscript(includeSpeakers: false)
+        #expect(!mining.contains("[王老师]"))
+        #expect(!mining.contains("["))
+        #expect(mining.contains("大家好"))            // source text survives
+        #expect(mining.contains("Hello everyone"))    // translation survives
+    }
+
     @Test func codableRoundTrip() throws {
         let record = makeRecord()
         let encoder = JSONEncoder()
@@ -218,6 +243,19 @@ struct SessionRecordTests {
         #expect(parsed[1].renderings[.chinese] == "通义千问")
         #expect(parsed[1].note == "model family")
         #expect(parsed[2].term == "Loqi")
+    }
+
+    @Test func rejectsLongCJKPhraseSuggestions() {
+        // Small models suggest whole spoken phrases; with no spaces the
+        // word cap can't catch them, so the CJK character cap must.
+        let raw = """
+        志鹏 | person name
+        找到特别特别离谱的路边摊 | roadside stall
+        美国最肥路公菜 | American fast food
+        显示器 | monitor
+        """
+        let parsed = PromptBuilder().parseHotwordSuggestions(raw)
+        #expect(parsed.map(\.term) == ["志鹏", "显示器"])
     }
 
     @Test func hotwordSuggestionsAreDeduplicated() {

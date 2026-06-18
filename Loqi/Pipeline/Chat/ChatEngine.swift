@@ -151,6 +151,9 @@ struct ChatEngine {
                 + note.decisions.map { "decision: \($0)" }
                 + note.actions.map { "action: \($0)" }
                 + note.terms.map { "term: \($0)" }
+                + (note.summaryRecords ?? []).map {
+                    "\($0.kind.rawValue): \($0.text)"
+                }
             for line in labelled {
                 let haystack = line.lowercased()
                 guard tokens.contains(where: { haystack.contains($0) }) else { continue }

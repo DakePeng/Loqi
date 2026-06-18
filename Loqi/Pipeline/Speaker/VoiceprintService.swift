@@ -102,6 +102,8 @@ actor VoiceprintService {
     }
 
     func unload() {
+        loadTask?.cancel()
+        loadTask = nil
         diarizer?.cleanup()
         diarizer = nil
         state = .unloaded
@@ -386,8 +388,14 @@ actor VoiceprintService {
 
         // Same transient-network retry as the live models; FluidAudio
         // wipes and re-fetches corrupted caches itself.
+        // A cache hit still drives this callback while CoreML compiles the
+        // models from disk — surface the download phase only when a real
+        // network fetch will happen, so an installed model never shows
+        // "Fetching speaker model".
+        let needsDownload = !Self.isOfflineDiarizerDownloaded
         let models = try await withExponentialBackoff(attempts: 3) {
             try await OfflineDiarizerModels.load { progress in
+                guard needsDownload else { return }
                 onProgress?(.download(progress.fractionCompleted))
             }
         }

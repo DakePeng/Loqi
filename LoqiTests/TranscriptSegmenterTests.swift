@@ -25,6 +25,18 @@ struct TranscriptSegmenterTests {
         #expect(output?.kind == .discard)
     }
 
+    @Test func punctuationOnlyFinalDiscardsEntry() {
+        // Silence/noise yields lone-dot finals ("." / "。"); they must not
+        // become entries.
+        #expect(segmenter.process(
+            .finalized("。", language: nil), fallbackLanguage: .chinese)?.kind == .discard)
+        #expect(segmenter.process(
+            .finalized(" . ", language: nil), fallbackLanguage: .english)?.kind == .discard)
+        // And the volatile equivalent is ignored outright.
+        #expect(segmenter.process(
+            .volatile("。", language: nil), fallbackLanguage: .chinese) == nil)
+    }
+
     @Test func shortEnglishFinalSkipsRefinement() {
         let output = segmenter.process(
             .finalized("Thank you", language: nil),

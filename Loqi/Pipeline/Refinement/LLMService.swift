@@ -259,6 +259,7 @@ actor LLMService: LLMServicing {
     }
 
     func unload() {
+        loadTask?.cancel()
         container = nil
         MLX.Memory.clearCache()
         loadState = .unloaded

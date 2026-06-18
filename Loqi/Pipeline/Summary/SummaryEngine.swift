@@ -33,14 +33,6 @@ struct SummaryEngine {
     static let summaryMaxTokensHardCap = 900
     static let summaryOverviewHardCap = 6
     static let summarySectionHardCap = 8
-    /// Detailed summaries append deterministic chronological note sections
-    /// after the core reduce. The map phase already did the LLM extraction;
-    /// the document assembly itself stays cheap and predictable.
-    static let detailStitchMinNotes = 4
-    /// Consecutive contentful notes per detailed section.
-    static let detailSegmentSize = 2
-    /// Bullets per deterministic detailed section.
-    static let detailSectionPointCap = 6
 
     enum TranscriptSizeTier: Equatable, Sendable {
         case short
@@ -241,21 +233,31 @@ struct SummaryEngine {
     ) async throws -> [SessionRecord.ChunkNote] {
         let chunks = Self.chunkEntries(entries)
         var notes: [SessionRecord.ChunkNote] = []
+        // Last extracted topic title, fed to the next chunk so an ongoing
+        // topic isn't re-extracted as a fresh one each chunk.
+        var previousTopic = ""
 
         for (index, chunk) in chunks.enumerated() {
             await progress(index, chunks.count)
-            let text = chunk.map { entry in
+            let sourceIDs = chunk.indices.map { String(format: "m%03d", $0 + 1) }
+            let text = zip(sourceIDs, chunk).map { id, entry in
                 let speaker = speakerLabel(entry.speaker).map { "[\($0)] " } ?? ""
-                return speaker + entry.sourceText
+                return "\(id)\t\(speaker)\(entry.sourceText)"
             }.joined(separator: "\n")
+            let chunkID = String(format: "c%03d", index + 1)
 
             // Vocabulary scoring runs against the chunk's own source
             // language (pinyin matching for CJK), not the note language.
             let vocabulary = matcher?.noteGlossaryLines(
                 language: chunk.first?.direction.source ?? language,
                 text: text) ?? []
-            let prompt = prompts.chunkNotePrompt(
-                chunkText: text, vocabulary: vocabulary, in: language)
+            let prompt = prompts.chunkRecordPrompt(
+                chunkID: chunkID,
+                timeRange: Self.timeRange(for: chunk),
+                contextOnly: previousTopic,
+                target: text,
+                vocabulary: vocabulary,
+                in: language)
             var parsed = PromptBuilder.ParsedChunkNote()
             // One retry: a single failed or off-format generation would
             // otherwise degrade this chunk to a headline-only stub.
@@ -264,7 +266,13 @@ struct SummaryEngine {
                     let raw = try await llm.generate(
                         system: prompt.system, user: prompt.user,
                         maxTokens: Self.chunkNoteMaxTokens, temperature: 0.1)
-                    parsed = prompts.parseChunkNote(raw)
+                    let records = prompts.parseSummaryRecords(
+                        raw,
+                        chunkID: chunkID,
+                        validSourceIDs: sourceIDs,
+                        source: .transcript,
+                        timestamp: chunk.first?.timestamp ?? fallbackDate)
+                    parsed = prompts.parsedChunkNote(records: records)
                 } catch is CancellationError {
                     throw CancellationError()
                 } catch {
@@ -284,131 +292,54 @@ struct SummaryEngine {
                 decisions: parsed.decisions,
                 actions: parsed.actions,
                 terms: parsed.terms,
+                summaryRecords: parsed.summaryRecords.isEmpty ? nil : parsed.summaryRecords,
                 isFallback: parsed.isEmpty ? true : nil))
+            // Carry the last real topic forward; a failed chunk keeps the
+            // prior one rather than seeding context with fallback text.
+            if let headline = parsed.headline { previousTopic = headline }
         }
         await progress(chunks.count, chunks.count)
         return notes
-    }
-
-    /// Reduce input: one block per note. `term:` lines ride along only when
-    /// the style's spec asks for them (lecture). Headline-only stubs (failed
-    /// extractions) are kept out — a bare "[n] <opening words>" line invites
-    /// the reduce model to invent content for that span — unless every note
-    /// is a stub, where headlines beat an empty input.
-    static func reduceInput(
-        notes: [SessionRecord.ChunkNote], style: SummaryStyle
-    ) -> String {
-        let contentful = notes.filter(\.hasContent)
-        let included = contentful.isEmpty ? notes : contentful
-        // Cross-note dedup: topics span chunk boundaries, so small models
-        // restate the same fact in adjacent chunks and the reduce then
-        // double-counts it. Drop a bullet whose normalized form repeats — or
-        // near-repeats, at a high threshold — one already emitted by an
-        // earlier note. First occurrence wins, so chronology and headlines
-        // are untouched.
-        var seen = Set<String>()
-        var recent: [String] = []
-        func isDuplicate(_ text: String) -> Bool {
-            let key = Self.dedupKey(text)
-            guard !key.isEmpty else { return false }
-            if seen.contains(key) { return true }
-            // Light paraphrase: compare only against the most recent keys so
-            // distinct facts are never merged and the cost stays linear.
-            for prior in recent.suffix(24)
-            where HotwordMatcher.similarity(prior, key) >= 0.9 {
-                return true
-            }
-            seen.insert(key)
-            recent.append(key)
-            return false
-        }
-        func keep(_ items: [String], _ label: String) -> [String] {
-            items.compactMap { isDuplicate($0) ? nil : "\(label): \($0)" }
-        }
-        return included.enumerated().map { index, note in
-            var lines = ["[\(index + 1)] \(note.headline)"]
-            lines.append(contentsOf: keep(note.facts, "fact"))
-            lines.append(contentsOf: keep(note.decisions, "decision"))
-            lines.append(contentsOf: keep(note.actions, "action"))
-            if style.spec.includeTermsInNotes {
-                lines.append(contentsOf: keep(note.terms, "term"))
-            }
-            return lines.joined(separator: "\n")
-        }.joined(separator: "\n")
     }
 
     /// Normalized form for cross-note duplicate detection: lowercased,
     /// letters and digits only, so "Ship June 10." and "ship june 10"
     /// collapse to one bullet.
     static func dedupKey(_ text: String) -> String {
-        String(text.lowercased().filter { $0.isLetter || $0.isNumber })
-    }
-
-    struct DetailSection: Equatable, Sendable {
-        var headline: String
-        var points: [String]
-    }
-
-    static func shouldStitchDetailSections(
-        length: SummaryLength, noteCount: Int
-    ) -> Bool {
-        length == .detailed && noteCount >= detailStitchMinNotes
-    }
-
-    /// Split contentful notes into consecutive fixed-size groups. Detailed
-    /// Notes are chronological, so a one-note tail is preferable to
-    /// rebalancing earlier sections and blurring the transcript flow.
-    static func segmentNotes(
-        _ notes: [SessionRecord.ChunkNote], size: Int = detailSegmentSize
-    ) -> [[SessionRecord.ChunkNote]] {
-        guard !notes.isEmpty else { return [] }
-        var segments: [[SessionRecord.ChunkNote]] = []
-        var index = notes.startIndex
-        while index < notes.endIndex {
-            let end = notes.index(index, offsetBy: size, limitedBy: notes.endIndex)
-                ?? notes.endIndex
-            segments.append(Array(notes[index..<end]))
-            index = end
+        var scalars = String.UnicodeScalarView()
+        for scalar in text.lowercased().unicodeScalars
+        where isDedupScalar(scalar) {
+            scalars.append(scalar)
         }
-        return segments
+        return String(scalars)
     }
 
-    /// Deterministic section assembled from existing map notes. This is the
-    /// Detailed Notes document body: no extra LLM pass, no new hallucination
-    /// surface, and no hidden truncation beyond the visible per-section cap.
-    static func detailSection(
-        for segment: [SessionRecord.ChunkNote]
-    ) -> DetailSection? {
-        let points = segment.flatMap { $0.facts + $0.decisions + $0.actions }
-        guard let headline = segment.first?.headline, !points.isEmpty
-        else { return nil }
-        return DetailSection(
-            headline: headline,
-            points: Array(points.prefix(detailSectionPointCap)))
+    private static func isDedupScalar(_ scalar: Unicode.Scalar) -> Bool {
+        let value = scalar.value
+        return CharacterSet.alphanumerics.contains(scalar)
+            || (0x3400...0x4DBF).contains(value)
+            || (0x4E00...0x9FFF).contains(value)
+            || (0x3040...0x30FF).contains(value)
+            || (0xAC00...0xD7AF).contains(value)
     }
 
-    static func detailedSections(
-        for notes: [SessionRecord.ChunkNote],
-        size: Int = detailSegmentSize
-    ) -> [DetailSection] {
-        let contentful = notes.filter {
-            $0.hasContent && $0.isFallback != true
+    static func timeRange(for entries: [SessionRecord.Entry]) -> String {
+        guard let first = entries.first else { return "未明确" }
+        let start = first.audioOffset ?? first.timestamp.timeIntervalSince1970
+        let end = entries.last?.audioOffset
+            ?? entries.last?.timestamp.timeIntervalSince1970
+            ?? start
+        if first.audioOffset != nil || entries.last?.audioOffset != nil {
+            return "\(clockTime(start))-\(clockTime(max(start, end)))"
         }
-        return segmentNotes(contentful, size: size)
-            .compactMap { detailSection(for: $0) }
+        let formatter = DateFormatter()
+        formatter.timeStyle = .short
+        return "\(formatter.string(from: first.timestamp))-\(formatter.string(from: entries.last?.timestamp ?? first.timestamp))"
     }
 
-    /// Stitched markdown: numbered "## " sections so the chronological
-    /// detail reads apart from the style's category sections above it.
-    static func appendDetailSections(
-        _ sections: [DetailSection], to base: String
-    ) -> String {
-        guard !sections.isEmpty else { return base }
-        let blocks = sections.enumerated().map { index, section in
-            "## \(index + 1). \(section.headline)\n"
-                + section.points.map { "- \($0)" }.joined(separator: "\n")
-        }
-        return base + "\n\n" + blocks.joined(separator: "\n\n")
+    private static func clockTime(_ seconds: TimeInterval) -> String {
+        let total = max(0, Int(seconds.rounded()))
+        return String(format: "%02d:%02d", total / 60, total % 60)
     }
 
     /// Summaries are for the reader: the device language wins, with the
@@ -426,60 +357,19 @@ struct SummaryEngine {
         notes: [SessionRecord.ChunkNote],
         style: SummaryStyle = .meeting,
         length: SummaryLength = .standard,
-        transcriptCharacterCount: Int? = nil,
         in language: AppLanguage,
         stitchDetails: Bool = true,
         progress: (@MainActor @Sendable (Int, Int) -> Void)? = nil
     ) async throws -> String {
-        let sizing = Self.summaryPromptSizing(
+        let summary = SummaryRecordReducer.render(
+            records: SummaryRecordReducer.records(from: notes),
             style: style,
             length: length,
-            transcriptCharacterCount: transcriptCharacterCount
-                ?? notes.reduce(0) { $0 + $1.headline.count
-                    + $1.facts.reduce(0) { $0 + $1.count }
-                    + $1.decisions.reduce(0) { $0 + $1.count }
-                    + $1.actions.reduce(0) { $0 + $1.count }
-                },
-            noteCount: notes.count)
-        let reducePrompt = prompts.reduceSummaryPrompt(
-            notes: Self.reduceInput(notes: notes, style: style),
-            style: style, in: language, sizing: sizing)
-        // One retry when the model ignores the tag format: small models
-        // frequently produce the structured shape on a second attempt, and
-        // the parsed form renders far more reliably than the plain-text
-        // fallback below. Generation errors still propagate on the first try.
-        var raw = ""
-        var parsed = PromptBuilder.ParsedStructuredSummary(style: style)
-        for attempt in 0..<2 {
-            raw = try await llm.generate(
-                system: reducePrompt.system, user: reducePrompt.user,
-                maxTokens: sizing.maxTokens, temperature: 0.1)
-            parsed = prompts.parseStructuredSummary(raw, style: style, sizing: sizing)
-            if !parsed.isEmpty { break }
-            if attempt == 0 { try Task.checkCancellation() }
-        }
-        let base: String
-        if parsed.isEmpty {
-            // Model ignored the tags — keep the cleaned plain text, which
-            // the renderer's legacy paragraph/bullet path handles.
-            let summary = prompts.cleanSummary(raw)
-            guard !summary.isEmpty, !PromptBuilder.hasDegenerateRepetition(summary) else {
-                throw SummaryError.generationFailed
-            }
-            base = summary
-        } else {
-            // Validate the content, not the synthesized "## "/"- " scaffolding.
-            guard !PromptBuilder.hasDegenerateRepetition(parsed.joinedValues) else {
-                throw SummaryError.generationFailed
-            }
-            base = prompts.renderSummaryMarkdown(parsed, in: language)
-        }
-        guard stitchDetails,
-              Self.shouldStitchDetailSections(length: length, noteCount: notes.count)
-        else { return base }
-        return Self.appendDetailSections(
-            Self.detailedSections(for: notes),
-            to: base)
+            in: language,
+            stitchDetails: stitchDetails)
+        guard !summary.isEmpty else { throw SummaryError.generationFailed }
+        await progress?(1, 1)
+        return summary
     }
 
     /// Best-effort scenario detection for the post-stop selection step.
@@ -535,14 +425,301 @@ struct SummaryEngine {
             notes: AttachmentNotes.merged(notes, attachments: record.attachments),
             style: style,
             length: length,
-            transcriptCharacterCount: record.entries.reduce(0) {
-                $0 + $1.sourceText.count
-            },
             in: language,
             progress: { done, _ in
                 progress(mappedCount + done, totalSteps)
             })
         return (summary, notes)
+    }
+}
+
+enum SummaryRecordReducer {
+    typealias Record = SessionRecord.SummaryRecord
+
+    /// Cross-section suppression: a bullet this similar to one already shown
+    /// elsewhere is dropped. Looser than `deduped`'s 0.9 merge because
+    /// small-model paraphrases of one statement routinely land in this band.
+    static let crossSectionDedupThreshold = 0.85
+
+    static func records(
+        from notes: [SessionRecord.ChunkNote],
+        attachments: [SessionRecord.Attachment]? = nil
+    ) -> [Record] {
+        let noteRecords = notes.enumerated().flatMap { index, note in
+            records(from: note, fallbackIndex: index)
+        }
+        let attachmentRecords = (attachments ?? []).enumerated().flatMap { index, attachment in
+            AttachmentNotes.records(for: attachment, fallbackIndex: notes.count + index)
+        }
+        return (noteRecords + attachmentRecords)
+            .sorted { lhs, rhs in
+                if lhs.timestamp != rhs.timestamp { return lhs.timestamp < rhs.timestamp }
+                return lhs.sourceIndex < rhs.sourceIndex
+            }
+    }
+
+    static func records(
+        from note: SessionRecord.ChunkNote,
+        fallbackIndex: Int = 0
+    ) -> [Record] {
+        if let records = note.summaryRecords, !records.isEmpty {
+            return records
+        }
+        var records: [Record] = []
+        func append(_ kind: Record.Kind, _ text: String, offset: Int) {
+            let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !trimmed.isEmpty else { return }
+            records.append(.init(
+                kind: kind,
+                source: .transcript,
+                sourceIDs: ["legacy-\(fallbackIndex)-\(offset)"],
+                sourceIndex: fallbackIndex * 100 + offset,
+                timestamp: note.startedAt,
+                text: trimmed))
+        }
+
+        append(.topic, note.headline, offset: 0)
+        for (offset, fact) in note.facts.enumerated() {
+            append(.point, fact, offset: 10 + offset)
+        }
+        for (offset, decision) in note.decisions.enumerated() {
+            append(.decision, decision, offset: 30 + offset)
+        }
+        for (offset, action) in note.actions.enumerated() {
+            append(.action, action, offset: 50 + offset)
+        }
+        for (offset, term) in note.terms.enumerated() {
+            append(.term, term, offset: 70 + offset)
+        }
+        return records
+    }
+
+    static func render(
+        records: [Record],
+        style: SummaryStyle,
+        length: SummaryLength,
+        in language: AppLanguage,
+        stitchDetails: Bool = true
+    ) -> String {
+        let records = deduped(records)
+        guard !records.isEmpty else { return "" }
+        let spec = style.spec
+        var blocks: [String] = []
+        // Kind-agnostic, paraphrase-aware: the same statement classified as a
+        // Point in one chunk and a Decision in another would otherwise render
+        // into two different sections. First occurrence (overview, then spec
+        // order) wins. ponytail: O(n²) over the rendered set; it's tiny (≤ ~30).
+        var usedKeys: [String] = []
+
+        func displayUnused(_ record: Record) -> String? {
+            let key = SummaryEngine.dedupKey(record.text)
+            guard !key.isEmpty else { return nil }
+            for prior in usedKeys
+            where prior == key
+                || HotwordMatcher.similarity(prior, key) >= crossSectionDedupThreshold {
+                return nil
+            }
+            usedKeys.append(key)
+            return displayText(record, includeSource: true)
+        }
+
+        func takeUnused(_ records: [Record], limit: Int) -> [String] {
+            var lines: [String] = []
+            for record in records where lines.count < limit {
+                if let text = displayUnused(record) {
+                    lines.append(text)
+                }
+            }
+            return lines
+        }
+
+        let overviewCap = cap(
+            base: spec.overviewCap, length: length, minimum: 1)
+        let overview = takeUnused(
+            overviewRecords(records, style: style), limit: overviewCap)
+        if !overview.isEmpty {
+            blocks.append(overview.joined(separator: " "))
+        }
+
+        for section in spec.sections {
+            let sectionRecords = recordsForSection(
+                section.tag, style: style, records: records)
+            let limit = cap(base: section.cap, length: length, minimum: 1)
+            let lines = takeUnused(sectionRecords, limit: limit).map { "- \($0)" }
+            if !lines.isEmpty {
+                blocks.append("## \(section.heading(for: language))\n"
+                    + lines.joined(separator: "\n"))
+            }
+        }
+
+        if stitchDetails, length == .detailed {
+            let detailRecords = records.filter {
+                $0.kind != .topic && !$0.text.isEmpty
+            }
+            let detailLines = takeUnused(detailRecords, limit: 12).map { "- \($0)" }
+            if !detailLines.isEmpty {
+                blocks.append("## \(detailHeading(for: language))\n"
+                    + detailLines.joined(separator: "\n"))
+            }
+        }
+        return blocks.joined(separator: "\n\n")
+    }
+
+    private static func cap(
+        base: Int, length: SummaryLength, minimum: Int
+    ) -> Int {
+        switch length {
+        case .concise: max(minimum, base - 1)
+        case .standard: base
+        case .detailed: base + 4
+        }
+    }
+
+    private static func overviewRecords(
+        _ records: [Record], style: SummaryStyle
+    ) -> [Record] {
+        let topics = records.filter { $0.kind == .topic }
+        if !topics.isEmpty { return topics }
+        switch style {
+        case .journal:
+            let reflections = records.filter { $0.kind == .reflection }
+            if !reflections.isEmpty { return reflections }
+        default:
+            break
+        }
+        return records.filter { $0.kind == .point || $0.kind == .decision }
+    }
+
+    private static func recordsForSection(
+        _ tag: String, style: SummaryStyle, records: [Record]
+    ) -> [Record] {
+        switch (style, tag) {
+        case (.meeting, "T"):
+            return records.filter {
+                $0.kind == .topic || $0.kind == .point
+                    || $0.kind == .question || $0.kind == .risk
+            }
+        case (.meeting, "D"):
+            return records.filter { $0.kind == .decision }
+        case (.meeting, "A"):
+            return records.filter { $0.kind == .action }
+        case (.memo, "K"):
+            return records.filter { $0.kind == .point || $0.kind == .decision }
+        case (.memo, "A"):
+            return records.filter { $0.kind == .action }
+        case (.lecture, "C"):
+            return records.filter { $0.kind == .point }
+        case (.lecture, "T"):
+            return records.filter { $0.kind == .term }
+        case (.lecture, "Q"):
+            return records.filter { $0.kind == .question }
+        case (.brainstorm, "I"):
+            return records.filter { $0.kind == .point }
+        case (.brainstorm, "S"):
+            return records.filter { $0.kind == .decision || $0.kind == .risk }
+        case (.brainstorm, "A"):
+            return records.filter { $0.kind == .action }
+        case (.journal, "H"):
+            return records.filter { $0.kind == .point }
+        case (.journal, "F"):
+            return records.filter { $0.kind == .reflection || $0.kind == .risk }
+        case (.journal, "N"):
+            return records.filter { $0.kind == .action }
+        default:
+            return []
+        }
+    }
+
+    private static func displayText(_ record: Record, includeSource: Bool) -> String {
+        let body = record.kind == .action ? actionText(record) : record.text
+        guard includeSource, record.source == .photo else { return body }
+        let label = record.sourceLabel?.trimmingCharacters(in: .whitespacesAndNewlines)
+        return "[\(label?.isEmpty == false ? label! : "Photo")] \(body)"
+    }
+
+    private static func actionText(_ record: Record) -> String {
+        let owner = record.owner?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let deadline = record.deadline?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        var text = record.task?.isEmpty == false ? record.task! : record.text
+        if !owner.isEmpty, owner != "未明确" {
+            text = "\(owner): \(text)"
+        }
+        if !deadline.isEmpty, deadline != "未明确" {
+            text += " (\(deadline))"
+        }
+        return text
+    }
+
+    /// When one statement is classified differently across chunks (a
+    /// Decision in one, a Point in another), the more specific kind wins so
+    /// it renders in a single section. Topics dedup in their own namespace,
+    /// so their priority never competes here.
+    private static func kindPriority(_ kind: Record.Kind) -> Int {
+        switch kind {
+        case .decision: 5
+        case .action: 4
+        case .risk: 3
+        case .question: 2
+        case .point, .reflection: 1
+        case .term, .topic: 0
+        }
+    }
+
+    private static func deduped(_ records: [Record]) -> [Record] {
+        let sorted = records.sorted { lhs, rhs in
+            if lhs.timestamp != rhs.timestamp { return lhs.timestamp < rhs.timestamp }
+            return lhs.sourceIndex < rhs.sourceIndex
+        }
+        var merged: [Record] = []
+        var exact: [String: Int] = [:]
+        var recent: [(key: String, index: Int)] = []
+
+        for record in sorted {
+            let base = SummaryEngine.dedupKey(record.text)
+            guard !base.isEmpty else { continue }
+            // Non-topic records dedup across kinds, so a statement tagged
+            // Point in one chunk and Decision in another collapses to one
+            // bullet; topics dedup only against other topics.
+            let isTopic = record.kind == .topic
+            let key = isTopic ? "topic:\(base)" : base
+            let duplicateIndex: Int?
+            if let existing = exact[key] {
+                duplicateIndex = existing
+            } else {
+                duplicateIndex = recent.suffix(24).first {
+                    $0.key.hasPrefix("topic:") == isTopic
+                        && HotwordMatcher.similarity($0.key, key) >= 0.9
+                }?.index
+            }
+            if let duplicateIndex {
+                merged[duplicateIndex].sourceIDs = Array(
+                    Set(merged[duplicateIndex].sourceIDs + record.sourceIDs)).sorted()
+                if merged[duplicateIndex].sourceLabel == nil {
+                    merged[duplicateIndex].sourceLabel = record.sourceLabel
+                }
+                // Keep the more specific classification and its action fields.
+                if kindPriority(record.kind) > kindPriority(merged[duplicateIndex].kind) {
+                    merged[duplicateIndex].kind = record.kind
+                    merged[duplicateIndex].owner = record.owner
+                    merged[duplicateIndex].task = record.task
+                    merged[duplicateIndex].deadline = record.deadline
+                }
+                continue
+            }
+            exact[key] = merged.count
+            recent.append((key, merged.count))
+            merged.append(record)
+        }
+        return merged
+    }
+
+    private static func detailHeading(for language: AppLanguage) -> String {
+        switch language {
+        case .chinese: "详细记录"
+        case .japanese: "詳細メモ"
+        case .korean: "상세 메모"
+        case .english: "Details"
+        }
     }
 }
 

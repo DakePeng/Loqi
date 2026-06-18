@@ -80,9 +80,10 @@ struct RootView: View {
         }
         .onChange(of: scenePhase) {
             switch scenePhase {
+            case .inactive: pipeline.handleInactive()
             case .background: pipeline.handleBackground()
             case .active: pipeline.handleForeground()
-            default: break
+            @unknown default: break
             }
         }
     }

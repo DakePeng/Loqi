@@ -55,6 +55,15 @@ struct ImportEngineTests {
             == .apple)
     }
 
+    @Test func newRecordingPostProcessUsesDownloadedASROnly() {
+        #expect(OfflineTranscriber.postProcessBackend(
+            senseVoiceInstalled: true, qwen3Installed: true) == .qwen3ASR)
+        #expect(OfflineTranscriber.postProcessBackend(
+            senseVoiceInstalled: true, qwen3Installed: false) == .senseVoice)
+        #expect(OfflineTranscriber.postProcessBackend(
+            senseVoiceInstalled: false, qwen3Installed: false) == nil)
+    }
+
     @Test func segmentTimeRangeMapsSamplesToSeconds() {
         // 16 kHz: sample 8000 = 0.5s; 24000 samples long = 1.5s window.
         let range = VADSegmentedTranscriber.timeRange(

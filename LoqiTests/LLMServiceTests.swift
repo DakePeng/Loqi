@@ -64,3 +64,48 @@ struct DiagnosticTokenEstimateTests {
         #expect(punctuated == plain)
     }
 }
+
+@MainActor
+struct PipelineResourceTests {
+    @Test func llmResourceMessagesCollapseToOneVisibleStatus() {
+        let messages: [CaptionPipeline.StatusKey: String] = [
+            .llm: "Warming up the AI model...",
+            .thermal: "AI features off (device hot)",
+            .memory: "AI features paused (low memory)",
+            .diarizer: "Preparing speaker separation...",
+        ]
+
+        #expect(CaptionPipeline.visibleStatusMessages(from: messages) == [
+            "AI features paused (low memory)",
+            "Preparing speaker separation...",
+        ])
+    }
+
+    @Test func memoryWarningKeepsVoiceprintForActiveDiarization() {
+        #expect(!CaptionPipeline.shouldUnloadVoiceprintOnMemoryWarning(
+            isRunning: true, diarizationActive: true))
+        #expect(CaptionPipeline.shouldUnloadVoiceprintOnMemoryWarning(
+            isRunning: true, diarizationActive: false))
+        #expect(CaptionPipeline.shouldUnloadVoiceprintOnMemoryWarning(
+            isRunning: false, diarizationActive: true))
+    }
+
+    @Test func liveDiarizationStopsWhenBackgrounded() {
+        #expect(CaptionPipeline.shouldRunLiveDiarization(
+            diarizationActive: true, isBackgrounded: false))
+        #expect(!CaptionPipeline.shouldRunLiveDiarization(
+            diarizationActive: true, isBackgrounded: true))
+        #expect(!CaptionPipeline.shouldRunLiveDiarization(
+            diarizationActive: false, isBackgrounded: false))
+    }
+
+    @Test func backgroundSuspendsPostHocWorkThatCanReachMetal() {
+        #expect(SummaryJobCenter.shouldSuspendForBackground(.downloadingModel(0)))
+        #expect(SummaryJobCenter.shouldSuspendForBackground(
+            .retranscribing(.identifyingSpeakers(0))))
+        #expect(SummaryJobCenter.shouldSuspendForBackground(
+            .retranscribing(.transcribing(0))))
+        #expect(!SummaryJobCenter.shouldSuspendForBackground(
+            .importing(.transcribing(0))))
+    }
+}

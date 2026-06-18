@@ -32,7 +32,7 @@ struct TranscriptSegmenter: Sendable {
         switch event {
         case .volatile(let text, let detectedLanguage):
             let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
-            guard !trimmed.isEmpty else { return nil }
+            guard trimmed.hasSpeechContent else { return nil }
             return Output(
                 kind: .volatileUpdate,
                 text: trimmed,
@@ -41,7 +41,9 @@ struct TranscriptSegmenter: Sendable {
 
         case .finalized(let text, let detectedLanguage):
             let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
-            guard !trimmed.isEmpty else {
+            // Drop empty AND punctuation-only finals ("." / "。") — the ASR
+            // emits those for silence/noise and they render as lone dots.
+            guard trimmed.hasSpeechContent else {
                 return Output(
                     kind: .discard,
                     text: "",
@@ -67,5 +69,13 @@ struct TranscriptSegmenter: Sendable {
         }
         let words = text.split { $0.isWhitespace }.count
         return words >= minLatinWords
+    }
+}
+
+extension StringProtocol {
+    /// At least one letter or number in any script (CJK included) — used to
+    /// drop ASR segments that are only punctuation or whitespace.
+    var hasSpeechContent: Bool {
+        contains { $0.isLetter || $0.isNumber }
     }
 }

@@ -242,32 +242,54 @@ struct PromptBuilder: Sendable {
 
     // MARK: Session-level prompts
 
-    /// Map phase of map-reduce summarization: narrow tagged extraction from
-    /// one transcript chunk — the task shape small models are good at.
-    /// `vocabulary` carries hotwords plausibly present in the chunk
-    /// (`HotwordMatcher.noteGlossaryLines`) so notes preserve the correct
-    /// spellings of names and terms the recognizer tends to mangle.
-    func chunkNotePrompt(
-        chunkText: String, vocabulary: [String] = [], in language: AppLanguage
+    /// Map-only summary extraction: the model emits compact TSV records
+    /// grounded only in `target`. `context_only` can help pronouns/topic
+    /// continuity, but the parser and prompt both treat it as non-source.
+    func chunkRecordPrompt(
+        chunkID: String,
+        timeRange: String,
+        contextOnly: String,
+        target: String,
+        vocabulary: [String] = [],
+        in language: AppLanguage
     ) -> (system: String, user: String) {
-        let system = "You extract notes from a meeting/conversation "
-            + "transcript excerpt. Write in \(language.promptName). "
-            + "Plain text, no markdown. Output ONLY tagged lines: "
-            + "first exactly one \"H: <headline of at most 10 words>\", "
-            + "then at most 12 lines from: \"F: <key fact>\", "
-            + "\"D: <decision>\", \"A: <action item with who>\", "
-            + "\"T: <name or special term>\". Copy names, numbers, dates, "
-            + "and amounts exactly as they appear in the excerpt. Do not "
-            + "add anything that is not in the excerpt. "
-            + (vocabulary.isEmpty ? "" :
-                "The excerpt is a speech-recognition transcript and may "
-                + "contain recognition errors; when a word looks like a "
-                + "mis-hearing of one of the known terms, use the known "
-                + "term. ")
-            + "Skip categories with nothing to report. No other text."
-        let terms = vocabulary.isEmpty
-            ? "" : "Known terms: " + vocabulary.joined(separator: "; ") + "\n"
-        return (system, terms + "Excerpt:\n\(chunkText)")
+        let system = """
+        You are a local conversation information extractor. Write in \
+        \(language.promptName). Convert only the target text into short TSV \
+        records for a final summary. Do not write a complete summary. \
+        Plain text only. Output ONLY TSV lines. The context_only block is \
+        for understanding only; extracting records from context_only is \
+        forbidden. If target continues the same topic as context_only, reuse \
+        a consistent topic_title and record only information not already in \
+        context_only. Use only facts explicitly present in target; never infer, \
+        add, or expand. Do not add anything that is not in the target. Copy \
+        names, numbers, dates, and amounts exactly. If target appears to be \
+        a mis-hearing of one of the known terms, use the known-term spelling. \
+        Every non-topic record must cite source_ids from target. If owner or \
+        deadline is unclear, write "未明确". Keep each content field short. \
+        Maximum records: 1 T, 3 P, 3 D, 3 A, 2 Q, 2 R, 3 E, 3 J. Skip empty \
+        categories.
+
+        Output formats:
+        T	chunk_id	time_range	topic_title	one_line_summary
+        P	chunk_id	source_ids	key_point
+        D	chunk_id	source_ids	decision
+        A	chunk_id	source_ids	owner	task	deadline
+        Q	chunk_id	source_ids	question
+        R	chunk_id	source_ids	risk
+        E	chunk_id	source_ids	term
+        J	chunk_id	source_ids	reflection
+        """
+        var blocks = [
+            "chunk_id: \(chunkID)",
+            "time_range: \(timeRange)",
+        ]
+        if !vocabulary.isEmpty {
+            blocks.append("Known terms: " + vocabulary.joined(separator: "; "))
+        }
+        blocks.append("context_only:\n\(contextOnly)")
+        blocks.append("target:\n\(target)")
+        return (system, blocks.joined(separator: "\n\n"))
     }
 
     struct ParsedChunkNote {
@@ -276,192 +298,142 @@ struct PromptBuilder: Sendable {
         var decisions: [String] = []
         var actions: [String] = []
         var terms: [String] = []
+        var summaryRecords: [SessionRecord.SummaryRecord] = []
 
         /// A fully empty parse means the generation failed or answered
         /// off-format — the resulting note is a fallback stub.
         var isEmpty: Bool {
             headline == nil && facts.isEmpty && decisions.isEmpty
-                && actions.isEmpty && terms.isEmpty
+                && actions.isEmpty && terms.isEmpty && summaryRecords.isEmpty
         }
     }
 
-    func parseChunkNote(_ raw: String) -> ParsedChunkNote {
-        var note = ParsedChunkNote()
-        for line in cleanResponse(raw).split(separator: "\n") {
-            let trimmed = line.trimmingCharacters(in: .whitespaces)
-            guard !Self.hasDegenerateRepetition(trimmed) else { continue }
-            if let value = tagged(trimmed, "H") {
-                note.headline = note.headline ?? value
-            } else if let value = tagged(trimmed, "F"), note.facts.count < 8 {
-                note.facts.append(value)
-            } else if let value = tagged(trimmed, "D"), note.decisions.count < 8 {
-                note.decisions.append(value)
-            } else if let value = tagged(trimmed, "A"), note.actions.count < 8 {
-                note.actions.append(value)
-            } else if let value = tagged(trimmed, "T"), note.terms.count < 8 {
-                note.terms.append(value)
-            }
-        }
-        return note
-    }
-
-    /// Reduce phase: the model sees only the per-chunk notes — never the
-    /// raw transcript — keeping the input inside a small model's competence.
-    /// Tagged-line output (the shape small models handle reliably) assembled
-    /// from the style's spec; `renderSummaryMarkdown` synthesizes the stored
-    /// markdown from it. The grounding sentences exist because the reduce
-    /// has no transcript to check against: anything it invents is
-    /// unfalsifiable downstream. The exact meeting bytes are pinned by test.
-    func reduceSummaryPrompt(
-        notes: String,
-        style: SummaryStyle = .meeting,
-        in language: AppLanguage,
-        sizing: SummaryPromptSizing? = nil
-    ) -> (system: String, user: String) {
-        let spec = style.spec
-        let overviewCap = sizing?.overviewCap ?? spec.overviewCap
-        let sectionClauses = spec.sections.enumerated()
-            .map { index, section in
-                let cap = sizing?.sectionCaps[safe: index] ?? section.cap
-                return "up to \(cap) lines \"\(section.tag): <\(section.hint)>\""
-            }
-            .joined(separator: ", ")
-        let system = "\(spec.task) Write entirely in \(language.promptName). "
-            + "Plain text, no markdown. Output ONLY tagged lines: "
-            + "first 1-\(overviewCap) lines \"O: <\(spec.overviewHint)>\", "
-            + "then \(sectionClauses). Use only information from the notes; "
-            + "keep O lines high-level; do not repeat the same details that "
-            + "you put in the tagged section lines. "
-            + "Never invent names, numbers, or events. Keep names, numbers, "
-            + "and dates exactly as written in the notes. "
-            + "Skip categories with nothing to report. "
-            + "Merge duplicates. No other text."
-        return (system, "Notes:\n\(notes)")
-    }
-
-    /// One stitched section of a detailed summary, written from the notes
-    /// of a few consecutive chunks. Detailed summaries are assembled from
-    /// these per-segment generations after the global reduce — each call
-    /// stays small while the assembled document scales with the recording.
-    func segmentSectionPrompt(
-        notes: String, in language: AppLanguage
-    ) -> (system: String, user: String) {
-        let system = """
-        You write one section of a detailed summary of a recording, \
-        covering one part of it. Write entirely in \(language.promptName). \
-        Plain text, no markdown. Output ONLY tagged lines: first exactly \
-        one "H: <section heading of at most 8 words>", then 2-6 lines \
-        "P: <specific point; keep names, numbers, and reasons>". \
-        Use only information from the notes; never invent names, numbers, \
-        or events. Merge duplicates. No other text.
-        """
-        return (system, "Notes:\n\(notes)")
-    }
-
-    struct ParsedSegmentSection {
-        var headline: String?
-        var points: [String] = []
-    }
-
-    /// Parse a segment section's tagged lines. Duplicate points are dropped
-    /// (small models repeat themselves); an off-format response parses to
-    /// empty points so the caller can fall back to the raw note lines.
-    func parseSegmentSection(_ raw: String) -> ParsedSegmentSection {
-        var section = ParsedSegmentSection()
-        var seen = Set<String>()
-        for line in cleanResponse(raw).split(separator: "\n") {
-            let trimmed = line.trimmingCharacters(in: .whitespaces)
-            guard !Self.hasDegenerateRepetition(trimmed) else { continue }
-            if let value = tagged(trimmed, "H") {
-                section.headline = section.headline ?? value
-            } else if let value = tagged(trimmed, "P"),
-                      section.points.count < SummaryEngine.detailSectionPointCap,
-                      seen.insert(value).inserted {
-                section.points.append(value)
-            }
-        }
-        return section
-    }
-
-    struct ParsedStructuredSummary {
-        let style: SummaryStyle
-        var overview: [String] = []
-        /// One bucket per spec section, parallel to `style.spec.sections`.
-        var sections: [[String]]
-
-        init(style: SummaryStyle = .meeting) {
-            self.style = style
-            sections = Array(repeating: [], count: style.spec.sections.count)
-        }
-
-        var isEmpty: Bool {
-            overview.isEmpty && sections.allSatisfy(\.isEmpty)
-        }
-
-        /// All content with no markdown scaffolding — what repetition
-        /// validation should look at.
-        var joinedValues: String {
-            (overview + sections.flatMap { $0 }).joined(separator: "\n")
-        }
-
-        /// Items of the section with this tag.
-        func items(_ tag: String) -> [String] {
-            guard let index = style.spec.sections.firstIndex(where: { $0.tag == tag })
-            else { return [] }
-            return sections[index]
-        }
-    }
-
-    /// Parse the reduce model's tagged lines against the style's spec.
-    /// Lines that don't parse (or degenerate into repetition) are dropped;
-    /// an entirely untagged response returns `.isEmpty` so the caller can
-    /// fall back to plain text.
-    func parseStructuredSummary(
+    func parseSummaryRecords(
         _ raw: String,
-        style: SummaryStyle = .meeting,
-        sizing: SummaryPromptSizing? = nil
-    ) -> ParsedStructuredSummary {
-        let spec = style.spec
-        let overviewCap = sizing?.overviewCap ?? spec.overviewCap
-        var summary = ParsedStructuredSummary(style: style)
-        for line in cleanResponse(raw).split(separator: "\n") {
-            let trimmed = line.trimmingCharacters(in: .whitespaces)
-                .replacingOccurrences(of: "**", with: "")
-                .replacingOccurrences(of: "##", with: "")
-            guard !Self.hasDegenerateRepetition(trimmed) else { continue }
-            if let value = tagged(trimmed, "O"), summary.overview.count < overviewCap {
-                summary.overview.append(value)
+        chunkID: String,
+        validSourceIDs: [String],
+        source: SessionRecord.SummaryRecord.Source,
+        timestamp: Date,
+        sourceLabel: String? = nil
+    ) -> [SessionRecord.SummaryRecord] {
+        let valid = Set(validSourceIDs)
+        let order = Dictionary(uniqueKeysWithValues: validSourceIDs.enumerated().map {
+            ($0.element, $0.offset)
+        })
+        var counts: [String: Int] = [:]
+        let caps = ["T": 1, "P": 3, "D": 3, "A": 3, "Q": 2, "R": 2, "E": 3, "J": 3]
+        var records: [SessionRecord.SummaryRecord] = []
+
+        func cleanField(_ text: String) -> String {
+            Self.stripModelTags(text)
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+
+        func sourceIDs(from field: String) -> [String]? {
+            let ids = field.split(separator: ",")
+                .map { cleanField(String($0)) }
+                .filter { !$0.isEmpty }
+            guard !ids.isEmpty else { return nil }
+            if !valid.isEmpty, ids.contains(where: { !valid.contains($0) }) {
+                return nil
+            }
+            return ids
+        }
+
+        func sourceIndex(_ ids: [String]) -> Int {
+            ids.compactMap { order[$0] }.min() ?? 0
+        }
+
+        for rawLine in cleanResponse(raw).split(separator: "\n") {
+            let line = Self.stripLineDecorations(String(rawLine))
+            let parts = line.split(
+                separator: "\t", omittingEmptySubsequences: false
+            ).map { cleanField(String($0)) }
+            guard let tag = parts.first, let cap = caps[tag],
+                  (counts[tag] ?? 0) < cap else { continue }
+
+            func append(_ record: SessionRecord.SummaryRecord) {
+                guard !record.text.isEmpty else { return }
+                records.append(record)
+                counts[tag, default: 0] += 1
+            }
+
+            switch tag {
+            case "T":
+                guard parts.count == 5, parts[1] == chunkID else { continue }
+                append(.init(
+                    kind: .topic,
+                    source: source,
+                    sourceIDs: validSourceIDs,
+                    sourceIndex: 0,
+                    timestamp: timestamp,
+                    text: parts[4],
+                    topicTitle: parts[3],
+                    timeRange: parts[2],
+                    sourceLabel: sourceLabel))
+            case "P", "D", "Q", "R", "E", "J":
+                guard parts.count == 4, parts[1] == chunkID,
+                      let ids = sourceIDs(from: parts[2]) else { continue }
+                let kind: SessionRecord.SummaryRecord.Kind = switch tag {
+                case "P": .point
+                case "D": .decision
+                case "Q": .question
+                case "R": .risk
+                case "E": .term
+                default: .reflection
+                }
+                append(.init(
+                    kind: kind,
+                    source: source,
+                    sourceIDs: ids,
+                    sourceIndex: sourceIndex(ids),
+                    timestamp: timestamp,
+                    text: parts[3],
+                    sourceLabel: sourceLabel))
+            case "A":
+                guard parts.count == 6, parts[1] == chunkID,
+                      let ids = sourceIDs(from: parts[2]) else { continue }
+                append(.init(
+                    kind: .action,
+                    source: source,
+                    sourceIDs: ids,
+                    sourceIndex: sourceIndex(ids),
+                    timestamp: timestamp,
+                    text: parts[4],
+                    owner: parts[3],
+                    task: parts[4],
+                    deadline: parts[5],
+                    sourceLabel: sourceLabel))
+            default:
                 continue
             }
-            for (index, section) in spec.sections.enumerated() {
-                let cap = sizing?.sectionCaps[safe: index] ?? section.cap
-                if let value = tagged(trimmed, section.tag),
-                   summary.sections[index].count < cap {
-                    summary.sections[index].append(value)
-                    break
-                }
-            }
         }
-        return summary
+        return records
     }
 
-    /// Deterministic markdown synthesis: overview paragraph, then one
-    /// "## Heading" + "- " bullet section per non-empty category. Headings
-    /// come from the style's spec in the summary's own language; the
-    /// renderer treats any "## " line as a heading and never keys on them.
-    func renderSummaryMarkdown(
-        _ parsed: ParsedStructuredSummary, in language: AppLanguage
-    ) -> String {
-        var blocks: [String] = []
-        if !parsed.overview.isEmpty {
-            blocks.append(parsed.overview.joined(separator: " "))
+    func parsedChunkNote(
+        records: [SessionRecord.SummaryRecord]
+    ) -> ParsedChunkNote {
+        var note = ParsedChunkNote()
+        note.summaryRecords = records
+        note.headline = records.first(where: { $0.kind == .topic })?.topicTitle
+            ?? records.first(where: { $0.kind == .topic })?.text
+        note.facts = records.filter {
+            $0.kind == .point || $0.kind == .question || $0.kind == .risk
+                || $0.kind == .reflection
+        }.map(\.text)
+        note.decisions = records.filter { $0.kind == .decision }.map(\.text)
+        note.actions = records.filter { $0.kind == .action }.map {
+            let owner = $0.owner?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            let deadline = $0.deadline?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            var parts: [String] = []
+            if !owner.isEmpty { parts.append(owner) }
+            parts.append($0.text)
+            if !deadline.isEmpty { parts.append(deadline) }
+            return parts.joined(separator: " ")
         }
-        for (section, items) in zip(parsed.style.spec.sections, parsed.sections)
-        where !items.isEmpty {
-            let bullets = items.map { "- \($0)" }.joined(separator: "\n")
-            blocks.append("## \(section.heading(for: language))\n\(bullets)")
-        }
-        return blocks.joined(separator: "\n\n")
+        note.terms = records.filter { $0.kind == .term }.map(\.text)
+        return note
     }
 
     /// Summaries render in a plain Text view; stray markdown reads as
@@ -532,15 +504,45 @@ struct PromptBuilder: Sendable {
     /// Describe an attached photo for the notes pipeline (vision tier).
     /// Text-heavy images should come back as their key text — that's what
     /// the summary and chat ground on.
-    func imageDescriptionPrompt(in language: AppLanguage) -> (system: String, user: String) {
+    func imageDescriptionPrompt(
+        in language: AppLanguage, context: String = ""
+    ) -> (system: String, user: String) {
         let system = """
-        You describe a photo attached to someone's meeting or lecture \
-        notes. Write in \(language.promptName). If the image is mostly text \
-        (slide, whiteboard, document), transcribe its key text. Otherwise \
-        describe what it shows. At most 4 short lines. Plain text, no \
-        markdown, no preamble.
+        You caption a photo attached to someone's meeting or lecture notes. \
+        Write in \(language.promptName). Reply with ONE concise sentence \
+        (at most 30 words) stating what the photo shows; if it is mostly \
+        text (slide, whiteboard, document), state its key point instead. \
+        No lists, no markdown, no headings, no preamble, and no commentary \
+        about relevance — output only the sentence.
         """
-        return (system, "Describe the attached image for the notes.")
+        let trimmed = context.trimmingCharacters(in: .whitespacesAndNewlines)
+        let user = trimmed.isEmpty
+            ? "Describe the attached image in one sentence."
+            : "Context, for disambiguation only — do not mention it: \(trimmed)\n"
+                + "Describe the attached image in one sentence."
+        return (system, user)
+    }
+
+    /// Description text fit for inline notes: `cleanResponse` plus markdown
+    /// and list scaffolding flattened to one plain line. Small VLMs ignore
+    /// "no markdown" and emit "1. **Heading**: …" — strip it so neither the
+    /// viewer nor the (deterministic) summary shows raw markup.
+    func plainDescription(_ raw: String) -> String {
+        cleanResponse(raw)
+            .split(separator: "\n", omittingEmptySubsequences: false)
+            .map { line -> String in
+                String(line)
+                    // leading list/heading markers: "1.", "2)", "-", "•", "#"
+                    .replacingOccurrences(
+                        of: #"^\s*(?:[-*•#]+\s*|\d+[.)]\s*)"#,
+                        with: "", options: .regularExpression)
+                    // inline emphasis/code markers
+                    .replacingOccurrences(
+                        of: #"[*_`]{1,3}"#, with: "", options: .regularExpression)
+                    .trimmingCharacters(in: .whitespaces)
+            }
+            .filter { !$0.isEmpty }
+            .joined(separator: " ")
     }
 
     /// How many suggestions one transcript may yield: a short note offers
@@ -629,6 +631,11 @@ struct PromptBuilder: Sendable {
                       // confidently the model lists them.
                       term.rangeOfCharacter(from: .letters) != nil,
                       term.split(separator: " ").count <= 4,
+                      // CJK has no spaces, so the word cap can't bound it —
+                      // a whole spoken phrase would slip through. Names/terms
+                      // are short; cap the CJK character count so sentence
+                      // fragments ("找到特别离谱的路边摊") are rejected.
+                      term.filter(\.isCJK).count <= 6,
                       seen.insert(term.lowercased()).inserted else { return nil }
                 let rendering = parts.count > 2
                     ? parts[1].trimmingCharacters(in: .whitespaces) : ""

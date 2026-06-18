@@ -19,7 +19,8 @@ struct TranslationSessionBox: @unchecked Sendable {
     let session: TranslationSession
 
     func translate(_ text: String) async throws -> String {
-        try await session.translate(text).targetText
+        let response = try await session.translate(text)
+        return response.targetText
     }
 
     /// Triggers the language-pack download UI if the pack is missing.
@@ -75,7 +76,13 @@ final class TranslationCoordinator {
     func addDirection(_ direction: LanguagePair) async {
         guard direction.source != direction.target,
               !requiredDirections.contains(direction) else { return }
-        if pivotPairs.contains(direction) || await needsPivot(direction) {
+        let shouldPivot: Bool
+        if pivotPairs.contains(direction) {
+            shouldPivot = true
+        } else {
+            shouldPivot = await needsPivot(direction)
+        }
+        if shouldPivot {
             pivotPairs.insert(direction)
             requiredDirections.insert(LanguagePair(source: direction.source, target: .english))
             requiredDirections.insert(LanguagePair(source: .english, target: direction.target))
