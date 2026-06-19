@@ -26,6 +26,11 @@ actor LLMService: LLMServicing {
     /// Last measured generation speed, for the debug screen.
     private(set) var lastTokensPerSecond: Double = 0
 
+    /// Cumulative wall time spent inside `generate`/`describeImage` this
+    /// session — Diagnostics compares it against SenseVoice decode time to
+    /// show which path drives heat. Reset by the pipeline at session start.
+    private(set) var generateActiveSeconds: Double = 0
+
     /// While true, generation parks instead of touching Metal: a GPU command
     /// buffer submitted from the background aborts the process uncatchably
     /// (`kIOGPUCommandBufferCallbackErrorBackgroundExecutionNotPermitted`).
@@ -292,6 +297,10 @@ actor LLMService: LLMServicing {
         MLX.Memory.clearCache()
     }
 
+    func resetHeatStats() {
+        generateActiveSeconds = 0
+    }
+
     /// Run one generation. Cooperatively cancellable via Task cancellation.
     func generate(
         system: String,
@@ -344,6 +353,7 @@ actor LLMService: LLMServicing {
         let elapsed = started.duration(to: .now)
         let seconds = Double(elapsed.components.seconds)
             + Double(elapsed.components.attoseconds) / 1e18
+        generateActiveSeconds += seconds
         if seconds > 0 {
             lastTokensPerSecond = Self.estimatedDiagnosticTokens(in: result) / seconds
         }
