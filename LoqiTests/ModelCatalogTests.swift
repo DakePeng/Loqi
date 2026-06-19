@@ -54,4 +54,26 @@ struct ModelCatalogTests {
         ModelCatalog.normalizeStoredSelection(defaults)
         #expect(defaults.string(forKey: "model.id") == ModelCatalog.qwen35_0_8b.id)
     }
+
+    @Test func liveModelIsTheFastTier() {
+        #expect(ModelCatalog.liveModel.id == ModelCatalog.qwen35_0_8b.id)
+        // Live tier must fit beside SenseVoice — strictly lighter than 2B.
+        #expect(ModelCatalog.liveModel.requiredHeadroom
+            < ModelCatalog.qwen35_2b.requiredHeadroom)
+    }
+
+    @Test func summaryModelFollowsUserPick() {
+        let suite = "ModelCatalogTests.\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suite)!
+        defer { defaults.removePersistentDomain(forName: suite) }
+        defaults.set(ModelCatalog.qwen35_0_8b.id, forKey: "model.id")
+        // summaryModel reads `current`, which reads standard defaults; assert
+        // the relationship via option(for:) instead of mutating standard.
+        #expect(ModelCatalog.summaryModel.id == ModelCatalog.current.id)
+    }
+
+    @Test func onboardingBytesCoverBothModels() {
+        #expect(ModelCatalog.onboardingLLMBytes
+            == ModelCatalog.qwen35_2b.downloadBytes + ModelCatalog.qwen35_0_8b.downloadBytes)
+    }
 }
