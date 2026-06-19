@@ -4,10 +4,15 @@ import Testing
 @testable import Loqi
 
 struct JournalSnapshotTests {
-    private func finalized(_ text: String, at offset: TimeInterval) -> CaptionEntry {
+    private func finalized(
+        _ text: String,
+        at offset: TimeInterval,
+        mode: SessionMode = .captions
+    ) -> CaptionEntry {
         CaptionEntry(
             sourceText: text,
             direction: LanguagePair(source: .english, target: .english),
+            mode: mode,
             state: .finalized,
             createdAt: Date(timeIntervalSince1970: offset))
     }
@@ -54,5 +59,25 @@ struct JournalSnapshotTests {
 
         let record = JournalWriter.buildJournalRecord(from: inputs)
         #expect(record.entries.map(\.sourceText) == ["kept"])
+    }
+
+    @Test func filtersEntriesToSnapshotMode() {
+        let started = Date(timeIntervalSince1970: 0)
+        let inputs = JournalSnapshotInputs(
+            sessionID: UUID(),
+            mode: .captions,
+            startedAt: started,
+            evicted: [finalized("chat", at: 1, mode: .conversation)],
+            live: [finalized("caption", at: 2, mode: .captions)],
+            timeline: nil,
+            speakerNames: [:],
+            recordingSpeakerCount: 0,
+            audioFileName: nil,
+            chunkNotes: [],
+            notesEndEntryID: nil,
+            attachments: [])
+
+        let record = JournalWriter.buildJournalRecord(from: inputs)
+        #expect(record.entries.map(\.sourceText) == ["caption"])
     }
 }

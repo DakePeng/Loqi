@@ -44,4 +44,20 @@ struct SessionArchiveLoadTests {
         let directory = URL.temporaryDirectory.appending(path: UUID().uuidString)
         #expect(SessionArchive.decodeAll(in: directory).isEmpty)
     }
+
+    @Test func loadedSnapshotMergesWithCurrentMutations() {
+        let old = record(at: 100)
+        var updated = old
+        updated.endedAt = Date(timeIntervalSince1970: 150)
+        let added = record(at: 300)
+        let deleted = record(at: 200)
+
+        let merged = SessionArchive.mergedLoadedSessions(
+            decoded: [old, deleted],
+            current: [updated, added],
+            deletedIDs: [deleted.id])
+
+        #expect(merged.map(\.id) == [added.id, updated.id])
+        #expect(merged.first { $0.id == updated.id }?.endedAt == updated.endedAt)
+    }
 }

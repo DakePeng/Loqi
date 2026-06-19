@@ -678,7 +678,7 @@ final class CaptionPipeline {
             mode: sessionMode,
             startedAt: startedAt,
             evicted: evictedEntries,
-            live: store.entries,
+            live: store.entries(in: sessionMode),
             timeline: audioAnchors.isEmpty ? nil : AudioTimeline(anchors: audioAnchors),
             speakerNames: speakerNames,
             recordingSpeakerCount: captionSpeakerCount,

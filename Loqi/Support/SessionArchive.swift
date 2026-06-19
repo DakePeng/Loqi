@@ -22,6 +22,7 @@ struct SessionArtifacts: Sendable {
 final class SessionArchive {
     private(set) var sessions: [SessionRecord] = []
     private var didLoad = false
+    @ObservationIgnored private var deletedSessionIDs: Set<UUID> = []
 
     private static var directory: URL {
         URL.applicationSupportDirectory.appending(path: "Sessions", directoryHint: .isDirectory)
@@ -168,13 +169,15 @@ final class SessionArchive {
 
     func delete(at offsets: IndexSet) {
         for index in offsets {
+            let record = sessions[index]
+            deletedSessionIDs.insert(record.id)
             try? FileManager.default.removeItem(
-                at: Self.directory.appending(path: "\(sessions[index].id.uuidString).json"))
-            if let fileName = sessions[index].audioFileName {
+                at: Self.directory.appending(path: "\(record.id.uuidString).json"))
+            if let fileName = record.audioFileName {
                 try? FileManager.default.removeItem(
                     at: Self.recordingURL(fileName: fileName))
             }
-            for attachment in sessions[index].attachments ?? [] {
+            for attachment in record.attachments ?? [] {
                 try? FileManager.default.removeItem(
                     at: Self.attachmentURL(fileName: attachment.fileName))
             }
@@ -252,6 +255,21 @@ final class SessionArchive {
             .compactMap { try? decoder.decode(SessionRecord.self, from: Data(contentsOf: $0)) }
     }
 
+    nonisolated static func mergedLoadedSessions(
+        decoded: [SessionRecord],
+        current: [SessionRecord],
+        deletedIDs: Set<UUID>
+    ) -> [SessionRecord] {
+        var byID: [UUID: SessionRecord] = [:]
+        for record in decoded where record.importing != true && !deletedIDs.contains(record.id) {
+            byID[record.id] = record
+        }
+        for record in current where !deletedIDs.contains(record.id) {
+            byID[record.id] = record
+        }
+        return byID.values.sorted { $0.startedAt > $1.startedAt }
+    }
+
     func loadIfNeeded() async {
         guard !didLoad else { return }
         let directory = Self.directory
@@ -261,13 +279,16 @@ final class SessionArchive {
         // Records still marked importing are tombstones of a kill
         // mid-import: no transcript was ever written, so sweep them.
         let fm = FileManager.default
-        for abandoned in decoded where abandoned.importing == true {
+        let currentIDs = Set(sessions.map(\.id))
+        for abandoned in decoded where abandoned.importing == true
+            && !currentIDs.contains(abandoned.id) {
             try? fm.removeItem(
                 at: directory.appending(path: "\(abandoned.id.uuidString).json"))
         }
-        sessions = decoded
-            .filter { $0.importing != true }
-            .sorted { $0.startedAt > $1.startedAt }
+        sessions = Self.mergedLoadedSessions(
+            decoded: decoded,
+            current: sessions,
+            deletedIDs: deletedSessionIDs)
         didLoad = true
     }
 

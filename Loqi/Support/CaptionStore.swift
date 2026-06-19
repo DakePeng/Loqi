@@ -12,10 +12,10 @@ import Observation
 @Observable
 final class CaptionStore {
     private(set) var entries: [CaptionEntry] = [] {
-        didSet { cachedSegments = nil }
+        didSet { cachedSegments.removeAll() }
     }
 
-    @ObservationIgnored private var cachedSegments: [CaptionSegment]?
+    @ObservationIgnored private var cachedSegments: [SessionMode: [CaptionSegment]] = [:]
 
     /// Entry currently receiving volatile updates, if any.
     private(set) var activeEntryID: UUID?
@@ -40,10 +40,10 @@ final class CaptionStore {
         entries.filter { $0.mode == mode }
     }
 
-    func segments() -> [CaptionSegment] {
-        if let cachedSegments { return cachedSegments }
-        let built = CaptionGrouping.segments(from: entries)
-        cachedSegments = built
+    func segments(in mode: SessionMode) -> [CaptionSegment] {
+        if let cached = cachedSegments[mode] { return cached }
+        let built = CaptionGrouping.segments(from: entries(in: mode))
+        cachedSegments[mode] = built
         return built
     }
 

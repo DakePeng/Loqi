@@ -67,7 +67,7 @@ actor JournalWriter {
             startedAt: inputs.startedAt,
             endedAt: .now,
             entries: SessionArchive.mappedEntries(
-                from: inputs.evicted + inputs.live,
+                from: (inputs.evicted + inputs.live).filter { $0.mode == inputs.mode },
                 startedAt: inputs.startedAt,
                 timeline: inputs.timeline),
             speakerNames: inputs.speakerNames)

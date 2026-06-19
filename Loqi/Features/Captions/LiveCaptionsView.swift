@@ -253,7 +253,7 @@ struct LiveCaptionsView: View {
         [.blue, .green, .orange, .purple, .pink, .teal]
 
     private func transcript(_ entries: [CaptionEntry]) -> some View {
-        let liveRows = rows(segments: pipeline.store.segments())
+        let liveRows = rows(segments: pipeline.store.segments(in: .captions))
         let scrollBottomID = liveRows.last?.id ?? entries.last?.id
         return ScrollViewReader { proxy in
             ScrollView {

@@ -191,17 +191,30 @@ struct CaptionStoreTests {
         let store = CaptionStore()
         let direction = LanguagePair(source: .english, target: .english)
         store.finalizeActive(text: "first", direction: direction)
-        let firstCount = store.segments().count
+        let firstCount = store.segments(in: .captions).count
         #expect(firstCount == 1)
 
         store.finalizeActive(text: "second", direction: direction)
-        #expect(store.segments().reduce(0) { $0 + $1.entries.count } == 2)
+        #expect(store.segments(in: .captions).reduce(0) { $0 + $1.entries.count } == 2)
     }
 
     @Test func segmentsCacheReturnsEqualResultWithoutMutation() {
         let store = CaptionStore()
         let direction = LanguagePair(source: .english, target: .english)
         store.finalizeActive(text: "hello", direction: direction)
-        #expect(store.segments() == store.segments())
+        #expect(store.segments(in: .captions) == store.segments(in: .captions))
+    }
+
+    @Test func segmentsOnlyIncludeRequestedMode() {
+        let store = CaptionStore()
+        let direction = LanguagePair(source: .english, target: .english)
+
+        store.currentMode = .conversation
+        store.finalizeActive(text: "chat", direction: direction)
+        store.currentMode = .captions
+        store.finalizeActive(text: "caption", direction: direction)
+
+        #expect(store.segments(in: .captions).flatMap(\.entries).map(\.sourceText) == ["caption"])
+        #expect(store.segments(in: .conversation).flatMap(\.entries).map(\.sourceText) == ["chat"])
     }
 }
