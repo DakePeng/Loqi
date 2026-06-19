@@ -297,8 +297,20 @@ didn't resume and the session was gone. Two failure layers fixed:
 
 Cheap wins (pieces already exist):
 
+- [ ] **Turn real-device checks into a proof pack** — one repeatable
+  zh/en/ja demo set with accuracy, latency, battery, memory, crash
+  recovery, and long-session results; builds trust better than another
+  speculative feature.
+- [ ] **Burn down the current issue backlog** — imported-audio archival,
+  large-import UI blocking, photo-processing hitches, live attachment
+  journaling, and stale search cache live in `ISSUES.md`.
 - [ ] **Speaker analytics** — talk-time per speaker, per-speaker action
   items; falls out of stored diarization data.
+- [ ] **Ask/search across all sessions** — reuse saved summaries, chunk
+  notes, attachments, and existing CJK-safe search before adding semantic
+  embeddings.
+- [ ] **Highlight marker during recording** — one tap to mark an important
+  moment, then surface those anchors in summary/chat/export.
 - [ ] **Custom summary styles** — `SummaryStyle.Spec` is already
   data-driven; user-defined styles + auto-suggest style from content.
 - [ ] **Bilingual transcript export** — side-by-side source/translation
