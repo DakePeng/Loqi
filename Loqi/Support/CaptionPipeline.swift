@@ -289,11 +289,15 @@ final class CaptionPipeline {
             self?.isRunning ?? false
         }
 
-        // A journal on disk means the last process died mid-recording —
-        // recover BEFORE the orphan sweep, which would otherwise delete
-        // the very audio recovery exists to save.
-        recoverInterruptedSession()
-        archive.sweepOrphans()
+        // Load history before recovery/sweep. Sweeping an empty, unloaded
+        // archive would delete every recording; recovery also dedupes
+        // against loaded sessions.
+        Task { @MainActor [weak self] in
+            guard let self else { return }
+            await self.archive.loadIfNeeded()
+            self.recoverInterruptedSession()
+            self.archive.sweepOrphans()
+        }
 
         // UIKit's memory warning only arrives in the foreground; a
         // dispatch source also fires while recording with the screen
