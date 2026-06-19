@@ -56,10 +56,13 @@ struct SessionDetailView: View {
     @AppStorage("summary.defaultLength") private var defaultLengthRaw
         = SummaryLength.standard.rawValue
     @AppStorage("record.autoSuggest") private var autoSuggest = true
+    @AppStorage("summary.autoPostProcessNewRecordings")
+    private var autoPostProcessNewRecordings = false
 
     /// What to run once the user consents to downloading the model.
     private enum DownloadAction: Equatable {
         case summarize(SummaryStyle, SummaryLength, suggestVocabulary: Bool)
+        case postProcessNewRecording(SummaryStyle, SummaryLength, suggestVocabulary: Bool)
         case retranscribe
         case suggestHotwords
     }
@@ -105,6 +108,7 @@ struct SessionDetailView: View {
         List {
             if let session {
                 recordingSection(session)
+                speakerRetrySection(session)
                 if jobRunning, session.summary == nil {
                     Section {
                         jobProgressRow
@@ -324,7 +328,7 @@ struct SessionDetailView: View {
             guard let style = autoSummarizeStyle, !autoStarted,
                   let session, session.summary == nil else { return }
             autoStarted = true
-            requestSummarize(
+            requestAutoSummarize(
                 style: style,
                 length: autoSummarizeLength ?? selectedLength,
                 suggestVocabulary: autoSuggest)
@@ -364,6 +368,9 @@ struct SessionDetailView: View {
         case .retranscribing(.transcribing(let fraction)):
             PercentProgressRow(
                 label: "Re-transcribing…", fraction: fraction, detail: remainingText)
+        case .retranscribing(.identifyingSpeakers(let fraction)):
+            PercentProgressRow(
+                label: "Identifying speakers…", fraction: fraction, detail: remainingText)
         case .retranscribing(.translating(let fraction)):
             PercentProgressRow(
                 label: "Translating…", fraction: fraction, detail: remainingText)
@@ -386,6 +393,9 @@ struct SessionDetailView: View {
                 .foregroundStyle(.secondary)
         case .pausedForRecording:
             Label("Paused — recording in progress", systemImage: "pause.circle")
+                .foregroundStyle(.secondary)
+        case .pausedForBackground:
+            Label("Paused — open Loqi to continue", systemImage: "pause.circle")
                 .foregroundStyle(.secondary)
         case .summarizing(let done, let total) where total > 1:
             // Map chunks and stitched detail sections report real counts.
@@ -411,6 +421,7 @@ struct SessionDetailView: View {
     private var wandLabel: some View {
         switch jobActivity {
         case .retranscribing(.transcribing(let fraction)),
+             .retranscribing(.identifyingSpeakers(let fraction)),
              .downloadingModel(let fraction):
             Text(fraction.formatted(.percent.precision(.fractionLength(0))))
                 .font(.caption.monospacedDigit())
@@ -551,6 +562,27 @@ struct SessionDetailView: View {
         }
     }
 
+    /// Shown when speaker separation was requested but the diarizer failed
+    /// (e.g. the model couldn't download). The transcript is fine; this just
+    /// offers an in-place retry. Hidden while any job runs for this session.
+    @ViewBuilder
+    private func speakerRetrySection(_ session: SessionRecord) -> some View {
+        if session.speakerSeparationFailed == true, !jobRunning {
+            Section {
+                Label(
+                    "Speaker separation didn't finish — the transcript is complete, but voices aren't labeled.",
+                    systemImage: "person.2.slash")
+                    .font(.footnote)
+                if SessionRetranscriber.canRetranscribe(session) {
+                    Button("Retry speaker separation") {
+                        pipeline.jobs.retryDiarization(sessionID: sessionID)
+                    }
+                    .disabled(pipeline.isRunning)
+                }
+            }
+        }
+    }
+
     @ViewBuilder
     private func summarySection(_ session: SessionRecord) -> some View {
         if let summary = session.summary {
@@ -644,11 +676,12 @@ struct SessionDetailView: View {
 
     @ViewBuilder
     private func photosSection(_ session: SessionRecord) -> some View {
-        if !unanchoredAttachments(session).isEmpty {
+        let photos = allAttachments(session)
+        if !photos.isEmpty {
             Section("Photos") {
                 ScrollView(.horizontal, showsIndicators: false) {
                     HStack(spacing: 10) {
-                        ForEach(unanchoredAttachments(session)) { attachment in
+                        ForEach(photos) { attachment in
                             AttachmentThumbnail(attachment: attachment)
                                 .onTapGesture { viewingAttachment = attachment }
                         }
@@ -706,18 +739,6 @@ struct SessionDetailView: View {
                     in: RoundedRectangle(cornerRadius: 6))
                 .contentShape(Rectangle())
                 .onTapGesture { seekPlayback(to: entry) }
-            }
-            let attached = anchoredAttachments(in: block.3)
-            if !attached.isEmpty {
-                ScrollView(.horizontal, showsIndicators: false) {
-                    HStack(spacing: 10) {
-                        ForEach(attached) { attachment in
-                            AttachmentThumbnail(attachment: attachment, height: 72)
-                                .onTapGesture { viewingAttachment = attachment }
-                        }
-                    }
-                }
-                .padding(.top, 4)
             }
         }
         .padding(.vertical, 2)
@@ -780,23 +801,12 @@ struct SessionDetailView: View {
         }
     }
 
-    /// Attachments anchored to one of the block's entries.
-    private func anchoredAttachments(
-        in entries: [SessionRecord.Entry]
-    ) -> [SessionRecord.Attachment] {
-        guard let all = session?.attachments, !all.isEmpty else { return [] }
-        let ids = Set(entries.map(\.id))
-        return all.filter { $0.anchorEntryID.map(ids.contains) ?? false }
-    }
-
-    /// Post-hoc additions (and photos whose anchor entry no longer exists).
-    private func unanchoredAttachments(
+    /// Every photo for the session, oldest first — all shown together in the
+    /// Photos section (anchoring is kept only to ground descriptions).
+    private func allAttachments(
         _ session: SessionRecord
     ) -> [SessionRecord.Attachment] {
-        let entryIDs = Set(session.entries.map(\.id))
-        return (session.attachments ?? []).filter {
-            $0.anchorEntryID.map { !entryIDs.contains($0) } ?? true
-        }
+        (session.attachments ?? []).sorted { $0.timestamp < $1.timestamp }
     }
 
     private func saveCaption(_ caption: String, for attachment: SessionRecord.Attachment) {
@@ -863,6 +873,29 @@ struct SessionDetailView: View {
             suggestVocabulary: suggestVocabulary)
     }
 
+    private func requestAutoSummarize(
+        style: SummaryStyle, length: SummaryLength, suggestVocabulary: Bool
+    ) {
+        guard autoPostProcessNewRecordings else {
+            requestSummarize(
+                style: style, length: length, suggestVocabulary: suggestVocabulary)
+            return
+        }
+        guard pipeline.llmEnabled else {
+            showNotice(String(
+                localized: "AI features are off — turn them on in Settings to summarize."))
+            return
+        }
+        guard pipeline.llmDownloaded else {
+            pendingDownload = .postProcessNewRecording(
+                style, length, suggestVocabulary: suggestVocabulary)
+            return
+        }
+        pipeline.jobs.postProcessAndSummarizeNewSession(
+            sessionID: sessionID, style: style, length: length,
+            suggestVocabulary: suggestVocabulary)
+    }
+
     private func requestRetranscribe() {
         guard !pipeline.isRunning else { return }
         guard pipeline.llmEnabled else {
@@ -895,6 +928,10 @@ struct SessionDetailView: View {
         switch action {
         case .summarize(let style, let length, let suggestVocabulary):
             pipeline.jobs.summarize(
+                sessionID: sessionID, style: style, length: length,
+                allowDownload: true, suggestVocabulary: suggestVocabulary)
+        case .postProcessNewRecording(let style, let length, let suggestVocabulary):
+            pipeline.jobs.postProcessAndSummarizeNewSession(
                 sessionID: sessionID, style: style, length: length,
                 allowDownload: true, suggestVocabulary: suggestVocabulary)
         case .retranscribe:
@@ -1018,7 +1055,7 @@ struct SessionDetailView: View {
                 try await pipeline.llm.load(
                     policy: allowDownload ? .downloadIfNeeded : .requireDownloaded)
                 let builder = PromptBuilder()
-                let transcript = session.plainTranscript()
+                let transcript = session.plainTranscript(includeSpeakers: false)
                 let budget = PromptBuilder.suggestionBudget(
                     transcriptLength: transcript.count)
                 let direction = session.entries.last?.direction

@@ -10,6 +10,7 @@ struct SessionArtifacts: Sendable {
     var audioFileName: String?
     var chunkNotes: [SessionRecord.ChunkNote] = []
     var notesEndEntryID: UUID?
+    var speakerCount: Int?
     /// Wall-clock → audio-file mapping for stamping entry offsets.
     var timeline: AudioTimeline?
     /// Photos attached while recording.
@@ -124,6 +125,7 @@ final class SessionArchive {
             endedAt: .now,
             entries: saved,
             speakerNames: speakerNames)
+        record.recordingSpeakerCount = artifacts?.speakerCount
         // Fresh arrival: the Sessions list dots it until first opened.
         record.unseen = true
         if let artifacts {
@@ -266,7 +268,8 @@ final class SessionArchive {
         encoder.dateEncodingStrategy = .iso8601
         if let data = try? encoder.encode(record) {
             try? data.write(
-                to: Self.directory.appending(path: "\(record.id.uuidString).json"))
+                to: Self.directory.appending(path: "\(record.id.uuidString).json"),
+                options: .atomic)
         }
     }
 }

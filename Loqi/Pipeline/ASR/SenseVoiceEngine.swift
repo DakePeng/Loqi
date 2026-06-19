@@ -210,7 +210,7 @@ actor SenseVoiceEngine: SpeechEngine {
 
     private func deliverFinal(_ result: SenseVoiceRecognitionResult) {
         guard !result.text.isEmpty else { return }
-        emit(.finalized(result.text, language: result.language))
+        emit(.finalized(result.text, runs: nil, language: result.language))
     }
 
     private func emit(_ event: TranscriptionEvent) {

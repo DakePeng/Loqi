@@ -404,6 +404,10 @@ private struct SessionRowStatus: View {
                 Label("Paused — recording in progress", systemImage: "pause.circle")
                     .font(.caption)
                     .foregroundStyle(.secondary)
+            } else if case .pausedForBackground = activity {
+                Label("Paused — open Loqi to continue", systemImage: "pause.circle")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
             } else {
                 let info = Self.info(for: activity)
                 VStack(alignment: .leading, spacing: 3) {
@@ -433,6 +437,8 @@ private struct SessionRowStatus: View {
              total > 1 ? Double(done) / Double(total) : nil)
         case .retranscribing(.transcribing(let f)):
             (String(localized: "Re-transcribing…"), f)
+        case .retranscribing(.identifyingSpeakers(let f)):
+            (String(localized: "Identifying speakers…"), f)
         case .retranscribing(.translating(let f)):
             (String(localized: "Translating…"), f)
         case .importing(.transcribing(let f)):
@@ -447,6 +453,8 @@ private struct SessionRowStatus: View {
             (String(localized: "Waiting to re-transcribe…"), nil)
         case .pausedForRecording:
             (String(localized: "Paused — recording in progress"), nil)
+        case .pausedForBackground:
+            (String(localized: "Paused — open Loqi to continue"), nil)
         }
     }
 

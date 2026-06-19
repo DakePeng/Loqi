@@ -58,6 +58,29 @@ struct HotwordMatcherTests {
         #expect(fixed == "这个Loqi应用不错")
     }
 
+    @Test func fixesCJKNonHomophoneNearMiss() {
+        // 治平 (zhiping) is a near-miss — not an exact homophone — for 志鹏
+        // (zhipeng). Fuzzy pinyin catches it; strict homophone matching did not.
+        let fixed = matcher.fixup("我把APP给治平看了", language: .chinese)
+        #expect(fixed == "我把APP给志鹏看了")
+    }
+
+    @Test func fixesLatinMidThresholdNearMiss() {
+        // "Anthrpc" → "Anthropic" is ~0.78 similar: above the new 0.75 bar,
+        // below the old 0.84 one.
+        let m = HotwordMatcher(hotwords: [Hotword(term: "Anthropic", note: "company")])
+        let fixed = m.fixup("we use Anthrpc daily", language: .english)
+        #expect(fixed == "we use Anthropic daily")
+    }
+
+    @Test func keepsDistinctCJKWordSharingPinyinPrefix() {
+        // 支持 (zhichi) shares the "zhi" pinyin prefix with 志鹏 (zhipeng) but
+        // is a common, distinct word (~0.43 similar) — well under the 0.75
+        // replace bar. Guards against the fuzzy CJK matcher over-replacing.
+        let text = "我很支持这个想法"
+        #expect(matcher.fixup(text, language: .chinese) == text)
+    }
+
     // MARK: Scoring / refinement triggers
 
     @Test func nearMissForcesRefinement() {

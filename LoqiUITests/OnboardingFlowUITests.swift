@@ -94,7 +94,11 @@ final class OnboardingFlowUITests: XCTestCase {
     /// completion, which must flip the live engine to it. Named to sort
     /// last; verify afterwards with
     ///   xcrun simctl spawn booted defaults read com.kunzhipeng.loqi asr.engine
-    func testSenseVoiceOnlyDownloadCompletes() {
+    func testSenseVoiceOnlyDownloadCompletes() throws {
+        guard ProcessInfo.processInfo.environment["LOQI_RUN_NETWORK_UI_TESTS"] == "1" else {
+            throw XCTSkip("Set LOQI_RUN_NETWORK_UI_TESTS=1 to download SenseVoice.")
+        }
+
         let app = launchOntoRegionStep()
 
         app.staticTexts["China mainland"].tap()

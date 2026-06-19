@@ -64,3 +64,86 @@ struct DiagnosticTokenEstimateTests {
         #expect(punctuated == plain)
     }
 }
+
+struct GenerationCollectionTests {
+    @Test func cancelledCollectionThrowsInsteadOfReturningPartialText() async {
+        let (stream, continuation) = AsyncStream<String>.makeStream()
+        let task = Task {
+            try await LLMService.collectGeneratedText(from: stream) { $0 }
+        }
+
+        continuation.yield("partial")
+        task.cancel()
+        continuation.yield("ignored")
+        continuation.finish()
+
+        do {
+            _ = try await task.value
+            Issue.record("expected CancellationError")
+        } catch is CancellationError {
+            // Expected.
+        } catch {
+            Issue.record("expected CancellationError, got \(error)")
+        }
+    }
+
+    @Test func collectionConcatenatesChunks() async throws {
+        let stream = AsyncStream<String> { continuation in
+            continuation.yield("hello")
+            continuation.yield(" ")
+            continuation.yield("world")
+            continuation.finish()
+        }
+
+        let text = try await LLMService.collectGeneratedText(from: stream) { $0 }
+
+        #expect(text == "hello world")
+    }
+}
+
+@MainActor
+struct PipelineResourceTests {
+    @Test func llmResourceMessagesCollapseToOneVisibleStatus() {
+        let messages: [CaptionPipeline.StatusKey: String] = [
+            .llm: "Warming up the AI model...",
+            .thermal: "AI features off (device hot)",
+            .memory: "AI features paused (low memory)",
+            .diarizer: "Preparing speaker separation...",
+        ]
+
+        #expect(CaptionPipeline.visibleStatusMessages(from: messages) == [
+            "AI features paused (low memory)",
+            "Preparing speaker separation...",
+        ])
+    }
+
+    @Test func memoryWarningKeepsVoiceprintForActiveDiarization() {
+        #expect(!CaptionPipeline.shouldUnloadVoiceprintOnMemoryWarning(
+            isRunning: true, diarizationActive: true))
+        #expect(CaptionPipeline.shouldUnloadVoiceprintOnMemoryWarning(
+            isRunning: true, diarizationActive: false))
+        #expect(CaptionPipeline.shouldUnloadVoiceprintOnMemoryWarning(
+            isRunning: false, diarizationActive: true))
+    }
+
+    @Test func liveDiarizationStopsWhenBackgrounded() {
+        #expect(CaptionPipeline.shouldRunLiveDiarization(
+            diarizationActive: true, isBackgrounded: false))
+        #expect(!CaptionPipeline.shouldRunLiveDiarization(
+            diarizationActive: true, isBackgrounded: true))
+        #expect(!CaptionPipeline.shouldRunLiveDiarization(
+            diarizationActive: false, isBackgrounded: false))
+    }
+
+    @Test func backgroundSuspendsPostHocWorkThatCanReachMetal() {
+        #expect(SummaryJobCenter.shouldSuspendForBackground(.downloadingModel(0)))
+        #expect(SummaryJobCenter.shouldSuspendForBackground(
+            .summarizing(done: 0, total: 1)))
+        #expect(SummaryJobCenter.shouldSuspendForBackground(
+            .retranscribing(.identifyingSpeakers(0))))
+        #expect(SummaryJobCenter.shouldSuspendForBackground(
+            .retranscribing(.transcribing(0))))
+        #expect(!SummaryJobCenter.shouldSuspendForBackground(
+            .importing(.transcribing(0))))
+    }
+}

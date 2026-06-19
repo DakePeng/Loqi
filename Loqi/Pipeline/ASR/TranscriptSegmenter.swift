@@ -21,6 +21,10 @@ struct TranscriptSegmenter: Sendable {
         var text: String
         var language: AppLanguage
         var languageWasDetected: Bool
+        /// Per-word audio time ranges from the engine (Apple only), passed
+        /// through on a finalized utterance so the pipeline can split it at a
+        /// speaker change. nil for volatile/discard and timing-less engines.
+        var timedRuns: [TimedRun]? = nil
     }
 
     /// Below these lengths, refinement is skipped — the NMT draft is fine
@@ -32,16 +36,18 @@ struct TranscriptSegmenter: Sendable {
         switch event {
         case .volatile(let text, let detectedLanguage):
             let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
-            guard !trimmed.isEmpty else { return nil }
+            guard trimmed.hasSpeechContent else { return nil }
             return Output(
                 kind: .volatileUpdate,
                 text: trimmed,
                 language: detectedLanguage ?? fallbackLanguage,
                 languageWasDetected: detectedLanguage != nil)
 
-        case .finalized(let text, let detectedLanguage):
+        case .finalized(let text, let runs, let detectedLanguage):
             let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
-            guard !trimmed.isEmpty else {
+            // Drop empty AND punctuation-only finals ("." / "。") — the ASR
+            // emits those for silence/noise and they render as lone dots.
+            guard trimmed.hasSpeechContent else {
                 return Output(
                     kind: .discard,
                     text: "",
@@ -54,7 +60,8 @@ struct TranscriptSegmenter: Sendable {
                 kind: .finalized(refine: refine),
                 text: trimmed,
                 language: language,
-                languageWasDetected: detectedLanguage != nil)
+                languageWasDetected: detectedLanguage != nil,
+                timedRuns: runs)
 
         case .ended, .speechActivity:
             return nil
@@ -67,5 +74,13 @@ struct TranscriptSegmenter: Sendable {
         }
         let words = text.split { $0.isWhitespace }.count
         return words >= minLatinWords
+    }
+}
+
+extension StringProtocol {
+    /// At least one letter or number in any script (CJK included) — used to
+    /// drop ASR segments that are only punctuation or whitespace.
+    var hasSpeechContent: Bool {
+        contains { $0.isLetter || $0.isNumber }
     }
 }

@@ -147,10 +147,17 @@ struct ChatEngine {
         let tokens = queryTokens(question)
         var bullets: [String] = []
         for note in notes {
-            let labelled = note.facts.map { "fact: \($0)" }
-                + note.decisions.map { "decision: \($0)" }
-                + note.actions.map { "action: \($0)" }
-                + note.terms.map { "term: \($0)" }
+            let labelled: [String]
+            if let records = note.summaryRecords, !records.isEmpty {
+                labelled = records.map {
+                    "\($0.kind.rawValue): \($0.text)"
+                }
+            } else {
+                labelled = note.facts.map { "fact: \($0)" }
+                    + note.decisions.map { "decision: \($0)" }
+                    + note.actions.map { "action: \($0)" }
+                    + note.terms.map { "term: \($0)" }
+            }
             for line in labelled {
                 let haystack = line.lowercased()
                 guard tokens.contains(where: { haystack.contains($0) }) else { continue }

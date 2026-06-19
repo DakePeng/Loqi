@@ -1,5 +1,8 @@
 import Foundation
 import Observation
+#if os(iOS)
+import UIKit
+#endif
 
 /// Owns every post-hoc session job — import, re-transcribe & summarize,
 /// summarize — so their lifecycle is independent of any one screen:
@@ -27,6 +30,8 @@ final class SummaryJobCenter {
         case queuedRetranscribe
         /// A recording started; this job yields memory and resumes after.
         case pausedForRecording
+        /// Scene left the foreground; Metal-backed work resumes on active.
+        case pausedForBackground
     }
 
     enum JobError: LocalizedError {
@@ -74,12 +79,24 @@ final class SummaryJobCenter {
     @ObservationIgnored private var activeSummarizeRequest: [UUID: SummarizeRequest] = [:]
     /// Jobs cancelled by backgrounding, awaiting a foreground restart.
     @ObservationIgnored private var suspendedSummaries: [UUID: SummarizeRequest] = [:]
+    /// Retranscribe workers canceled by backgrounding. Foreground resume waits
+    /// for their cleanup before reusing the same activity/task slots.
+    @ObservationIgnored private var backgroundPausedRetranscribeTasks: [UUID: Task<Void, Never>] = [:]
 
     private struct RetranscribeRequest {
+        enum Kind {
+            case manual
+            case newRecording(
+                backend: OfflineTranscriber.Backend?,
+                speakerCount: Int?,
+                suggestVocabulary: Bool)
+        }
+
         let sessionID: UUID
         let style: SummaryStyle
         let length: SummaryLength
         let allowDownload: Bool
+        let kind: Kind
     }
 
     private struct SummarizeRequest {
@@ -126,8 +143,14 @@ final class SummaryJobCenter {
     /// cooperative: a running ASR decode stops at its next segment check.
     func cancel(_ sessionID: UUID) {
         errors[sessionID] = nil
+        suspendedSummaries[sessionID] = nil
+        backgroundPausedRetranscribeTasks[sessionID] = nil
         if let index = retranscribeQueue.firstIndex(where: { $0.sessionID == sessionID }) {
             retranscribeQueue.remove(at: index)
+            activities[sessionID] = nil
+            return
+        }
+        if activities[sessionID] == .pausedForBackground {
             activities[sessionID] = nil
             return
         }
@@ -173,36 +196,69 @@ final class SummaryJobCenter {
         drainRetranscribeQueue()
     }
 
-    /// Scene moved to/from the background. LLM-generation jobs can't run there
-    /// — a Metal command buffer submitted from the background aborts the whole
-    /// process — so an in-flight summary generation is cancelled and restarted
-    /// on foreground. Imports keep running (ASR + the system translator never
-    /// touch Metal); a re-transcribe still doing its ASR pass keeps running
-    /// too — when it reaches its summary phase the LLM itself parks it
-    /// (`LLMService.setBackgrounded`), so only a generation already in flight
-    /// needs the harder cancel/restart.
+    /// Scene moved to/from the background. Metal-backed work can't run there:
+    /// iOS aborts the process instead of throwing an error. Summary generation
+    /// and second-pass re-transcribe restart on foreground.
     func setBackgrounded(_ value: Bool) {
         guard value != isBackgrounded else { return }
         isBackgrounded = value
-        if value { suspendLLMJobs() } else { resumeLLMJobs() }
+        if value { suspendBackgroundUnsafeJobs() } else { resumeBackgroundJobs() }
     }
 
-    private func suspendLLMJobs() {
+    nonisolated static func shouldSuspendForBackground(_ activity: Activity) -> Bool {
+        switch activity {
+        case .downloadingModel, .summarizing, .retranscribing:
+            true
+        default:
+            false
+        }
+    }
+
+    private static func isHeldActivity(_ activity: Activity?) -> Bool {
+        activity == .pausedForRecording || activity == .pausedForBackground
+    }
+
+    private func suspendBackgroundUnsafeJobs() {
         for (sessionID, activity) in activities {
-            switch activity {
-            case .summarizing, .downloadingModel:
-                // Possibly mid-generation: the LLM park-gate guards only the
-                // start of a generation, so an in-flight Metal submission can
-                // be stopped only by cancelling the task.
-                if let req = activeSummarizeRequest[sessionID] {
-                    suspendedSummaries[sessionID] = req
-                }
-                activities[sessionID] = .pausedForRecording  // survive finishJob
-                tasks[sessionID]?.cancel()
-            default:
-                // .retranscribing (ASR) / .importing / queued: GPU-free now,
-                // and their later generation parks at the LLM gate.
-                break
+            guard Self.shouldSuspendForBackground(activity) else { continue }
+            if case .summarizing = activity,
+               let req = activeSummarizeRequest[sessionID] {
+                suspendedSummaries[sessionID] = req
+            } else if case .downloadingModel = activity,
+                      let req = activeSummarizeRequest[sessionID] {
+                suspendedSummaries[sessionID] = req
+            } else if case .retranscribing = activity,
+                      let req = activeRetranscribeRequest[sessionID],
+                      !retranscribeQueue.contains(where: { $0.sessionID == sessionID }) {
+                retranscribeQueue.insert(req, at: 0)
+                backgroundPausedRetranscribeTasks[sessionID] = retranscribeWorker ?? tasks[sessionID]
+            }
+            activities[sessionID] = .pausedForBackground
+            tasks[sessionID]?.cancel()
+        }
+        retranscribeWorker?.cancel()
+        retranscribeWorker = nil
+    }
+
+    private func resumeBackgroundJobs() {
+        resumeLLMJobs()
+        let pausedRetranscribes = activities.compactMap { sessionID, activity -> UUID? in
+            guard activity == .pausedForBackground,
+                  retranscribeQueue.contains(where: { $0.sessionID == sessionID })
+            else { return nil }
+            return sessionID
+        }
+        for sessionID in pausedRetranscribes {
+            let oldTask = backgroundPausedRetranscribeTasks.removeValue(forKey: sessionID)
+            Task { [weak self] in
+                await oldTask?.value
+                guard let self,
+                      !self.isBackgrounded,
+                      self.activities[sessionID] == .pausedForBackground,
+                      self.retranscribeQueue.contains(where: { $0.sessionID == sessionID })
+                else { return }
+                self.activities[sessionID] = .queuedRetranscribe
+                self.drainRetranscribeQueue()
             }
         }
     }
@@ -220,7 +276,7 @@ final class SummaryJobCenter {
                 guard let self, !self.isBackgrounded else { return }
                 // Clear the held activity so the restart's isBusy guard passes,
                 // then re-run from scratch (the partial summary was never saved).
-                if self.activities[sessionID] == .pausedForRecording {
+                if self.activities[sessionID] == .pausedForBackground {
                     self.activities[sessionID] = nil
                 }
                 guard !self.isBusy(sessionID) else { return }
@@ -261,6 +317,11 @@ final class SummaryJobCenter {
         tasks[sessionID] = Task {
             defer { finishJob(sessionID) }
             do {
+                if !suggestVocabulary,
+                   try await renderCachedSummaryIfPossible(
+                    sessionID: sessionID, style: style, length: length) {
+                    return
+                }
                 try await loadModel(sessionID: sessionID, allowDownload: allowDownload)
                 activities[sessionID] = .summarizing(done: 0, total: 0)
                 try await runSummarize(
@@ -289,6 +350,103 @@ final class SummaryJobCenter {
             allowDownload: allowDownload)
     }
 
+    /// Retry speaker separation for a session whose diarization failed
+    /// (`speakerSeparationFailed`). Diarizes the saved audio and writes the
+    /// slots back, leaving the transcript text, summary, and notes intact
+    /// (entry IDs don't change). Tapping Retry is implied download consent —
+    /// the offline diarizer is tens of MB, not the multi-GB LLM.
+    func retryDiarization(sessionID: UUID) {
+        guard !isRecording(), !isBusy(sessionID),
+              let session = archive.sessions.first(where: { $0.id == sessionID }),
+              let fileName = session.audioFileName
+        else { return }
+        let url = SessionArchive.recordingURL(fileName: fileName)
+        guard FileManager.default.fileExists(atPath: url.path),
+              let speakerCap = VoiceprintService.clusterCap(
+                forPickerValue: session.recordingSpeakerCount ?? -1)
+        else { return }
+
+        errors[sessionID] = nil
+        activities[sessionID] = .retranscribing(.identifyingSpeakers(0))
+        beginGrace(sessionID, name: "retry-diarize")
+        tasks[sessionID] = Task {
+            defer { finishJob(sessionID) }
+            do {
+                let segments = try await voiceprint.diarizeFile(
+                    url: url, maxSpeakers: speakerCap, source: .current
+                ) { [weak self] progress in
+                    Task { @MainActor in
+                        guard let self, self.activities[sessionID] != nil else { return }
+                        switch progress {
+                        case .download(let fraction):
+                            self.activities[sessionID] = .downloadingModel(fraction)
+                        case .analysis(let fraction):
+                            self.retranscribeProgress(
+                                sessionID: sessionID, phase: .identifyingSpeakers(fraction))
+                        }
+                    }
+                }
+                try Task.checkCancellation()
+                guard var record = archive.sessions.first(where: { $0.id == sessionID })
+                else { return }
+                SessionRetranscriber.applyDiarizationSegments(segments, to: &record)
+                record.speakerSeparationFailed = nil
+                archive.update(record)
+            } catch is CancellationError {
+                // User cancelled: no error row.
+            } catch {
+                errors[sessionID] = error.localizedDescription
+            }
+        }
+    }
+
+    /// Fresh-recording auto polish. Uses downloaded post-process models
+    /// only; when none apply, it falls straight back to normal summarize.
+    func postProcessAndSummarizeNewSession(
+        sessionID: UUID,
+        style: SummaryStyle,
+        length: SummaryLength,
+        allowDownload: Bool = false,
+        suggestVocabulary: Bool = false
+    ) {
+        guard !isRecording(),
+              !isBusy(sessionID),
+              let session = archive.sessions.first(where: { $0.id == sessionID })
+        else { return }
+
+        let backend = OfflineTranscriber.postProcessBackend(
+            senseVoiceInstalled: SenseVoiceModelStore.isInstalled,
+            qwen3Installed: Qwen3ASRModelStore.isInstalled)
+        let speakerCount: Int?
+        if VoiceprintService.isOfflineDiarizerDownloaded,
+           let count = session.recordingSpeakerCount,
+           VoiceprintService.clusterCap(forPickerValue: count) != nil {
+            speakerCount = count
+        } else {
+            speakerCount = nil
+        }
+
+        guard (backend != nil || speakerCount != nil),
+              SessionRetranscriber.canRetranscribe(session)
+        else {
+            summarize(
+                sessionID: sessionID, style: style, length: length,
+                allowDownload: allowDownload, suggestVocabulary: suggestVocabulary)
+            return
+        }
+
+        errors[sessionID] = nil
+        activities[sessionID] = .queuedRetranscribe
+        retranscribeQueue.append(RetranscribeRequest(
+            sessionID: sessionID, style: style, length: length,
+            allowDownload: allowDownload,
+            kind: .newRecording(
+                backend: backend,
+                speakerCount: speakerCount,
+                suggestVocabulary: suggestVocabulary)))
+        drainRetranscribeQueue()
+    }
+
     /// Queue re-transcribes (batch selection or a single session). Queued
     /// sessions show `.queuedRetranscribe`; one worker drains them in
     /// order. Busy or missing sessions are skipped.
@@ -307,17 +465,17 @@ final class SummaryJobCenter {
             activities[id] = .queuedRetranscribe
             retranscribeQueue.append(RetranscribeRequest(
                 sessionID: id, style: style, length: length,
-                allowDownload: allowDownload))
+                allowDownload: allowDownload, kind: .manual))
         }
         drainRetranscribeQueue()
     }
 
     private func drainRetranscribeQueue() {
         guard retranscribeWorker == nil, !retranscribeQueue.isEmpty,
-              !pausedForRecording else { return }
+              !pausedForRecording, !isBackgrounded else { return }
         retranscribeWorker = Task {
             defer { retranscribeWorker = nil }
-            while !retranscribeQueue.isEmpty, !Task.isCancelled {
+            while !retranscribeQueue.isEmpty, !Task.isCancelled, !isBackgrounded {
                 let request = retranscribeQueue.removeFirst()
                 let sessionID = request.sessionID
                 // Re-check per dequeue: cancelled while queued, deleted,
@@ -359,8 +517,24 @@ final class SummaryJobCenter {
             }
             let retranscriber = SessionRetranscriber(
                 llm: llm, translator: translator, hotwords: hotwords)
-            let updated = try await retranscriber.retranscribe(session) { [weak self] phase in
-                self?.retranscribeProgress(sessionID: sessionID, phase: phase)
+            let updated: SessionRecord
+            let suggestVocabulary: Bool
+            switch request.kind {
+            case .manual:
+                updated = try await retranscriber.retranscribe(session) { [weak self] phase in
+                    self?.retranscribeProgress(sessionID: sessionID, phase: phase)
+                }
+                suggestVocabulary = false
+            case .newRecording(let backend, let speakerCount, let suggest):
+                updated = try await retranscriber.postProcessNewRecording(
+                    session,
+                    backend: backend,
+                    speakerCount: speakerCount,
+                    voiceprint: voiceprint
+                ) { [weak self] phase in
+                    self?.retranscribeProgress(sessionID: sessionID, phase: phase)
+                }
+                suggestVocabulary = suggest
             }
             // A cancel that landed at the very end must not clobber the
             // archive with a half-finished record.
@@ -370,12 +544,13 @@ final class SummaryJobCenter {
             // backgrounding can cancel and restart on its own.
             activeSummarizeRequest[sessionID] = SummarizeRequest(
                 style: request.style, length: request.length,
-                allowDownload: request.allowDownload, suggestVocabulary: false)
+                allowDownload: request.allowDownload,
+                suggestVocabulary: suggestVocabulary)
             try await loadModel(sessionID: sessionID, allowDownload: request.allowDownload)
             activities[sessionID] = .summarizing(done: 0, total: 0)
             try await runSummarize(
                 sessionID: sessionID, style: request.style, length: request.length,
-                suggestVocabulary: false)
+                suggestVocabulary: suggestVocabulary)
         } catch is CancellationError {
             // User cancelled: no error row.
         } catch {
@@ -422,12 +597,36 @@ final class SummaryJobCenter {
                 record.unseen = true
                 archive.update(record)
                 lastCompleted = Completion(id: sessionID, at: .now)
+                // Imports have no post-stop scenario card, so summarize them
+                // automatically once transcription lands.
+                autoSummarizeAfterImport(sessionID: sessionID)
             } catch is CancellationError {
                 hotwords.discardSuggestions(forSession: sessionID)
                 archive.delete(id: sessionID)
             } catch {
                 errors[sessionID] = error.localizedDescription
             }
+        }
+    }
+
+    /// Summarize a freshly imported session with the user's default style.
+    /// Only when the LLM is already downloaded — a fresh install must not
+    /// trigger a silent multi-GB fetch or leave an error row on the import.
+    /// Deferred to its own task so the import job's `finishJob` clears the
+    /// busy state before `summarize`'s `isBusy` guard runs.
+    private func autoSummarizeAfterImport(sessionID: UUID) {
+        guard llmEnabled, LLMService.isDownloaded(model: ModelCatalog.current)
+        else { return }
+        let style = SummaryStyle(
+            rawValue: UserDefaults.standard.string(forKey: "summary.defaultStyle") ?? "")
+            ?? .meeting
+        let length = SummaryLength(
+            rawValue: UserDefaults.standard.string(forKey: "summary.defaultLength") ?? "")
+            ?? .standard
+        Task { @MainActor [weak self] in
+            self?.summarize(
+                sessionID: sessionID, style: style, length: length,
+                suggestVocabulary: true)
         }
     }
 
@@ -466,6 +665,9 @@ final class SummaryJobCenter {
         case .transcribing(let f):
             setProgress(sessionID, .retranscribing(.transcribing(Self.percent(f))),
                         phaseKey: "re.asr", fraction: f)
+        case .identifyingSpeakers(let f):
+            setProgress(sessionID, .retranscribing(.identifyingSpeakers(Self.percent(f))),
+                        phaseKey: "re.diarize", fraction: f)
         case .translating(let f):
             setProgress(sessionID, .retranscribing(.translating(Self.percent(f))),
                         phaseKey: "re.translate", fraction: f)
@@ -502,7 +704,7 @@ final class SummaryJobCenter {
     }
 
     private func finishJob(_ sessionID: UUID) {
-        if activities[sessionID] != .pausedForRecording {
+        if !Self.isHeldActivity(activities[sessionID]) {
             activities[sessionID] = nil
         }
         // A background-suspended job has already copied this into
@@ -544,10 +746,12 @@ final class SummaryJobCenter {
         guard let session = archive.sessions.first(where: { $0.id == sessionID })
         else { return }
         let engine = SummaryEngine(llm: llm, matcher: hotwords.matcher)
+        let refreshed = await refreshAttachmentText(in: session)
+        if refreshed.changed { archive.update(refreshed.record) }
         // Hygiene first: retro-apply hotword fixes and catch up refinement
         // the live session dropped, so the notes map over the cleanest text
         // we can produce.
-        let hygiene = await engine.hygienePass(session)
+        let hygiene = await engine.hygienePass(refreshed.record)
         let cleaned = hygiene.record
         if hygiene.changed { archive.update(cleaned) }
         let result = try await engine.summarize(
@@ -602,7 +806,7 @@ final class SummaryJobCenter {
     /// the user has navigated away.
     private func enqueueVocabularySuggestions(for record: SessionRecord) async {
         let builder = PromptBuilder()
-        let transcript = record.plainTranscript()
+        let transcript = record.plainTranscript(includeSpeakers: false)
         let budget = PromptBuilder.suggestionBudget(transcriptLength: transcript.count)
         let direction = record.entries.last?.direction
         let prompt = builder.hotwordSuggestionPrompt(
@@ -617,5 +821,109 @@ final class SummaryJobCenter {
             .filter { !hotwords.isKnown($0.term) }
         hotwords.enqueueSuggestions(
             suggestions, sessionID: record.id, sessionTitle: record.title)
+    }
+
+    func renderCachedSummaryIfPossible(
+        sessionID: UUID,
+        style: SummaryStyle,
+        length: SummaryLength
+    ) async throws -> Bool {
+        guard let session = archive.sessions.first(where: { $0.id == sessionID }),
+              let notes = session.chunkNotes, !notes.isEmpty,
+              session.liveNotesEndEntryID == session.entries.last?.id,
+              !notes.contains(where: { $0.isFallback == true })
+        else { return false }
+
+        let refreshed = await refreshAttachmentText(in: session)
+        var record = refreshed.record
+        let engine = SummaryEngine(llm: llm, matcher: hotwords.matcher)
+        let hygiene = await engine.hygienePass(record)
+        record = hygiene.record
+        if hygiene.changed {
+            archive.update(record)
+            return false
+        }
+        let summary = try await engine.reduce(
+            notes: AttachmentNotes.merged(notes, attachments: record.attachments),
+            style: style,
+            length: length,
+            in: SummaryEngine.summaryLanguage(for: record))
+        record.summary = summary
+        record.summaryEdited = nil
+        record.summaryStyle = style.rawValue
+        record.summaryLength = length.rawValue
+        if refreshed.changed {
+            record.attachments = refreshed.record.attachments
+        }
+        archive.update(record)
+        return true
+    }
+
+    private func refreshAttachmentText(
+        in record: SessionRecord
+    ) async -> (record: SessionRecord, changed: Bool) {
+        #if os(iOS)
+        guard var attachments = record.attachments, !attachments.isEmpty else {
+            return (record, false)
+        }
+        var changed = false
+        for index in attachments.indices where attachments[index].ocrText == nil {
+            let url = SessionArchive.attachmentURL(fileName: attachments[index].fileName)
+            guard let data = try? Data(contentsOf: url),
+                  let image = UIImage(data: data),
+                  let text = await ImageTextExtractor.recognizeText(in: image)
+            else { continue }
+            attachments[index].ocrText = text
+            attachments[index].summaryRecords = nil
+            changed = true
+        }
+        // VLM description back-fill. The summary's model is (about to be)
+        // loaded here, so this is the reliable place to describe photos — the
+        // live queue only runs when the model is already warm, which a short
+        // session rarely is. Without a vision model, skip the whole loop.
+        if await llm.model.supportsVision {
+            let language = SummaryEngine.summaryLanguage(for: record)
+            let prompts = PromptBuilder()
+            for index in attachments.indices where attachments[index].vlmDescription == nil {
+                let url = SessionArchive.attachmentURL(fileName: attachments[index].fileName)
+                let prompt = prompts.imageDescriptionPrompt(
+                    in: language,
+                    context: transcriptContext(around: attachments[index], in: record))
+                guard let raw = try? await llm.describeImage(
+                          at: url, system: prompt.system, user: prompt.user)
+                else { continue }
+                let text = prompts.plainDescription(raw)
+                guard !text.isEmpty, !PromptBuilder.hasDegenerateRepetition(text)
+                else { continue }
+                attachments[index].vlmDescription = text
+                attachments[index].summaryRecords = nil
+                changed = true
+            }
+        }
+        guard changed else { return (record, false) }
+        var updated = record
+        updated.attachments = attachments
+        return (updated, true)
+        #else
+        return (record, false)
+        #endif
+    }
+
+    /// Transcript lines around a photo's anchor (or the tail when unanchored),
+    /// capped, to ground the description in what was being discussed.
+    private func transcriptContext(
+        around attachment: SessionRecord.Attachment, in record: SessionRecord
+    ) -> String {
+        let entries = record.entries
+        let window: [SessionRecord.Entry]
+        if let anchor = attachment.anchorEntryID,
+           let idx = entries.firstIndex(where: { $0.id == anchor }) {
+            window = Array(entries[max(0, idx - 2)..<min(entries.count, idx + 3)])
+        } else {
+            window = Array(entries.suffix(4))
+        }
+        let text = window.map(\.sourceText).joined(separator: " ")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        return String(text.suffix(400))
     }
 }

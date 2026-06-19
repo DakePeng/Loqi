@@ -55,6 +55,15 @@ struct ImportEngineTests {
             == .apple)
     }
 
+    @Test func newRecordingPostProcessUsesDownloadedASROnly() {
+        #expect(OfflineTranscriber.postProcessBackend(
+            senseVoiceInstalled: true, qwen3Installed: true) == .qwen3ASR)
+        #expect(OfflineTranscriber.postProcessBackend(
+            senseVoiceInstalled: true, qwen3Installed: false) == .senseVoice)
+        #expect(OfflineTranscriber.postProcessBackend(
+            senseVoiceInstalled: false, qwen3Installed: false) == nil)
+    }
+
     @Test func segmentTimeRangeMapsSamplesToSeconds() {
         // 16 kHz: sample 8000 = 0.5s; 24000 samples long = 1.5s window.
         let range = VADSegmentedTranscriber.timeRange(
@@ -149,5 +158,74 @@ struct RetryHalvesTests {
         let halves = VADSegmentedTranscriber.retryHalves(start: 0, count: 33)
         #expect(halves[0].count + halves[1].count == 33)
         #expect(halves[1].start == 16)
+    }
+}
+
+/// The speaker-separation retry's core: re-attributing existing entries to
+/// diarization slots by audio-time overlap, leaving entry IDs (and thus the
+/// summaries/notes anchored to them) intact.
+struct SpeakerSeparationRetryTests {
+    @Test func reattributesBySlotOverlapAndKeepsEntryIDs() {
+        let direction = LanguagePair(source: .english, target: .english)
+        let now = Date()
+        var record = SessionRecord(
+            mode: .captions, startedAt: now, endedAt: now.addingTimeInterval(20),
+            entries: [
+                .init(sourceText: "first", translation: nil, speaker: nil,
+                      direction: direction, timestamp: now, audioOffset: 0),
+                .init(sourceText: "second", translation: nil, speaker: nil,
+                      direction: direction, timestamp: now.addingTimeInterval(10),
+                      audioOffset: 10),
+            ])
+        let ids = record.entries.map(\.id)
+
+        SessionRetranscriber.applyDiarizationSegments(
+            [.init(slot: 0, start: 0, end: 9), .init(slot: 1, start: 10, end: 20)],
+            to: &record)
+
+        #expect(record.entries.map(\.speaker) == [0, 1])
+        #expect(record.entries.map(\.id) == ids)
+    }
+}
+
+/// Mid-utterance speaker split: grouping a final utterance's timed runs into
+/// consecutive same-speaker parts (the pure half of the live split).
+struct CaptionRunGroupingTests {
+    @Test func groupsConsecutiveRunsAndAttachesNilToPrevious() {
+        let runs = [
+            TimedRun(text: "Hello ", start: 0, end: 1),
+            TimedRun(text: "there ", start: 1, end: 2),
+            TimedRun(text: "yes ", start: 2, end: 3),   // unattributed → joins prev
+            TimedRun(text: "no", start: 3, end: 4),
+        ]
+        let parts = CaptionPipeline.groupRuns(runs, slots: [0, 0, nil, 1])
+        #expect(parts.map(\.speaker) == [0, 1])
+        #expect(parts.map(\.text) == ["Hello there yes ", "no"])
+        #expect(parts.map(\.start) == [0, 3])
+    }
+
+    @Test func leadingUnattributedRunStartsItsOwnPart() {
+        let runs = [
+            TimedRun(text: "um ", start: 0, end: 1),
+            TimedRun(text: "okay", start: 1, end: 2),
+        ]
+        let parts = CaptionPipeline.groupRuns(runs, slots: [nil, 0])
+        #expect(parts.map(\.speaker) == [nil, 0])
+        #expect(parts.map(\.text) == ["um ", "okay"])
+    }
+
+    @Test func alignsRunTimesToDiarizerUtteranceClock() {
+        let runs = [
+            TimedRun(text: "first ", start: 42, end: 43),
+            TimedRun(text: "second", start: 43, end: 44),
+        ]
+
+        let aligned = CaptionPipeline.runsInDiarizerClock(
+            runs, utteranceStart: 3)
+
+        #expect(aligned == [
+            TimedRun(text: "first ", start: 3, end: 4),
+            TimedRun(text: "second", start: 4, end: 5),
+        ])
     }
 }

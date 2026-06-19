@@ -50,7 +50,9 @@ actor TranscriptionEngine: SpeechEngine {
             locale: language.speechLocale,
             transcriptionOptions: [],
             reportingOptions: [.volatileResults, .fastResults],
-            attributeOptions: [])
+            // Per-word audio time ranges ride on the final result's runs;
+            // the diarizer uses them to split an utterance at a speaker change.
+            attributeOptions: [.audioTimeRange])
         self.transcriber = transcriber
         // VAD rides in the same analyzer: it gates LLM work off live speech
         // and marks utterance boundaries for voiceprint classification.
@@ -114,7 +116,8 @@ actor TranscriptionEngine: SpeechEngine {
                     }
                     logger.debug("result isFinal=\(result.isFinal): \(text, privacy: .private)")
                     if result.isFinal {
-                        await self?.emit(.finalized(text, language: self?.language))
+                        let runs = Self.timedRuns(from: result.text)
+                        await self?.emit(.finalized(text, runs: runs, language: self?.language))
                     } else {
                         await self?.emit(.volatile(text, language: self?.language))
                     }
@@ -212,6 +215,23 @@ actor TranscriptionEngine: SpeechEngine {
 
     private func emit(_ event: TranscriptionEvent) {
         eventContinuation?.yield(event)
+    }
+
+    /// Split a final result's attributed text into per-run pieces carrying
+    /// their audio time range (requested via `.audioTimeRange`). Runs without
+    /// a range or with no letters/digits (lone punctuation/space) are dropped.
+    private static func timedRuns(from text: AttributedString) -> [TimedRun] {
+        var runs: [TimedRun] = []
+        for run in text.runs {
+            guard let range = run.audioTimeRange else { continue }
+            let piece = String(text[run.range].characters)
+            guard piece.contains(where: { $0.isLetter || $0.isNumber }) else { continue }
+            runs.append(TimedRun(
+                text: piece,
+                start: range.start.seconds,
+                end: range.end.seconds))
+        }
+        return runs
     }
 }
 

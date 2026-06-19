@@ -1690,6 +1690,22 @@
         }
       }
     },
+    "Everything is transcribed privately on this iPhone." : {
+      "localizations" : {
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "すべてこの iPhone 上でプライベートに文字起こしされます。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "所有内容都在这台 iPhone 上私密转写。"
+          }
+        }
+      }
+    },
     "Everything runs on this device. The recommended set gives you accurate live captions, speaker separation and AI summaries." : {
 
     },
@@ -1722,6 +1738,22 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "一切都在这台 iPhone 上运行。推荐组合可提供准确的实时字幕、说话人分离和 AI 摘要。"
+          }
+        }
+      }
+    },
+    "Everything stays on this iPhone." : {
+      "localizations" : {
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "すべてこの iPhone の中だけで処理されます。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "一切都只保留在这部 iPhone 上。"
           }
         }
       }
@@ -2828,6 +2860,7 @@
       }
     },
     "Once downloaded, Re-transcribe & summarize uses Qwen3-ASR automatically, and imports can select it: one model for 中文, English, 日本語 and 한국어, primed with your vocabulary — slower than live recognition, noticeably more accurate. Runs fully on this iPhone." : {
+      "extractionState" : "stale",
       "localizations" : {
         "ja" : {
           "stringUnit" : {
@@ -2842,6 +2875,9 @@
           }
         }
       }
+    },
+    "Once downloaded, Re-transcribe & summarize uses Qwen3-ASR automatically, and imports can select it. Auto post-process re-transcribes and identifies speakers before the first summary for new recordings, using downloaded models only. Live captions stay on the fast engines." : {
+
     },
     "One local model powers better translations, summaries, titles, chat and vocabulary suggestions. Turning AI features off disables all of them. The model downloads only when you ask — here, or when a feature offers it." : {
       "localizations" : {
@@ -4571,38 +4607,6 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "拍照"
-          }
-        }
-      }
-    },
-    "Everything is transcribed privately on this iPhone." : {
-      "localizations" : {
-        "ja" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "すべてこの iPhone 上でプライベートに文字起こしされます。"
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "所有内容都在这台 iPhone 上私密转写。"
-          }
-        }
-      }
-    },
-    "Everything stays on this iPhone." : {
-      "localizations" : {
-        "ja" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "すべてこの iPhone の中だけで処理されます。"
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "一切都只保留在这部 iPhone 上。"
           }
         }
       }

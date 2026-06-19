@@ -14,6 +14,7 @@ import os
 struct SessionRetranscriber {
     enum Phase: Equatable {
         case transcribing(Double)   // 0...1 through the file
+        case identifyingSpeakers(Double)
         case translating(Double)
     }
 
@@ -49,6 +50,7 @@ struct SessionRetranscriber {
     /// The caller persists the result and runs a normal summarize.
     func retranscribe(
         _ record: SessionRecord,
+        backend: OfflineTranscriber.Backend = OfflineTranscriber.currentBackend(),
         onPhase: @escaping @MainActor @Sendable (Phase) -> Void
     ) async throws -> SessionRecord {
         guard let fileName = record.audioFileName,
@@ -69,7 +71,7 @@ struct SessionRetranscriber {
         let utterances = try await OfflineTranscriber.transcribe(
             audioFile,
             language: direction.source,
-            backend: OfflineTranscriber.currentBackend(),
+            backend: backend,
             hotwords: hotwords?.biasStrings(for: direction.source) ?? []
         ) { fraction in
             onPhase(.transcribing(fraction))
@@ -107,6 +109,61 @@ struct SessionRetranscriber {
         return updated
     }
 
+    /// Best-effort new-recording polish: downloaded ASR and downloaded
+    /// offline diarization only. Failures keep the saved live session.
+    func postProcessNewRecording(
+        _ record: SessionRecord,
+        backend: OfflineTranscriber.Backend?,
+        speakerCount: Int?,
+        voiceprint: VoiceprintService,
+        onPhase: @escaping @MainActor @Sendable (Phase) -> Void
+    ) async throws -> SessionRecord {
+        var updated = record
+        if let backend {
+            do {
+                updated = try await retranscribe(
+                    updated, backend: backend, onPhase: onPhase)
+            } catch is CancellationError {
+                throw CancellationError()
+            } catch {
+                logger.error("auto post-process ASR failed: \(error.localizedDescription)")
+            }
+        }
+
+        guard VoiceprintService.isOfflineDiarizerDownloaded,
+              let speakerCount,
+              let speakerCap = VoiceprintService.clusterCap(forPickerValue: speakerCount),
+              let fileName = updated.audioFileName
+        else { return updated }
+        let url = SessionArchive.recordingURL(fileName: fileName)
+        guard FileManager.default.fileExists(atPath: url.path) else { return updated }
+
+        do {
+            onPhase(.identifyingSpeakers(0))
+            let segments = try await voiceprint.diarizeFile(
+                url: url, maxSpeakers: speakerCap, source: .current
+            ) { progress in
+                Task { @MainActor in
+                    if case .analysis(let fraction) = progress {
+                        onPhase(.identifyingSpeakers(fraction))
+                    }
+                }
+            }
+            Self.applyDiarizationSegments(segments, to: &updated)
+            updated.speakerSeparationFailed = nil
+            updated.chunkNotes = nil
+            updated.liveNotesEndEntryID = nil
+            updated.summary = nil
+            updated.summaryEdited = nil
+        } catch is CancellationError {
+            throw CancellationError()
+        } catch {
+            updated.speakerSeparationFailed = true
+            logger.error("auto post-process diarization failed: \(error.localizedDescription)")
+        }
+        return updated
+    }
+
     /// Map each new utterance to the old entry it overlaps most and take
     /// that entry's speaker slot. Old entries become segments running from
     /// their audio offset (falling back to the timestamp delta on records
@@ -129,5 +186,26 @@ struct SessionRetranscriber {
             segments.append(.init(slot: speaker, start: starts[index], end: end))
         }
         return SpeakerAttribution.attribute(utterances: utterances, to: segments)
+    }
+
+    /// Re-attribute every entry to the speaker slot its audio range overlaps
+    /// most. Reused by the standalone speaker-separation retry, so it's a
+    /// pure static helper. Entry IDs are untouched — only the `speaker` slot
+    /// changes — so cached summaries/notes stay valid.
+    nonisolated static func applyDiarizationSegments(
+        _ segments: [SpeakerAttribution.Segment],
+        to record: inout SessionRecord
+    ) {
+        let utterances = record.entries.enumerated().map { index, entry in
+            let start = record.resolvedAudioOffset(of: entry)
+            let end = index + 1 < record.entries.count
+                ? max(start, record.resolvedAudioOffset(of: record.entries[index + 1]))
+                : max(start + 3, segments.last?.end ?? start + 3)
+            return (start: start, end: end)
+        }
+        let slots = SpeakerAttribution.attribute(utterances: utterances, to: segments)
+        for index in record.entries.indices {
+            record.entries[index].speaker = slots[index]
+        }
     }
 }

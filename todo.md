@@ -297,8 +297,24 @@ didn't resume and the session was gone. Two failure layers fixed:
 
 Cheap wins (pieces already exist):
 
+- [ ] **Turn real-device checks into a proof pack** — one repeatable
+  zh/en/ja demo set with accuracy, latency, battery, memory, crash
+  recovery, and long-session results; builds trust better than another
+  speculative feature.
+- [ ] **CJK accuracy benchmark vs. competitors** — measure WER on a fixed
+  zh/ja/ko test set against Apple SpeechAnalyzer and Notta/Otter (cloud).
+  Validates the moat claim and becomes marketing material. SenseVoice vs.
+  Apple comparison is the most actionable first cut.
+- [ ] **Burn down the current issue backlog** — imported-audio archival,
+  large-import UI blocking, photo-processing hitches, live attachment
+  journaling, and stale search cache live in `ISSUES.md`.
 - [ ] **Speaker analytics** — talk-time per speaker, per-speaker action
   items; falls out of stored diarization data.
+- [ ] **Ask/search across all sessions** — reuse saved summaries, chunk
+  notes, attachments, and existing CJK-safe search before adding semantic
+  embeddings.
+- [ ] **Highlight marker during recording** — one tap to mark an important
+  moment, then surface those anchors in summary/chat/export.
 - [ ] **Custom summary styles** — `SummaryStyle.Spec` is already
   data-driven; user-defined styles + auto-suggest style from content.
 - [ ] **Bilingual transcript export** — side-by-side source/translation
@@ -327,6 +343,15 @@ Moat extensions:
   for deaf/HoH in-person use; HorizontalCaptionView is most of it.
 - [ ] **Weekly journal digest** — one reduce pass over the week's saved
   journal summaries.
+- [ ] **Mac app / desktop surface** — knowledge workers live at a desk;
+  meeting capture on a phone is awkward. Pipeline (ASR, LLM, diarization)
+  is already abstracted; a Catalyst or native SwiftUI Mac target reusing
+  `CaptionPipeline` would expand the use case against Granola/Otter where
+  they're strongest. Large effort, large payoff.
+- [ ] **App Store ship path** — iPhone 15+/iOS 26/dev signing are all
+  adoption blockers today. Paid developer account ($99/yr), TestFlight
+  beta, then public App Store submission is the path from "interesting
+  project" to "daily tool."
 - [ ] Later: iPad layout · KV-cache prompt reuse · cross-session
   voiceprints (biometric consent UX needed).
 

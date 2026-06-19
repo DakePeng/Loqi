@@ -32,12 +32,22 @@ enum SessionSearch {
             parts.append(contentsOf: note.decisions)
             parts.append(contentsOf: note.actions)
             parts.append(contentsOf: note.terms)
+            for summaryRecord in note.summaryRecords ?? [] {
+                parts.append(summaryRecord.text)
+                if let topicTitle = summaryRecord.topicTitle { parts.append(topicTitle) }
+                if let owner = summaryRecord.owner { parts.append(owner) }
+                if let deadline = summaryRecord.deadline { parts.append(deadline) }
+            }
         }
         parts.append(contentsOf: record.speakerNames.values)
         for attachment in record.attachments ?? [] {
             if let text = attachment.ocrText { parts.append(text) }
             if let caption = attachment.caption { parts.append(caption) }
             if let described = attachment.vlmDescription { parts.append(described) }
+            for summaryRecord in attachment.summaryRecords ?? [] {
+                parts.append(summaryRecord.text)
+                if let topicTitle = summaryRecord.topicTitle { parts.append(topicTitle) }
+            }
         }
         return parts.joined(separator: "\n").lowercased()
     }
@@ -53,8 +63,12 @@ enum SessionSearch {
         let attachments = (record.attachments ?? []).reduce(0) {
             $0 + 1 + ($1.ocrText?.count ?? 0) + ($1.caption?.count ?? 0)
                 + ($1.vlmDescription?.count ?? 0)
+                + ($1.summaryRecords ?? []).reduce(0) { $0 + $1.text.count }
         }
-        return "\(record.entries.count)|\(summary)|\(notes)|\(names)|\(title)|\(attachments)|\(record.endedAt.timeIntervalSince1970)"
+        let recordText = (record.chunkNotes ?? []).reduce(0) {
+            $0 + ($1.summaryRecords ?? []).reduce(0) { $0 + $1.text.count }
+        }
+        return "\(record.entries.count)|\(summary)|\(notes)|\(recordText)|\(names)|\(title)|\(attachments)|\(record.endedAt.timeIntervalSince1970)"
     }
 
     /// Non-overlapping occurrences of the lowercased query in the blob.
@@ -120,6 +134,40 @@ enum SessionSearch {
                 + note.actions + note.terms
             where line.range(of: query, options: .caseInsensitive) != nil {
                 return line
+            }
+            for summaryRecord in note.summaryRecords ?? [] {
+                let fields = [
+                    summaryRecord.text,
+                    summaryRecord.topicTitle,
+                    summaryRecord.owner,
+                    summaryRecord.deadline,
+                ].compactMap { $0 }
+                if let match = fields.first(where: {
+                    $0.range(of: query, options: .caseInsensitive) != nil
+                }) {
+                    return match
+                }
+            }
+        }
+        for attachment in record.attachments ?? [] {
+            let fields = [
+                attachment.caption,
+                attachment.ocrText,
+                attachment.vlmDescription,
+            ].compactMap { $0 }
+            if let match = fields.first(where: {
+                $0.range(of: query, options: .caseInsensitive) != nil
+            }) {
+                return match
+            }
+            for summaryRecord in attachment.summaryRecords ?? [] {
+                let fields = [summaryRecord.text, summaryRecord.topicTitle]
+                    .compactMap { $0 }
+                if let match = fields.first(where: {
+                    $0.range(of: query, options: .caseInsensitive) != nil
+                }) {
+                    return match
+                }
             }
         }
         return record.speakerNames.values.first {

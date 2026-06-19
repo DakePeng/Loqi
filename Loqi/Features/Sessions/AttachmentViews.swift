@@ -87,9 +87,8 @@ struct AttachmentViewer: View {
                     Button("Done") { dismiss() }
                 }
                 ToolbarItemGroup(placement: .topBarTrailing) {
-                    if let text = attachment.ocrText ?? attachment.vlmDescription,
-                       !text.isEmpty {
-                        Button("Extracted text", systemImage: "text.viewfinder") {
+                    if let ocr = attachment.ocrText, !ocr.isEmpty {
+                        Button("Text in image", systemImage: "text.viewfinder") {
                             showingText = true
                         }
                     }
@@ -109,9 +108,8 @@ struct AttachmentViewer: View {
                     Button("Done") { dismiss() }
                 }
                 ToolbarItemGroup(placement: .automatic) {
-                    if let text = attachment.ocrText ?? attachment.vlmDescription,
-                       !text.isEmpty {
-                        Button("Extracted text", systemImage: "text.viewfinder") {
+                    if let ocr = attachment.ocrText, !ocr.isEmpty {
+                        Button("Text in image", systemImage: "text.viewfinder") {
                             showingText = true
                         }
                     }
@@ -129,24 +127,34 @@ struct AttachmentViewer: View {
                 #endif
             }
             .safeAreaInset(edge: .bottom) {
-                if onSaveCaption != nil {
-                    TextField("Add a caption", text: $captionDraft)
-                        .textFieldStyle(.roundedBorder)
-                        .submitLabel(.done)
-                        .onSubmit { onSaveCaption?(captionDraft) }
-                        .padding()
-                        .background(.bar)
+                VStack(spacing: 0) {
+                    if let description = attachment.vlmDescription, !description.isEmpty {
+                        ScrollView {
+                            extractedSection("Description", text: description)
+                                .padding()
+                        }
+                        .frame(maxHeight: 160)
+                        .background(.thinMaterial)
+                    }
+                    if onSaveCaption != nil {
+                        TextField("Add a caption", text: $captionDraft)
+                            .textFieldStyle(.roundedBorder)
+                            .submitLabel(.done)
+                            .onSubmit { onSaveCaption?(captionDraft) }
+                            .padding()
+                            .background(.bar)
+                    }
                 }
             }
             .sheet(isPresented: $showingText) {
                 NavigationStack {
                     ScrollView {
-                        Text(attachment.ocrText ?? attachment.vlmDescription ?? "")
+                        Text(attachment.ocrText ?? "")
                             .textSelection(.enabled)
                             .frame(maxWidth: .infinity, alignment: .leading)
                             .padding()
                     }
-                    .navigationTitle("Extracted text")
+                    .navigationTitle("Text in image")
                     #if os(iOS)
                     .navigationBarTitleDisplayMode(.inline)
                     #endif
@@ -171,6 +179,18 @@ struct AttachmentViewer: View {
             image = await Task.detached(priority: .userInitiated) {
                 UIImage(contentsOfFile: url.path(percentEncoded: false))
             }.value
+        }
+    }
+
+    @ViewBuilder
+    private func extractedSection(_ title: LocalizedStringKey, text: String) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text(title)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+            Text(text)
+                .textSelection(.enabled)
+                .frame(maxWidth: .infinity, alignment: .leading)
         }
     }
 }

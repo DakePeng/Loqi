@@ -40,22 +40,27 @@ struct AttachmentNotesTests {
         #expect(captionOnly?.facts == ["现场照片"])
     }
 
-    @Test func thinOCRDefersToVLMDescription() {
+    @Test func descriptionWinsOCRIsFallback() {
+        // Description present → it's the photo's summary, OCR is reference only.
         let note = AttachmentNotes.note(for: attachment(
             ocr: "5%", described: "Bar chart: churn dropping from 8% to 5% over Q1–Q3"))
         #expect(note?.facts.first?.hasPrefix("Bar chart") == true)
-        // Substantial OCR wins over the description.
+        // Even substantial OCR defers to the description in the summary.
         let slide = AttachmentNotes.note(for: attachment(
             ocr: "Roadmap 2026\nPhase 1: capture\nPhase 2: sync",
             described: "A slide"))
-        #expect(slide?.facts.first == "Roadmap 2026")
+        #expect(slide?.facts == ["A slide"])
+        // No description → OCR feeds the summary.
+        let ocrOnly = AttachmentNotes.note(for: attachment(
+            ocr: "Roadmap 2026\nPhase 1: capture"))
+        #expect(ocrOnly?.facts.first == "Roadmap 2026")
     }
 
     @Test func longContentIsCapped() {
         let ocr = (1...12).map { "line number \($0) with some extra words" }
             .joined(separator: "\n")
         let note = AttachmentNotes.note(for: attachment(ocr: ocr))
-        #expect(note?.facts.count == AttachmentNotes.maxLines)
+        #expect(note?.facts.count == AttachmentNotes.summaryMaxLines)
         let longLine = String(repeating: "字", count: 200)
         let capped = AttachmentNotes.note(for: attachment(ocr: longLine))
         #expect(capped?.facts.first?.count == AttachmentNotes.maxLineLength)
@@ -81,7 +86,7 @@ struct AttachmentNotesTests {
         #expect(AttachmentNotes.merged(notes, attachments: [attachment()]).count == 2)
     }
 
-    @Test func markdownPlacesAnchoredAndTrailingPhotos() {
+    @Test func markdownCollectsAllPhotosInOneSection() {
         let direction = LanguagePair(source: .chinese, target: .english)
         let entries = [
             SessionRecord.Entry(
@@ -101,15 +106,28 @@ struct AttachmentNotesTests {
                 ocrText: "白板照片", caption: "总结"),
         ]
         let md = record.markdown()
-        #expect(md.contains("🖼 Photo"))
+        #expect(md.contains("## Photos"))
         #expect(md.contains("> 看板内容"))
         #expect(md.contains("> 白板照片"))
         #expect(md.contains("*总结*"))
-        // Anchored photo renders between the entries, trailing one at the end.
-        let anchored = md.range(of: "看板内容")!
+        // All photos trail the transcript, in timestamp order.
         let secondEntry = md.range(of: "> 结束")!
-        let trailing = md.range(of: "白板照片")!
-        #expect(anchored.lowerBound < secondEntry.lowerBound)
-        #expect(secondEntry.upperBound < trailing.lowerBound)
+        let first = md.range(of: "看板内容")!
+        let second = md.range(of: "白板照片")!
+        #expect(secondEntry.upperBound < first.lowerBound)
+        #expect(first.lowerBound < second.lowerBound)
+    }
+
+    @Test func markdownShowsDescriptionThenOCR() {
+        var record = SessionRecord(
+            mode: .captions, startedAt: t0, endedAt: t0, entries: [])
+        record.attachments = [SessionRecord.Attachment(
+            fileName: "a.jpg", timestamp: t0,
+            ocrText: "raw text", vlmDescription: "a duck on a desk")]
+        let md = record.markdown()
+        // Description is plain prose; raw OCR is the quoted detail.
+        #expect(md.contains("a duck on a desk"))
+        #expect(!md.contains("> a duck on a desk"))
+        #expect(md.contains("> raw text"))
     }
 }

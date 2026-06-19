@@ -10,13 +10,15 @@ struct SettingsView: View {
     @AppStorage("audio.saveRecordings") private var saveRecordings = true
     @AppStorage("asr.engine") private var asrEngine = "apple"
     @AppStorage("asr.source") private var asrSourceRaw = ASRModelSource.modelScope.rawValue
+    @AppStorage("summary.autoPostProcessNewRecordings")
+    private var autoPostProcessNewRecordings = false
     @State private var senseVoiceStore = SenseVoiceModelStore()
     @State private var senseVoiceInstalled = SenseVoiceModelStore.isInstalled
     @State private var qwen3Store = Qwen3ASRModelStore()
     @State private var qwen3Installed = Qwen3ASRModelStore.isInstalled
     @State private var qwen3Speedometer = DownloadSpeedometer()
     @State private var diarizerState = "—"
-    @State private var diarizerInstalled = VoiceprintService.isModelCached
+    @State private var diarizerInstalled = StreamingDiarizer.isModelCached
     @State private var diarizerDownloading = false
     @State private var diarizerError: String?
     @State private var diarizerSpeedometer = DownloadSpeedometer()
@@ -82,6 +84,10 @@ struct SettingsView: View {
                 }
 
                 Section {
+                    Toggle(
+                        "Auto post-process new recordings",
+                        isOn: $autoPostProcessNewRecordings)
+
                     LabeledContent(
                         "Qwen3-ASR model",
                         value: qwen3Installed
@@ -119,7 +125,7 @@ struct SettingsView: View {
                 } header: {
                     Text("High-accuracy re-transcription")
                 } footer: {
-                    Text("Once downloaded, Re-transcribe & summarize uses Qwen3-ASR automatically, and imports can select it: one model for 中文, English, 日本語 and 한국어, primed with your vocabulary — slower than live recognition, noticeably more accurate. Runs fully on this iPhone.")
+                    Text("Once downloaded, Re-transcribe & summarize uses Qwen3-ASR automatically, and imports can select it. Auto post-process re-transcribes and identifies speakers before the first summary for new recordings, using downloaded models only. Live captions stay on the fast engines.")
                 }
 
                 Section {
@@ -271,11 +277,11 @@ struct SettingsView: View {
     private func downloadSpeakerModel() {
         diarizerError = nil
         diarizerDownloading = true
-        diarizerSpeedometer.start(totalBytes: VoiceprintService.approximateDownloadBytes)
+        diarizerSpeedometer.start(totalBytes: StreamingDiarizer.approximateDownloadBytes)
         Task {
             let source = DiarizerSource(rawValue: diarizerSourceRaw) ?? .huggingFace
             do {
-                try await pipeline.voiceprint.loadIfNeeded(source: source) { progress in
+                try await pipeline.streamingDiarizer.loadIfNeeded(source: source) { progress in
                     Task { @MainActor in diarizerSpeedometer.update(progress) }
                 }
             } catch {
@@ -326,8 +332,8 @@ struct SettingsView: View {
         senseVoiceInstalled = SenseVoiceModelStore.isInstalled
         qwen3Installed = Qwen3ASRModelStore.isInstalled
 
-        diarizerInstalled = VoiceprintService.isModelCached
-        switch await pipeline.voiceprint.state {
+        diarizerInstalled = StreamingDiarizer.isModelCached
+        switch await pipeline.streamingDiarizer.state {
         case .unloaded:
             diarizerState = diarizerInstalled
                 ? String(localized: "Downloaded (not loaded)")

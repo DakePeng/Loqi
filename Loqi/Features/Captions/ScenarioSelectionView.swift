@@ -42,8 +42,7 @@ struct ScenarioSelectionView: View {
             VStack(spacing: 24) {
                 header(session)
                 preview(session)
-                styleGrid
-                lengthPicker
+                summarizeSection
                 Toggle(isOn: $autoSuggest) {
                     VStack(alignment: .leading, spacing: 2) {
                         Text("Auto-suggest")
@@ -93,11 +92,21 @@ struct ScenarioSelectionView: View {
             Text(caption(session))
                 .font(.footnote)
                 .foregroundStyle(.secondary)
-            Text("What kind of recording was this?")
-                .font(.subheadline)
-                .foregroundStyle(.secondary)
-                .padding(.top, 8)
         }
+    }
+
+    /// Primary action, grouped: the prompt sits directly above the style
+    /// cards it answers, with length tucked under them — so "how do I
+    /// summarize this" reads as one decision instead of three stacked rows.
+    private var summarizeSection: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text("What kind of recording was this?")
+                .font(.subheadline.weight(.medium))
+                .foregroundStyle(.secondary)
+            styleGrid
+            lengthPicker
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 
     /// A glimpse of the content so the choice doesn't run on memory alone:

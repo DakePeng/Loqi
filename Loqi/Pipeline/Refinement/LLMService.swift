@@ -259,6 +259,7 @@ actor LLMService: LLMServicing {
     }
 
     func unload() {
+        loadTask?.cancel()
         container = nil
         MLX.Memory.clearCache()
         loadState = .unloaded
@@ -330,16 +331,14 @@ actor LLMService: LLMServicing {
                 repetitionPenalty: 1.15,
                 repetitionContextSize: 64)
 
-            var text = ""
             let stream = try Self.tokenStream(
                 input: lmInput, parameters: parameters, context: context)
-            for await generation in stream {
-                if Task.isCancelled { break }
+            return try await Self.collectGeneratedText(from: stream) { generation in
                 if case .chunk(let chunk) = generation {
-                    text += chunk
+                    return chunk
                 }
+                return nil
             }
-            return text
         }
 
         let elapsed = started.duration(to: .now)
@@ -382,6 +381,21 @@ actor LLMService: LLMServicing {
             tokenizer: context.tokenizer,
             iterator: iterator)
         return stream
+    }
+
+    nonisolated static func collectGeneratedText<S: AsyncSequence>(
+        from stream: S,
+        chunkText: (S.Element) -> String?
+    ) async throws -> String {
+        var text = ""
+        for try await generation in stream {
+            try Task.checkCancellation()
+            if let chunk = chunkText(generation) {
+                text += chunk
+            }
+        }
+        try Task.checkCancellation()
+        return text
     }
 
     /// Remove `<think>…</think>` spans (and an unterminated trailing one).
@@ -446,16 +460,14 @@ actor LLMService: LLMServicing {
                 repetitionPenalty: 1.15,
                 repetitionContextSize: 64)
 
-            var text = ""
             let stream = try Self.tokenStream(
                 input: lmInput, parameters: parameters, context: context)
-            for await generation in stream {
-                if Task.isCancelled { break }
+            return try await Self.collectGeneratedText(from: stream) { generation in
                 if case .chunk(let chunk) = generation {
-                    text += chunk
+                    return chunk
                 }
+                return nil
             }
-            return text
         }
     }
 
