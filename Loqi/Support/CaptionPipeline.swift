@@ -629,6 +629,7 @@ final class CaptionPipeline {
         if self.sessionID == sessionID,
            let index = liveAttachments.firstIndex(where: { $0.id == attachmentID }) {
             mutate(&liveAttachments[index])
+            writeJournal()
         } else if var record = archive.sessions.first(where: { $0.id == sessionID }),
                   let index = record.attachments?.firstIndex(where: { $0.id == attachmentID }) {
             mutate(&record.attachments![index])
