@@ -207,7 +207,9 @@ final class SummaryJobCenter {
                 }
             }
         }
-        resumeLLMJobs()
+        if Self.shouldResumeLLMJobsAfterRecording(isBackgrounded: isBackgrounded) {
+            resumeLLMJobs()
+        }
         drainRetranscribeQueue()
     }
 
@@ -227,6 +229,10 @@ final class SummaryJobCenter {
         default:
             false
         }
+    }
+
+    nonisolated static func shouldResumeLLMJobsAfterRecording(isBackgrounded: Bool) -> Bool {
+        !isBackgrounded
     }
 
     private static func isHeldActivity(_ activity: Activity?) -> Bool {

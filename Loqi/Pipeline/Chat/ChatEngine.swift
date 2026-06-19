@@ -197,11 +197,14 @@ struct ChatEngine {
         return Array(pairs.suffix(window))
     }
 
+    static func modelForAnswer() -> ModelOption { ModelCatalog.summaryModel }
+
     func answer(
         question: String,
         record: SessionRecord,
         history: [SessionRecord.ChatMessage]
     ) async throws -> String {
+        await llm.setModel(Self.modelForAnswer())
         try await llm.load(policy: .requireDownloaded)
         let language = Self.answerLanguage(
             for: question,

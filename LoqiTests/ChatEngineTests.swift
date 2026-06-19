@@ -50,6 +50,10 @@ struct ChatEngineTests {
         return record
     }
 
+    @Test func answerUsesSummaryModel() {
+        #expect(ChatEngine.modelForAnswer() == ModelCatalog.summaryModel)
+    }
+
     // MARK: queryTokens
 
     @Test func latinTokensAreLowercasedWords() {

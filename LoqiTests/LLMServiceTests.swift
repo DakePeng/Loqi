@@ -146,4 +146,9 @@ struct PipelineResourceTests {
         #expect(!SummaryJobCenter.shouldSuspendForBackground(
             .importing(.transcribing(0))))
     }
+
+    @Test func recordingResumeLeavesLLMJobsPausedWhileBackgrounded() {
+        #expect(!SummaryJobCenter.shouldResumeLLMJobsAfterRecording(isBackgrounded: true))
+        #expect(SummaryJobCenter.shouldResumeLLMJobsAfterRecording(isBackgrounded: false))
+    }
 }

@@ -301,6 +301,11 @@ actor LLMService: LLMServicing {
         generateActiveSeconds = 0
     }
 
+    private static func seconds(from duration: Duration) -> Double {
+        Double(duration.components.seconds)
+            + Double(duration.components.attoseconds) / 1e18
+    }
+
     /// Run one generation. Cooperatively cancellable via Task cancellation.
     func generate(
         system: String,
@@ -351,8 +356,7 @@ actor LLMService: LLMServicing {
         }
 
         let elapsed = started.duration(to: .now)
-        let seconds = Double(elapsed.components.seconds)
-            + Double(elapsed.components.attoseconds) / 1e18
+        let seconds = Self.seconds(from: elapsed)
         generateActiveSeconds += seconds
         if seconds > 0 {
             lastTokensPerSecond = Self.estimatedDiagnosticTokens(in: result) / seconds
@@ -454,7 +458,8 @@ actor LLMService: LLMServicing {
         }
         guard let container else { throw LLMServiceError.modelNotLoaded }
 
-        return try await container.perform { context in
+        let started = ContinuousClock.now
+        let result = try await container.perform { context in
             let input = UserInput(
                 chat: [
                     .system(system),
@@ -479,6 +484,8 @@ actor LLMService: LLMServicing {
                 return nil
             }
         }
+        generateActiveSeconds += Self.seconds(from: started.duration(to: .now))
+        return result
     }
 
     func available() -> UInt64 {

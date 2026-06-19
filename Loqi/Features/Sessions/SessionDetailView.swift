@@ -1028,6 +1028,7 @@ struct SessionDetailView: View {
                     Array(fallback), sessionID: sourceID, sessionTitle: sourceTitle)
             }
             do {
+                await llm.setModel(ModelCatalog.summaryModel)
                 try await llm.load(policy: .requireDownloaded)
                 let builder = PromptBuilder()
                 let prompt = builder.summaryEditMiningPrompt(insertedSpans: spans)
@@ -1052,6 +1053,7 @@ struct SessionDetailView: View {
         Task {
             defer { suggesting = false }
             do {
+                await pipeline.llm.setModel(ModelCatalog.summaryModel)
                 try await pipeline.llm.load(
                     policy: allowDownload ? .downloadIfNeeded : .requireDownloaded)
                 let builder = PromptBuilder()
