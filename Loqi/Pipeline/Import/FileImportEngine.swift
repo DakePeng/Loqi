@@ -50,11 +50,11 @@ final class FileImportEngine {
         // Files-picker URLs are security-scoped; copy into our container so
         // long processing never races the scope.
         let scoped = url.startAccessingSecurityScopedResource()
+        defer { if scoped { url.stopAccessingSecurityScopedResource() } }
         let localURL = FileManager.default.temporaryDirectory
             .appending(path: UUID().uuidString)
             .appendingPathExtension(url.pathExtension.isEmpty ? "m4a" : url.pathExtension)
         try FileManager.default.copyItem(at: url, to: localURL)
-        if scoped { url.stopAccessingSecurityScopedResource() }
         defer { try? FileManager.default.removeItem(at: localURL) }
 
         // Video files: pull the audio track into a temp .m4a so the rest of
@@ -112,6 +112,7 @@ final class FileImportEngine {
         let needsTranslation = direction.source != direction.target
         if needsTranslation { await translator.addDirection(direction) }
 
+        var speakerSeparationFailed = false
         if let speakerCap = VoiceprintService.clusterCap(forPickerValue: speakerCount) {
             // Snapshot the entries (a `let`) so the concurrent draft pass and
             // the diarization speaker-writes below don't contend for `entries`.
@@ -143,7 +144,10 @@ final class FileImportEngine {
                 logger.info("import: \(Set(segments.map(\.slot)).count) speakers across \(segments.count) segments")
             } catch {
                 // Speaker labels are an enhancement: a failed model download
-                // or analysis must not cost the transcript.
+                // or analysis must not cost the transcript. But surface it —
+                // a silently label-less import is exactly "diarization doesn't
+                // work for uploads"; the flag drives a retry affordance.
+                speakerSeparationFailed = true
                 logger.error("import diarization failed: \(error.localizedDescription)")
             }
 
@@ -162,14 +166,29 @@ final class FileImportEngine {
         }
 
         guard entries.count >= 1 else { throw ImportError.nothingTranscribed }
+        // Persist the imported audio so the session gets playback, re-transcribe,
+        // and an in-place speaker-separation retry — same as a live recording.
+        // Keep the source extension (AVAudioPlayer reads m4a/wav/caf alike).
+        let recordingName = "\(sessionID.uuidString)."
+            + (workingURL.pathExtension.isEmpty ? "m4a" : workingURL.pathExtension)
+        let recordingURL = SessionArchive.recordingURL(fileName: recordingName)
+        try? FileManager.default.createDirectory(
+            at: SessionArchive.recordingsDirectory, withIntermediateDirectories: true)
+        try? FileManager.default.copyItem(at: workingURL, to: recordingURL)
+
         // Preassigned ID: the job center's placeholder record keeps its
         // identity when this finished record replaces it.
-        return SessionRecord(
+        var record = SessionRecord(
             id: sessionID,
             mode: .captions,
             startedAt: recordedAt,
             endedAt: recordedAt.addingTimeInterval(duration),
             entries: entries)
+        record.recordingSpeakerCount = speakerCount
+        record.audioFileName = FileManager.default.fileExists(atPath: recordingURL.path)
+            ? recordingName : nil
+        record.speakerSeparationFailed = speakerSeparationFailed ? true : nil
+        return record
     }
 
     /// Draft every entry's tier-1 translation, in order. Extracted so it can

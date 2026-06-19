@@ -20,7 +20,7 @@ struct TranscriptSegmenterTests {
 
     @Test func emptyFinalDiscardsEntry() {
         let output = segmenter.process(
-            .finalized("  ", language: nil),
+            .finalized("  ", runs: nil, language: nil),
             fallbackLanguage: .english)
         #expect(output?.kind == .discard)
     }
@@ -29,9 +29,9 @@ struct TranscriptSegmenterTests {
         // Silence/noise yields lone-dot finals ("." / "。"); they must not
         // become entries.
         #expect(segmenter.process(
-            .finalized("。", language: nil), fallbackLanguage: .chinese)?.kind == .discard)
+            .finalized("。", runs: nil, language: nil), fallbackLanguage: .chinese)?.kind == .discard)
         #expect(segmenter.process(
-            .finalized(" . ", language: nil), fallbackLanguage: .english)?.kind == .discard)
+            .finalized(" . ", runs: nil, language: nil), fallbackLanguage: .english)?.kind == .discard)
         // And the volatile equivalent is ignored outright.
         #expect(segmenter.process(
             .volatile("。", language: nil), fallbackLanguage: .chinese) == nil)
@@ -39,35 +39,35 @@ struct TranscriptSegmenterTests {
 
     @Test func shortEnglishFinalSkipsRefinement() {
         let output = segmenter.process(
-            .finalized("Thank you", language: nil),
+            .finalized("Thank you", runs: nil, language: nil),
             fallbackLanguage: .english)
         #expect(output?.kind == .finalized(refine: false))
     }
 
     @Test func longEnglishFinalGetsRefinement() {
         let output = segmenter.process(
-            .finalized("Could you tell me how much this would cost with shipping?", language: nil),
+            .finalized("Could you tell me how much this would cost with shipping?", runs: nil, language: nil),
             fallbackLanguage: .english)
         #expect(output?.kind == .finalized(refine: true))
     }
 
     @Test func shortCJKFinalSkipsRefinement() {
         let output = segmenter.process(
-            .finalized("谢谢你", language: nil),
+            .finalized("谢谢你", runs: nil, language: nil),
             fallbackLanguage: .chinese)
         #expect(output?.kind == .finalized(refine: false))
     }
 
     @Test func longCJKFinalGetsRefinement() {
         let output = segmenter.process(
-            .finalized("お世話になっております。価格についてご相談したいのですが。", language: nil),
+            .finalized("お世話になっております。価格についてご相談したいのですが。", runs: nil, language: nil),
             fallbackLanguage: .japanese)
         #expect(output?.kind == .finalized(refine: true))
     }
 
     @Test func detectedLanguageOverridesFallback() {
         let output = segmenter.process(
-            .finalized("谢谢大家", language: .chinese),
+            .finalized("谢谢大家", runs: nil, language: .chinese),
             fallbackLanguage: .english)
         #expect(output?.language == .chinese)
         #expect(output?.languageWasDetected == true)

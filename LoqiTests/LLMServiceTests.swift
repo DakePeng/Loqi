@@ -65,6 +65,42 @@ struct DiagnosticTokenEstimateTests {
     }
 }
 
+struct GenerationCollectionTests {
+    @Test func cancelledCollectionThrowsInsteadOfReturningPartialText() async {
+        let (stream, continuation) = AsyncStream<String>.makeStream()
+        let task = Task {
+            try await LLMService.collectGeneratedText(from: stream) { $0 }
+        }
+
+        continuation.yield("partial")
+        task.cancel()
+        continuation.yield("ignored")
+        continuation.finish()
+
+        do {
+            _ = try await task.value
+            Issue.record("expected CancellationError")
+        } catch is CancellationError {
+            // Expected.
+        } catch {
+            Issue.record("expected CancellationError, got \(error)")
+        }
+    }
+
+    @Test func collectionConcatenatesChunks() async throws {
+        let stream = AsyncStream<String> { continuation in
+            continuation.yield("hello")
+            continuation.yield(" ")
+            continuation.yield("world")
+            continuation.finish()
+        }
+
+        let text = try await LLMService.collectGeneratedText(from: stream) { $0 }
+
+        #expect(text == "hello world")
+    }
+}
+
 @MainActor
 struct PipelineResourceTests {
     @Test func llmResourceMessagesCollapseToOneVisibleStatus() {
@@ -101,6 +137,8 @@ struct PipelineResourceTests {
 
     @Test func backgroundSuspendsPostHocWorkThatCanReachMetal() {
         #expect(SummaryJobCenter.shouldSuspendForBackground(.downloadingModel(0)))
+        #expect(SummaryJobCenter.shouldSuspendForBackground(
+            .summarizing(done: 0, total: 1)))
         #expect(SummaryJobCenter.shouldSuspendForBackground(
             .retranscribing(.identifyingSpeakers(0))))
         #expect(SummaryJobCenter.shouldSuspendForBackground(

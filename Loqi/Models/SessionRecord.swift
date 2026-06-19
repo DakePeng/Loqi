@@ -166,6 +166,11 @@ struct SessionRecord: Identifiable, Codable, Sendable {
     /// crash only as a tombstone: the archive sweeps importing records at
     /// load (a partial import has no transcript worth keeping).
     var importing: Bool?
+    /// True when speaker separation was requested for this session but the
+    /// diarizer failed (model download or analysis) — the transcript is
+    /// intact, it just has no speaker labels. Optional: legacy records and
+    /// successful diarization decode as nil. Cleared when a retry succeeds.
+    var speakerSeparationFailed: Bool?
 
     static let chatHistoryCap = 40
 

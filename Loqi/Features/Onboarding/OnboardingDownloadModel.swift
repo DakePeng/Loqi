@@ -326,9 +326,9 @@ final class OnboardingDownloadModel {
     }
 
     private func downloadDiarizer(_ item: Item) async {
-        item.speedometer.start(totalBytes: VoiceprintService.approximateDownloadBytes)
+        item.speedometer.start(totalBytes: StreamingDiarizer.approximateDownloadBytes)
         do {
-            try await pipeline.voiceprint.loadIfNeeded(source: region.diarizerSource) { fraction in
+            try await pipeline.streamingDiarizer.loadIfNeeded(source: region.diarizerSource) { fraction in
                 Task { @MainActor in item.speedometer.update(fraction) }
             }
             // Loaded as a side effect — small (CoreML), leave it warm like

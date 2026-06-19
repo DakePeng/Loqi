@@ -108,6 +108,7 @@ struct SessionDetailView: View {
         List {
             if let session {
                 recordingSection(session)
+                speakerRetrySection(session)
                 if jobRunning, session.summary == nil {
                     Section {
                         jobProgressRow
@@ -556,6 +557,27 @@ struct SessionDetailView: View {
             } footer: {
                 if let size = recordingSize(fileName) {
                     Text(size)
+                }
+            }
+        }
+    }
+
+    /// Shown when speaker separation was requested but the diarizer failed
+    /// (e.g. the model couldn't download). The transcript is fine; this just
+    /// offers an in-place retry. Hidden while any job runs for this session.
+    @ViewBuilder
+    private func speakerRetrySection(_ session: SessionRecord) -> some View {
+        if session.speakerSeparationFailed == true, !jobRunning {
+            Section {
+                Label(
+                    "Speaker separation didn't finish — the transcript is complete, but voices aren't labeled.",
+                    systemImage: "person.2.slash")
+                    .font(.footnote)
+                if SessionRetranscriber.canRetranscribe(session) {
+                    Button("Retry speaker separation") {
+                        pipeline.jobs.retryDiarization(sessionID: sessionID)
+                    }
+                    .disabled(pipeline.isRunning)
                 }
             }
         }

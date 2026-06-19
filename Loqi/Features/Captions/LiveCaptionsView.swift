@@ -28,9 +28,9 @@ struct LiveCaptionsView: View {
     @AppStorage("captions.source") private var sourceRaw = AppLanguage.english.rawValue
     /// Translation is opt-in: empty = off (plain transcription, the default).
     @AppStorage("captions.translation") private var translationRaw = ""
-    // -1 = Auto (diarize, up to 8). Default on so speaker separation works
-    // without configuring; 0/1 = single speaker (no diarization).
-    @AppStorage("captions.speakerCount") private var speakerCount = -1
+    // 0/1 = single speaker (no diarization), -1 = Auto, 2+ = hard cap.
+    // Default off so first recording never downloads the speaker model silently.
+    @AppStorage("captions.speakerCount") private var speakerCount = 0
     @AppStorage(MicSensitivity.defaultsKey) private var sensitivityRaw
         = MicSensitivity.balanced.rawValue
     @State private var errorMessage: String?
@@ -573,7 +573,7 @@ struct LiveCaptionsView: View {
             Picker("Speakers", selection: $speakerCount) {
                 Label("One voice", systemImage: "person").tag(0)
                 Label("Auto", systemImage: "person.2.wave.2").tag(-1)
-                ForEach(2...6, id: \.self) { count in
+                ForEach(2...StreamingDiarizer.maxSupportedSpeakers, id: \.self) { count in
                     Label("\(count) speakers", systemImage: "person.2").tag(count)
                 }
             }
@@ -598,7 +598,7 @@ struct LiveCaptionsView: View {
             Picker("Speakers", selection: $speakerCount) {
                 Label("One voice", systemImage: "person").tag(0)
                 Label("Auto", systemImage: "person.2.wave.2").tag(-1)
-                ForEach(2...6, id: \.self) { count in
+                ForEach(2...StreamingDiarizer.maxSupportedSpeakers, id: \.self) { count in
                     Label("\(count) speakers", systemImage: "person.2").tag(count)
                 }
             }

@@ -79,6 +79,9 @@ final class SummaryJobCenter {
     @ObservationIgnored private var activeSummarizeRequest: [UUID: SummarizeRequest] = [:]
     /// Jobs cancelled by backgrounding, awaiting a foreground restart.
     @ObservationIgnored private var suspendedSummaries: [UUID: SummarizeRequest] = [:]
+    /// Retranscribe workers canceled by backgrounding. Foreground resume waits
+    /// for their cleanup before reusing the same activity/task slots.
+    @ObservationIgnored private var backgroundPausedRetranscribeTasks: [UUID: Task<Void, Never>] = [:]
 
     private struct RetranscribeRequest {
         enum Kind {
@@ -141,6 +144,7 @@ final class SummaryJobCenter {
     func cancel(_ sessionID: UUID) {
         errors[sessionID] = nil
         suspendedSummaries[sessionID] = nil
+        backgroundPausedRetranscribeTasks[sessionID] = nil
         if let index = retranscribeQueue.firstIndex(where: { $0.sessionID == sessionID }) {
             retranscribeQueue.remove(at: index)
             activities[sessionID] = nil
@@ -227,6 +231,7 @@ final class SummaryJobCenter {
                       let req = activeRetranscribeRequest[sessionID],
                       !retranscribeQueue.contains(where: { $0.sessionID == sessionID }) {
                 retranscribeQueue.insert(req, at: 0)
+                backgroundPausedRetranscribeTasks[sessionID] = retranscribeWorker ?? tasks[sessionID]
             }
             activities[sessionID] = .pausedForBackground
             tasks[sessionID]?.cancel()
@@ -237,12 +242,25 @@ final class SummaryJobCenter {
 
     private func resumeBackgroundJobs() {
         resumeLLMJobs()
-        for (sessionID, activity) in activities where activity == .pausedForBackground {
-            if retranscribeQueue.contains(where: { $0.sessionID == sessionID }) {
-                activities[sessionID] = .queuedRetranscribe
+        let pausedRetranscribes = activities.compactMap { sessionID, activity -> UUID? in
+            guard activity == .pausedForBackground,
+                  retranscribeQueue.contains(where: { $0.sessionID == sessionID })
+            else { return nil }
+            return sessionID
+        }
+        for sessionID in pausedRetranscribes {
+            let oldTask = backgroundPausedRetranscribeTasks.removeValue(forKey: sessionID)
+            Task { [weak self] in
+                await oldTask?.value
+                guard let self,
+                      !self.isBackgrounded,
+                      self.activities[sessionID] == .pausedForBackground,
+                      self.retranscribeQueue.contains(where: { $0.sessionID == sessionID })
+                else { return }
+                self.activities[sessionID] = .queuedRetranscribe
+                self.drainRetranscribeQueue()
             }
         }
-        drainRetranscribeQueue()
     }
 
     private func resumeLLMJobs() {
@@ -330,6 +348,56 @@ final class SummaryJobCenter {
         enqueueRetranscribe(
             ids: [sessionID], style: style, length: length,
             allowDownload: allowDownload)
+    }
+
+    /// Retry speaker separation for a session whose diarization failed
+    /// (`speakerSeparationFailed`). Diarizes the saved audio and writes the
+    /// slots back, leaving the transcript text, summary, and notes intact
+    /// (entry IDs don't change). Tapping Retry is implied download consent —
+    /// the offline diarizer is tens of MB, not the multi-GB LLM.
+    func retryDiarization(sessionID: UUID) {
+        guard !isRecording(), !isBusy(sessionID),
+              let session = archive.sessions.first(where: { $0.id == sessionID }),
+              let fileName = session.audioFileName
+        else { return }
+        let url = SessionArchive.recordingURL(fileName: fileName)
+        guard FileManager.default.fileExists(atPath: url.path),
+              let speakerCap = VoiceprintService.clusterCap(
+                forPickerValue: session.recordingSpeakerCount ?? -1)
+        else { return }
+
+        errors[sessionID] = nil
+        activities[sessionID] = .retranscribing(.identifyingSpeakers(0))
+        beginGrace(sessionID, name: "retry-diarize")
+        tasks[sessionID] = Task {
+            defer { finishJob(sessionID) }
+            do {
+                let segments = try await voiceprint.diarizeFile(
+                    url: url, maxSpeakers: speakerCap, source: .current
+                ) { [weak self] progress in
+                    Task { @MainActor in
+                        guard let self, self.activities[sessionID] != nil else { return }
+                        switch progress {
+                        case .download(let fraction):
+                            self.activities[sessionID] = .downloadingModel(fraction)
+                        case .analysis(let fraction):
+                            self.retranscribeProgress(
+                                sessionID: sessionID, phase: .identifyingSpeakers(fraction))
+                        }
+                    }
+                }
+                try Task.checkCancellation()
+                guard var record = archive.sessions.first(where: { $0.id == sessionID })
+                else { return }
+                SessionRetranscriber.applyDiarizationSegments(segments, to: &record)
+                record.speakerSeparationFailed = nil
+                archive.update(record)
+            } catch is CancellationError {
+                // User cancelled: no error row.
+            } catch {
+                errors[sessionID] = error.localizedDescription
+            }
+        }
     }
 
     /// Fresh-recording auto polish. Uses downloaded post-process models
@@ -755,7 +823,7 @@ final class SummaryJobCenter {
             suggestions, sessionID: record.id, sessionTitle: record.title)
     }
 
-    private func renderCachedSummaryIfPossible(
+    func renderCachedSummaryIfPossible(
         sessionID: UUID,
         style: SummaryStyle,
         length: SummaryLength
@@ -768,7 +836,13 @@ final class SummaryJobCenter {
 
         let refreshed = await refreshAttachmentText(in: session)
         var record = refreshed.record
-        let engine = SummaryEngine(llm: llm)
+        let engine = SummaryEngine(llm: llm, matcher: hotwords.matcher)
+        let hygiene = await engine.hygienePass(record)
+        record = hygiene.record
+        if hygiene.changed {
+            archive.update(record)
+            return false
+        }
         let summary = try await engine.reduce(
             notes: AttachmentNotes.merged(notes, attachments: record.attachments),
             style: style,

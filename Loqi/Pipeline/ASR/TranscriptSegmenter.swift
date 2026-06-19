@@ -21,6 +21,10 @@ struct TranscriptSegmenter: Sendable {
         var text: String
         var language: AppLanguage
         var languageWasDetected: Bool
+        /// Per-word audio time ranges from the engine (Apple only), passed
+        /// through on a finalized utterance so the pipeline can split it at a
+        /// speaker change. nil for volatile/discard and timing-less engines.
+        var timedRuns: [TimedRun]? = nil
     }
 
     /// Below these lengths, refinement is skipped — the NMT draft is fine
@@ -39,7 +43,7 @@ struct TranscriptSegmenter: Sendable {
                 language: detectedLanguage ?? fallbackLanguage,
                 languageWasDetected: detectedLanguage != nil)
 
-        case .finalized(let text, let detectedLanguage):
+        case .finalized(let text, let runs, let detectedLanguage):
             let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
             // Drop empty AND punctuation-only finals ("." / "。") — the ASR
             // emits those for silence/noise and they render as lone dots.
@@ -56,7 +60,8 @@ struct TranscriptSegmenter: Sendable {
                 kind: .finalized(refine: refine),
                 text: trimmed,
                 language: language,
-                languageWasDetected: detectedLanguage != nil)
+                languageWasDetected: detectedLanguage != nil,
+                timedRuns: runs)
 
         case .ended, .speechActivity:
             return nil

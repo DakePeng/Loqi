@@ -101,7 +101,7 @@ struct OnboardingCatalogTests {
         let total = OnboardingItemKind.totalBytes(
             for: [.translationPacks, .senseVoice, .diarizer, .llm], installed: [])
         let expected = SenseVoiceModelStore.totalExpectedBytes
-            + VoiceprintService.approximateDownloadBytes
+            + StreamingDiarizer.approximateDownloadBytes
             + ModelCatalog.default.downloadBytes
         #expect(total == expected)
     }

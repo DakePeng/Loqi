@@ -149,7 +149,8 @@ struct SessionRetranscriber {
                     }
                 }
             }
-            applyDiarizationSegments(segments, to: &updated)
+            Self.applyDiarizationSegments(segments, to: &updated)
+            updated.speakerSeparationFailed = nil
             updated.chunkNotes = nil
             updated.liveNotesEndEntryID = nil
             updated.summary = nil
@@ -157,6 +158,7 @@ struct SessionRetranscriber {
         } catch is CancellationError {
             throw CancellationError()
         } catch {
+            updated.speakerSeparationFailed = true
             logger.error("auto post-process diarization failed: \(error.localizedDescription)")
         }
         return updated
@@ -186,7 +188,11 @@ struct SessionRetranscriber {
         return SpeakerAttribution.attribute(utterances: utterances, to: segments)
     }
 
-    private func applyDiarizationSegments(
+    /// Re-attribute every entry to the speaker slot its audio range overlaps
+    /// most. Reused by the standalone speaker-separation retry, so it's a
+    /// pure static helper. Entry IDs are untouched — only the `speaker` slot
+    /// changes — so cached summaries/notes stay valid.
+    nonisolated static func applyDiarizationSegments(
         _ segments: [SpeakerAttribution.Segment],
         to record: inout SessionRecord
     ) {

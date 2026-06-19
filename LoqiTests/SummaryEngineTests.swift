@@ -274,4 +274,39 @@ struct SummaryEngineTests {
         #expect(summary.components(separatedBy: "六月发布").count - 1 == 1)
         #expect(summary.contains("- 六月发布"))
     }
+
+    @Test func renderKeepsSameTaskActionsForDifferentOwners() {
+        let t0 = Date(timeIntervalSince1970: 1_000)
+        let records: [SessionRecord.SummaryRecord] = [
+            .init(
+                kind: .action,
+                source: .transcript,
+                sourceIDs: ["m001"],
+                sourceIndex: 0,
+                timestamp: t0,
+                text: "review the launch notes",
+                owner: "Alice",
+                task: "review the launch notes",
+                deadline: "Friday"),
+            .init(
+                kind: .action,
+                source: .transcript,
+                sourceIDs: ["m002"],
+                sourceIndex: 1,
+                timestamp: t0.addingTimeInterval(1),
+                text: "review the launch notes",
+                owner: "Bob",
+                task: "review the launch notes",
+                deadline: "Monday"),
+        ]
+
+        let summary = SummaryRecordReducer.render(
+            records: records,
+            style: .meeting,
+            length: .standard,
+            in: .english)
+
+        #expect(summary.contains("Alice: review the launch notes (Friday)"))
+        #expect(summary.contains("Bob: review the launch notes (Monday)"))
+    }
 }

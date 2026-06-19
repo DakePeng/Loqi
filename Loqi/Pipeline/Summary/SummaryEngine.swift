@@ -407,10 +407,8 @@ struct SummaryEngine {
     ) async throws -> (summary: String, notes: [SessionRecord.ChunkNote]) {
         try await llm.load(policy: .requireDownloaded)
         let (uncovered, cached) = Self.uncoveredEntries(of: record)
-        // Detailed Notes assembly is deterministic after the reduce, so
-        // progress only tracks real async map work.
         let mapChunks = Self.chunkEntries(uncovered).count
-        let totalSteps = mapChunks
+        let totalSteps = mapChunks + 1
         let fresh = try await makeNotes(
             for: uncovered,
             speakerLabel: { record.speakerLabel($0) },
@@ -512,7 +510,7 @@ enum SummaryRecordReducer {
         var usedKeys: [String] = []
 
         func displayUnused(_ record: Record) -> String? {
-            let key = SummaryEngine.dedupKey(record.text)
+            let key = SummaryEngine.dedupKey(dedupText(record))
             guard !key.isEmpty else { return nil }
             for prior in usedKeys
             where prior == key
@@ -650,6 +648,10 @@ enum SummaryRecordReducer {
         return text
     }
 
+    private static func dedupText(_ record: Record) -> String {
+        record.kind == .action ? actionText(record) : record.text
+    }
+
     /// When one statement is classified differently across chunks (a
     /// Decision in one, a Point in another), the more specific kind wins so
     /// it renders in a single section. Topics dedup in their own namespace,
@@ -675,7 +677,7 @@ enum SummaryRecordReducer {
         var recent: [(key: String, index: Int)] = []
 
         for record in sorted {
-            let base = SummaryEngine.dedupKey(record.text)
+            let base = SummaryEngine.dedupKey(dedupText(record))
             guard !base.isEmpty else { continue }
             // Non-topic records dedup across kinds, so a statement tagged
             // Point in one chunk and Decision in another collapses to one

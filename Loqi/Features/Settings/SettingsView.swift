@@ -18,7 +18,7 @@ struct SettingsView: View {
     @State private var qwen3Installed = Qwen3ASRModelStore.isInstalled
     @State private var qwen3Speedometer = DownloadSpeedometer()
     @State private var diarizerState = "—"
-    @State private var diarizerInstalled = VoiceprintService.isModelCached
+    @State private var diarizerInstalled = StreamingDiarizer.isModelCached
     @State private var diarizerDownloading = false
     @State private var diarizerError: String?
     @State private var diarizerSpeedometer = DownloadSpeedometer()
@@ -277,11 +277,11 @@ struct SettingsView: View {
     private func downloadSpeakerModel() {
         diarizerError = nil
         diarizerDownloading = true
-        diarizerSpeedometer.start(totalBytes: VoiceprintService.approximateDownloadBytes)
+        diarizerSpeedometer.start(totalBytes: StreamingDiarizer.approximateDownloadBytes)
         Task {
             let source = DiarizerSource(rawValue: diarizerSourceRaw) ?? .huggingFace
             do {
-                try await pipeline.voiceprint.loadIfNeeded(source: source) { progress in
+                try await pipeline.streamingDiarizer.loadIfNeeded(source: source) { progress in
                     Task { @MainActor in diarizerSpeedometer.update(progress) }
                 }
             } catch {
@@ -332,8 +332,8 @@ struct SettingsView: View {
         senseVoiceInstalled = SenseVoiceModelStore.isInstalled
         qwen3Installed = Qwen3ASRModelStore.isInstalled
 
-        diarizerInstalled = VoiceprintService.isModelCached
-        switch await pipeline.voiceprint.state {
+        diarizerInstalled = StreamingDiarizer.isModelCached
+        switch await pipeline.streamingDiarizer.state {
         case .unloaded:
             diarizerState = diarizerInstalled
                 ? String(localized: "Downloaded (not loaded)")

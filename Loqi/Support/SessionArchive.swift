@@ -268,7 +268,8 @@ final class SessionArchive {
         encoder.dateEncodingStrategy = .iso8601
         if let data = try? encoder.encode(record) {
             try? data.write(
-                to: Self.directory.appending(path: "\(record.id.uuidString).json"))
+                to: Self.directory.appending(path: "\(record.id.uuidString).json"),
+                options: .atomic)
         }
     }
 }
