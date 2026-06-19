@@ -37,6 +37,10 @@ actor SenseVoiceEngine: SpeechEngine {
     /// what the partial cap already shows (see SpeechRunLimiter).
     private var runLimiter = SpeechRunLimiter(limit: maxUtteranceSamples)
 
+    /// Cumulative wall time spent in SenseVoice decode this session (partial
+    /// + final), the ASR counterpart to LLMService.generateActiveSeconds.
+    private(set) var decodeActiveSeconds: Double = 0
+
     private static let sampleRate = 16_000
     private static let partialInterval = 11_200      // 0.7s
     private static let preRollSamples = 8_000        // 0.5s
@@ -167,6 +171,10 @@ actor SenseVoiceEngine: SpeechEngine {
     /// deterministic HotwordMatcher fixup still applies downstream.
     func applyContextualStrings(_ strings: [String]) async throws {}
 
+    func resetHeatStats() {
+        decodeActiveSeconds = 0
+    }
+
     // MARK: Decoding
 
     private func maybeDecodePartial() {
@@ -178,7 +186,10 @@ actor SenseVoiceEngine: SpeechEngine {
         let snapshot = utterance
         let startedGeneration = generation
         Task { [weak self] in
+            let decodeStart = ContinuousClock.now
             let result = await decoder.decode(snapshot)
+            let d = decodeStart.duration(to: .now)
+            await self?.addDecodeActiveSeconds(d)
             await self?.deliverPartial(result, from: startedGeneration)
         }
     }
@@ -202,10 +213,18 @@ actor SenseVoiceEngine: SpeechEngine {
             let previous = finalTail
             finalTail = Task { [weak self] in
                 await previous?.value
+                let decodeStart = ContinuousClock.now
                 let result = await decoder.decode(samples)
+                let d = decodeStart.duration(to: .now)
+                await self?.addDecodeActiveSeconds(d)
                 await self?.deliverFinal(result)
             }
         }
+    }
+
+    private func addDecodeActiveSeconds(_ duration: Duration) {
+        decodeActiveSeconds += Double(duration.components.seconds)
+            + Double(duration.components.attoseconds) / 1e18
     }
 
     private func deliverFinal(_ result: SenseVoiceRecognitionResult) {
