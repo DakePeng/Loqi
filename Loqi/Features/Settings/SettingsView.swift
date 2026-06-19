@@ -316,17 +316,36 @@ struct SettingsView: View {
     private func startDownload() {
         downloadError = nil
         llmDownloading = true
-        llmSpeedometer.start(totalBytes: ModelCatalog.option(for: modelID).downloadBytes)
+        let selected = ModelCatalog.option(for: modelID)
+        let missing = ModelCatalog.requiredModels(summaryModel: selected)
+            .filter { !LLMService.isDownloaded(model: $0) }
+        let totalBytes = missing.map(\.downloadBytes).reduce(0, +)
+        guard totalBytes > 0 else {
+            llmDownloading = false
+            return
+        }
+        llmSpeedometer.start(totalBytes: totalBytes)
         Task {
             do {
-                try await pipeline.llm.load { progress in
-                    Task { @MainActor in llmSpeedometer.update(progress) }
+                var completedBytes: Int64 = 0
+                for model in missing {
+                    await pipeline.llm.setModel(model)
+                    let completedBeforeModel = completedBytes
+                    try await pipeline.llm.load { progress in
+                        let done = Double(completedBeforeModel)
+                            + progress * Double(model.downloadBytes)
+                        Task { @MainActor in
+                            llmSpeedometer.update(done / Double(totalBytes))
+                        }
+                    }
+                    completedBytes += model.downloadBytes
                 }
             } catch is CancellationError {
                 // Stopped by the user — not an error.
             } catch {
                 downloadError = error.localizedDescription
             }
+            await pipeline.llm.setModel(selected)
             llmDownloading = false
             await refreshStats()
         }
@@ -344,7 +363,9 @@ struct SettingsView: View {
         case .ready: llmState = String(localized: "Ready")
         case .failed(let reason): llmState = String(localized: "Failed: \(reason)")
         }
-        llmDownloaded = LLMService.isDownloaded(model: ModelCatalog.option(for: modelID))
+        let selected = ModelCatalog.option(for: modelID)
+        llmDownloaded = ModelCatalog.requiredModels(summaryModel: selected)
+            .allSatisfy { LLMService.isDownloaded(model: $0) }
         let bytes = await pipeline.llm.available()
         availableMemory = ByteCountFormatter.string(
             fromByteCount: Int64(bytes), countStyle: .memory)

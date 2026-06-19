@@ -348,7 +348,7 @@ final class OnboardingDownloadModel {
         // the source keys — sync the actor like SettingsView's .task does.
         await llm.setSource(region.llmSource)
 
-        let summary = ModelCatalog.summaryModel
+        let summary = ModelCatalog.default
         let live = ModelCatalog.liveModel
         let summaryShare = Double(summary.downloadBytes)
             / Double(ModelCatalog.onboardingLLMBytes)

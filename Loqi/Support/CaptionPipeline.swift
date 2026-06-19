@@ -162,6 +162,7 @@ final class CaptionPipeline {
     private let audio = AudioCaptureService()
     private let segmenter = TranscriptSegmenter()
     private var engines: [RecognitionLanguageSelection: any SpeechEngine] = [:]
+    private var activeEngineKey: RecognitionLanguageSelection?
     /// Which backend the cached engines were built for; a Settings change
     /// invalidates them.
     private var enginesKind = ""
@@ -1061,6 +1062,7 @@ final class CaptionPipeline {
         }
         if enginesKind != kind {
             engines.removeAll()
+            activeEngineKey = nil
             enginesKind = kind
         }
         let key = engineKey(for: source, kind: kind)
@@ -1083,6 +1085,7 @@ final class CaptionPipeline {
             throw TranscriptionError.assetsUnavailable(route.source.fallbackLanguage)
         }
 
+        activeEngineKey = nil
         let format = try await engine.prepare(
             contextualStrings: route.source == .auto
                 ? []
@@ -1095,6 +1098,7 @@ final class CaptionPipeline {
             audio.stop()
             throw error
         }
+        activeEngineKey = key
         phase = .listening(route)
 
         // Anchor the audio timeline before buffers start flowing: audio
@@ -1573,10 +1577,9 @@ final class CaptionPipeline {
     /// Decode active-seconds of the live SenseVoice engine, or 0 when the
     /// active engine is Apple's recognizer (no in-process decode cost).
     func activeSenseVoiceDecodeSeconds() async -> Double {
-        for engine in engines.values {
-            if let sv = engine as? SenseVoiceEngine {
-                return await sv.decodeActiveSeconds
-            }
+        if let activeEngineKey,
+           let sv = engines[activeEngineKey] as? SenseVoiceEngine {
+            return await sv.decodeActiveSeconds
         }
         return 0
     }

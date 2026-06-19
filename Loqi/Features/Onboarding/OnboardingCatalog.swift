@@ -121,6 +121,13 @@ enum OnboardingItemKind: String, CaseIterable, Identifiable {
         }
     }
 
+    static func llmModelsInstalled(
+        isDownloaded: (ModelOption) -> Bool = { LLMService.isDownloaded(model: $0) }
+    ) -> Bool {
+        ModelCatalog.requiredModels(summaryModel: ModelCatalog.default)
+            .allSatisfy(isDownloaded)
+    }
+
     var isRecommended: Bool {
         switch self {
         case .translationPacks, .senseVoice, .diarizer, .llm: true
@@ -152,7 +159,7 @@ enum OnboardingItemKind: String, CaseIterable, Identifiable {
         case .appleSpeech, .translationPacks: false
         case .senseVoice: SenseVoiceModelStore.isInstalled
         case .diarizer: StreamingDiarizer.isModelCached
-        case .llm: LLMService.isDownloaded(model: ModelCatalog.default)
+        case .llm: Self.llmModelsInstalled()
         case .qwen3ASR: Qwen3ASRModelStore.isInstalled
         }
     }
