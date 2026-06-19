@@ -121,6 +121,30 @@ struct ChatEngineTests {
         #expect(!context.contains("fact: Product ships in June"))
     }
 
+    @Test func contextDoesNotDuplicateSummaryRecordMirrors() {
+        var record = makeRecord(withNotes: false)
+        let text = "Runway is 18 months"
+        record.chunkNotes = [
+            .init(
+                headline: "Finance",
+                startedAt: Date(timeIntervalSince1970: 1_000_300),
+                facts: [text],
+                summaryRecords: [
+                    .init(
+                        kind: .point,
+                        source: .transcript,
+                        sourceIDs: ["m001"],
+                        sourceIndex: 0,
+                        timestamp: Date(timeIntervalSince1970: 1_000_300),
+                        text: text)
+                ])
+        ]
+
+        let context = ChatEngine.context(for: record, question: "runway")
+
+        #expect(context.components(separatedBy: text).count - 1 == 1)
+    }
+
     @Test func contextWithoutNotesFallsBackToTranscript() {
         let record = makeRecord(withNotes: false)
         // No token matches any line → plain transcript tail.
