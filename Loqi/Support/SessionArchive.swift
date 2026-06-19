@@ -21,6 +21,7 @@ struct SessionArtifacts: Sendable {
 @Observable
 final class SessionArchive {
     private(set) var sessions: [SessionRecord] = []
+    private var didLoad = false
 
     private static var directory: URL {
         URL.applicationSupportDirectory.appending(path: "Sessions", directoryHint: .isDirectory)
@@ -43,15 +44,14 @@ final class SessionArchive {
         attachmentsDirectory.appending(path: fileName)
     }
 
-    init() {
-        load()
-    }
+    init() {}
 
     /// Delete recording/attachment files no session references. Called by
     /// the pipeline AFTER crash recovery has claimed the interrupted
     /// session's files — sweeping in init would destroy exactly the audio
     /// recovery exists to save.
     func sweepOrphans() {
+        guard didLoad else { return }
         sweepOrphanedRecordings()
         sweepOrphanedAttachments()
     }
@@ -241,24 +241,34 @@ final class SessionArchive {
 
     // MARK: Persistence
 
-    private func load() {
+    nonisolated static func decodeAll(in directory: URL) -> [SessionRecord] {
         let fm = FileManager.default
         guard let files = try? fm.contentsOfDirectory(
-            at: Self.directory, includingPropertiesForKeys: nil) else { return }
+            at: directory, includingPropertiesForKeys: nil) else { return [] }
         let decoder = JSONDecoder()
         decoder.dateDecodingStrategy = .iso8601
-        let decoded = files
+        return files
             .filter { $0.pathExtension == "json" }
             .compactMap { try? decoder.decode(SessionRecord.self, from: Data(contentsOf: $0)) }
+    }
+
+    func loadIfNeeded() async {
+        guard !didLoad else { return }
+        let directory = Self.directory
+        let decoded = await Task.detached {
+            Self.decodeAll(in: directory)
+        }.value
         // Records still marked importing are tombstones of a kill
         // mid-import: no transcript was ever written, so sweep them.
+        let fm = FileManager.default
         for abandoned in decoded where abandoned.importing == true {
             try? fm.removeItem(
-                at: Self.directory.appending(path: "\(abandoned.id.uuidString).json"))
+                at: directory.appending(path: "\(abandoned.id.uuidString).json"))
         }
         sessions = decoded
             .filter { $0.importing != true }
             .sorted { $0.startedAt > $1.startedAt }
+        didLoad = true
     }
 
     private func persist(_ record: SessionRecord) {
