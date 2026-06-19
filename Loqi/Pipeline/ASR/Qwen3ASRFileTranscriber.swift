@@ -56,7 +56,12 @@ actor Qwen3ASRDecoder {
     private let hotwords: String
 
     init(hotwords: [String] = []) {
-        self.hotwords = hotwords.joined(separator: "\n")
+        self.hotwords = Self.hotwordString(from: hotwords)
+    }
+
+    /// sherpa's Qwen3-ASR `hotwords` field is comma-separated (c-api.h:1018).
+    nonisolated static func hotwordString(from words: [String]) -> String {
+        words.filter { !$0.isEmpty }.joined(separator: ",")
     }
 
     func decode(_ samples: [Float]) -> String {
