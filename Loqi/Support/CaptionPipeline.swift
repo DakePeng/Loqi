@@ -483,6 +483,10 @@ final class CaptionPipeline {
         }
 
         ensureEngine(for: route.source)
+        Task { [llm] in await llm.resetHeatStats() }
+        if let engine = engines[engineKey(for: route.source)] as? SenseVoiceEngine {
+            Task { await engine.resetHeatStats() }
+        }
 
         do {
             try await beginTurn(route: route)
@@ -1541,6 +1545,10 @@ final class CaptionPipeline {
             : UserDefaults.standard.bool(forKey: "llm.enabled")
     }
 
+    /// Opt-in low-heat / low-power mode (Settings). Trades caption latency
+    /// and refinement frequency for less sustained compute.
+    var reduceHeat: Bool { UserDefaults.standard.bool(forKey: "perf.reduceHeat") }
+
     func setLLMEnabled(_ enabled: Bool) {
         UserDefaults.standard.set(enabled, forKey: "llm.enabled")
         if enabled {
@@ -1553,6 +1561,17 @@ final class CaptionPipeline {
                 await llm.unload()
             }
         }
+    }
+
+    /// Decode active-seconds of the live SenseVoice engine, or 0 when the
+    /// active engine is Apple's recognizer (no in-process decode cost).
+    func activeSenseVoiceDecodeSeconds() async -> Double {
+        for engine in engines.values {
+            if let sv = engine as? SenseVoiceEngine {
+                return await sv.decodeActiveSeconds
+            }
+        }
+        return 0
     }
 
     private func loadLLMIfAllowed() {

@@ -303,6 +303,7 @@ enum SenseVoiceError: LocalizedError {
 actor SenseVoiceEngine: SpeechEngine {
     nonisolated let sourceSelection: RecognitionLanguageSelection
     nonisolated var language: AppLanguage { sourceSelection.fallbackLanguage }
+    private(set) var decodeActiveSeconds: Double = 0
 
     init(sourceSelection: RecognitionLanguageSelection) {
         self.sourceSelection = sourceSelection
@@ -319,6 +320,7 @@ actor SenseVoiceEngine: SpeechEngine {
     func feed(_ chunk: AudioCaptureService.AudioChunk) {}
     func stop() async {}
     func applyContextualStrings(_ strings: [String]) async throws {}
+    func resetHeatStats() {}
 }
 
 actor SenseVoiceDecoder {

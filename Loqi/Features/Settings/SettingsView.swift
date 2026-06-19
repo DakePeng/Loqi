@@ -24,6 +24,9 @@ struct SettingsView: View {
     @State private var diarizerSpeedometer = DownloadSpeedometer()
     @State private var senseVoiceSpeedometer = DownloadSpeedometer()
     @State private var tokensPerSecond: Double?
+    @State private var llmActiveSeconds: Double = 0
+    @State private var asrActiveSeconds: Double = 0
+    @State private var thermalTransitions = 0
     @State private var llmState = "—"
     @State private var llmDownloaded = false
     @State private var availableMemory = "—"
@@ -228,11 +231,18 @@ struct SettingsView: View {
                     LabeledContent("Model state", value: llmState)
                     LabeledContent("Available memory", value: availableMemory)
                     LabeledContent("Thermal state", value: thermalLabel)
+                    LabeledContent("Thermal changes", value: "\(thermalTransitions)")
                     if let tokensPerSecond {
                         LabeledContent(
                             "Last generation",
                             value: String(format: "%.1f tok/s", tokensPerSecond))
                     }
+                    LabeledContent("LLM active", value: String(format: "%.1fs", llmActiveSeconds))
+                    LabeledContent("ASR active", value: String(format: "%.1fs", asrActiveSeconds))
+                    LabeledContent(
+                        "Heat driver",
+                        value: SessionHeatStats.dominant(
+                            llmSeconds: llmActiveSeconds, asrSeconds: asrActiveSeconds))
                 }
 
                 Section {
@@ -329,6 +339,9 @@ struct SettingsView: View {
             fromByteCount: Int64(bytes), countStyle: .memory)
         let speed = await pipeline.llm.lastTokensPerSecond
         tokensPerSecond = speed > 0 ? speed : nil
+        llmActiveSeconds = await pipeline.llm.generateActiveSeconds
+        asrActiveSeconds = await pipeline.activeSenseVoiceDecodeSeconds()
+        thermalTransitions = pipeline.thermal.transitions.count
         senseVoiceInstalled = SenseVoiceModelStore.isInstalled
         qwen3Installed = Qwen3ASRModelStore.isInstalled
 
