@@ -162,6 +162,7 @@ final class CaptionPipeline {
     private let audio = AudioCaptureService()
     private let segmenter = TranscriptSegmenter()
     private var engines: [RecognitionLanguageSelection: any SpeechEngine] = [:]
+    private var activeEngineKey: RecognitionLanguageSelection?
     /// Which backend the cached engines were built for; a Settings change
     /// invalidates them.
     private var enginesKind = ""
@@ -483,6 +484,10 @@ final class CaptionPipeline {
         }
 
         ensureEngine(for: route.source)
+        Task { [llm] in await llm.resetHeatStats() }
+        if let engine = engines[engineKey(for: route.source)] as? SenseVoiceEngine {
+            Task { await engine.resetHeatStats() }
+        }
 
         do {
             try await beginTurn(route: route)
@@ -506,7 +511,10 @@ final class CaptionPipeline {
         publishSessionStarted(route: route)
         installSystemObservers()
         #if os(iOS)
-        UIApplication.shared.isIdleTimerDisabled = true
+        let keepOn = UserDefaults.standard.object(forKey: "display.keepScreenOn") == nil
+            ? true
+            : UserDefaults.standard.bool(forKey: "display.keepScreenOn")
+        UIApplication.shared.isIdleTimerDisabled = keepOn
         #endif
         watchThermalPolicy()
         // The LLM load (~1.3GB of memory traffic) is deferred to the first
@@ -1054,6 +1062,7 @@ final class CaptionPipeline {
         }
         if enginesKind != kind {
             engines.removeAll()
+            activeEngineKey = nil
             enginesKind = kind
         }
         let key = engineKey(for: source, kind: kind)
@@ -1076,6 +1085,7 @@ final class CaptionPipeline {
             throw TranscriptionError.assetsUnavailable(route.source.fallbackLanguage)
         }
 
+        activeEngineKey = nil
         let format = try await engine.prepare(
             contextualStrings: route.source == .auto
                 ? []
@@ -1088,6 +1098,7 @@ final class CaptionPipeline {
             audio.stop()
             throw error
         }
+        activeEngineKey = key
         phase = .listening(route)
 
         // Anchor the audio timeline before buffers start flowing: audio
@@ -1282,8 +1293,12 @@ final class CaptionPipeline {
         let text = entry.sourceText
         // Hotword near-misses force refinement even for short utterances —
         // names usually appear in exactly those.
-        let wantsRefinement = refine
-            || matcher.shouldForceRefine(text, language: direction.source)
+        let forced = matcher.shouldForceRefine(text, language: direction.source)
+        let wantsRefinement = (refine || forced) && RefinementGate.shouldRefine(
+            textLength: text.count,
+            forced: forced,
+            thermalState: thermal.thermalState,
+            reduceHeat: reduceHeat)
         // !isBackgrounded: the paused queue silently DROPS enqueued jobs — a
         // backgrounded entry marked refining would spin forever. It takes the
         // draft path instead.
@@ -1541,6 +1556,10 @@ final class CaptionPipeline {
             : UserDefaults.standard.bool(forKey: "llm.enabled")
     }
 
+    /// Opt-in low-heat / low-power mode (Settings). Trades caption latency
+    /// and refinement frequency for less sustained compute.
+    var reduceHeat: Bool { UserDefaults.standard.bool(forKey: "perf.reduceHeat") }
+
     func setLLMEnabled(_ enabled: Bool) {
         UserDefaults.standard.set(enabled, forKey: "llm.enabled")
         if enabled {
@@ -1553,6 +1572,16 @@ final class CaptionPipeline {
                 await llm.unload()
             }
         }
+    }
+
+    /// Decode active-seconds of the live SenseVoice engine, or 0 when the
+    /// active engine is Apple's recognizer (no in-process decode cost).
+    func activeSenseVoiceDecodeSeconds() async -> Double {
+        if let activeEngineKey,
+           let sv = engines[activeEngineKey] as? SenseVoiceEngine {
+            return await sv.decodeActiveSeconds
+        }
+        return 0
     }
 
     private func loadLLMIfAllowed() {
@@ -1568,6 +1597,7 @@ final class CaptionPipeline {
             return
         }
         Task { [llm] in
+            await llm.setModel(ModelCatalog.liveModel)
             // Called on every silence gap; only show status when there is
             // actually a load to do (llm.load joins in-flight loads).
             if case .ready = await llm.loadState {

@@ -98,6 +98,26 @@ enum ModelCatalog {
         supportsVision: true)
 
     static let `default` = qwen35_2b
+    /// Model that runs *during* a live recording: the fast, low-memory,
+    /// low-heat tier. Always 0.8B regardless of the user's quality pick, so
+    /// translation refinement and live notes never load the heavy VLM beside
+    /// SenseVoice's in-process ONNX.
+    static let liveModel = qwen35_0_8b
+
+    /// Model post-session summary / title / vocabulary runs on: the user's
+    /// quality pick (default 2B). Equals `liveModel` when the user picked the
+    /// fast tier, in which case the boundary swap is a no-op.
+    static var summaryModel: ModelOption { current }
+
+    static func requiredModels(summaryModel: ModelOption = current) -> [ModelOption] {
+        summaryModel == liveModel ? [liveModel] : [summaryModel, liveModel]
+    }
+
+    /// Bytes onboarding pulls for the LLM step now that both tiers ship.
+    static var onboardingLLMBytes: Int64 {
+        requiredModels(summaryModel: `default`).map(\.downloadBytes).reduce(0, +)
+    }
+
     static let all = [qwen35_2b, qwen35_0_8b]
 
     static func option(for id: String) -> ModelOption {

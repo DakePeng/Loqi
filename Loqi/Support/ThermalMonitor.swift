@@ -21,6 +21,25 @@ final class ThermalMonitor {
     private(set) var policy: Policy = .full
     private(set) var thermalState = ProcessInfo.processInfo.thermalState
 
+    struct Transition: Equatable, Sendable {
+        let state: ProcessInfo.ThermalState
+        let at: Date
+    }
+
+    /// Recent thermal-state changes for the Diagnostics screen (newest last).
+    private(set) var transitions: [Transition] = []
+
+    /// Pure ring-append: keep the newest `limit` transitions. Static so it's
+    /// testable without the live notification stream.
+    nonisolated static func appendTransition(
+        _ transition: Transition, to log: [Transition], limit: Int = 20
+    ) -> [Transition] {
+        var next = log
+        next.append(transition)
+        if next.count > limit { next.removeFirst(next.count - limit) }
+        return next
+    }
+
     /// Don't pause tier-2 until `.serious` has persisted this long. iPhones
     /// tick into `.serious` during transient bursts (LLM load, a summary
     /// reduce) and recover on their own; reacting to the first notification
@@ -48,6 +67,9 @@ final class ThermalMonitor {
     // CaptionPipeline), and a deinit cannot touch main-actor state.
 
     private func apply(_ state: ProcessInfo.ThermalState) {
+        if state != thermalState {
+            transitions = Self.appendTransition(.init(state: state, at: .now), to: transitions)
+        }
         thermalState = state
         switch state {
         case .critical:

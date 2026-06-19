@@ -8,6 +8,8 @@ struct SettingsView: View {
     @AppStorage("llm.enabled") private var llmEnabled = true
     @AppStorage(DiarizerSource.defaultsKey) private var diarizerSourceRaw = DiarizerSource.huggingFace.rawValue
     @AppStorage("audio.saveRecordings") private var saveRecordings = true
+    @AppStorage("display.keepScreenOn") private var keepScreenOn = true
+    @AppStorage("perf.reduceHeat") private var reduceHeat = false
     @AppStorage("asr.engine") private var asrEngine = "apple"
     @AppStorage("asr.source") private var asrSourceRaw = ASRModelSource.modelScope.rawValue
     @AppStorage("summary.autoPostProcessNewRecordings")
@@ -24,6 +26,9 @@ struct SettingsView: View {
     @State private var diarizerSpeedometer = DownloadSpeedometer()
     @State private var senseVoiceSpeedometer = DownloadSpeedometer()
     @State private var tokensPerSecond: Double?
+    @State private var llmActiveSeconds: Double = 0
+    @State private var asrActiveSeconds: Double = 0
+    @State private var thermalTransitions = 0
     @State private var llmState = "—"
     @State private var llmDownloaded = false
     @State private var availableMemory = "—"
@@ -184,7 +189,7 @@ struct SettingsView: View {
                 } header: {
                     Text("On-device AI")
                 } footer: {
-                    Text("One local model powers better translations, summaries, titles, chat and vocabulary suggestions. Turning AI features off disables all of them. The model downloads only when you ask — here, or when a feature offers it.")
+                    Text("This model writes summaries, titles and vocabulary after a recording ends. Live translation always uses the fast 0.8B model so it stays responsive and cool while recording.")
                 }
 
                 Section {
@@ -218,21 +223,37 @@ struct SettingsView: View {
 
                 Section {
                     Toggle("Save audio recordings", isOn: $saveRecordings)
+                    Toggle("Keep screen on while recording", isOn: $keepScreenOn)
                 } header: {
                     Text("Recording")
                 } footer: {
-                    Text("Keep each session's audio alongside its transcript. Recordings are stored only on this iPhone and are deleted with their session.")
+                    Text("Keep each session's audio alongside its transcript. Recordings are stored only on this iPhone and are deleted with their session. Turning off “Keep screen on” lets the display sleep during long recordings — captions keep running and it runs noticeably cooler.")
+                }
+
+                Section {
+                    Toggle("Reduce heat", isOn: $reduceHeat)
+                } header: {
+                    Text("Performance")
+                } footer: {
+                    Text("Lowers sustained heat during long recordings: slower live-caption updates, fewer speech recognition threads, and refinement only on longer sentences. Takes effect on the next recording.")
                 }
 
                 Section("Diagnostics") {
                     LabeledContent("Model state", value: llmState)
                     LabeledContent("Available memory", value: availableMemory)
                     LabeledContent("Thermal state", value: thermalLabel)
+                    LabeledContent("Thermal changes", value: "\(thermalTransitions)")
                     if let tokensPerSecond {
                         LabeledContent(
                             "Last generation",
                             value: String(format: "%.1f tok/s", tokensPerSecond))
                     }
+                    LabeledContent("LLM active", value: String(format: "%.1fs", llmActiveSeconds))
+                    LabeledContent("ASR active", value: String(format: "%.1fs", asrActiveSeconds))
+                    LabeledContent(
+                        "Heat driver",
+                        value: SessionHeatStats.dominant(
+                            llmSeconds: llmActiveSeconds, asrSeconds: asrActiveSeconds))
                 }
 
                 Section {
@@ -295,17 +316,36 @@ struct SettingsView: View {
     private func startDownload() {
         downloadError = nil
         llmDownloading = true
-        llmSpeedometer.start(totalBytes: ModelCatalog.option(for: modelID).downloadBytes)
+        let selected = ModelCatalog.option(for: modelID)
+        let missing = ModelCatalog.requiredModels(summaryModel: selected)
+            .filter { !LLMService.isDownloaded(model: $0) }
+        let totalBytes = missing.map(\.downloadBytes).reduce(0, +)
+        guard totalBytes > 0 else {
+            llmDownloading = false
+            return
+        }
+        llmSpeedometer.start(totalBytes: totalBytes)
         Task {
             do {
-                try await pipeline.llm.load { progress in
-                    Task { @MainActor in llmSpeedometer.update(progress) }
+                var completedBytes: Int64 = 0
+                for model in missing {
+                    await pipeline.llm.setModel(model)
+                    let completedBeforeModel = completedBytes
+                    try await pipeline.llm.load { progress in
+                        let done = Double(completedBeforeModel)
+                            + progress * Double(model.downloadBytes)
+                        Task { @MainActor in
+                            llmSpeedometer.update(done / Double(totalBytes))
+                        }
+                    }
+                    completedBytes += model.downloadBytes
                 }
             } catch is CancellationError {
                 // Stopped by the user — not an error.
             } catch {
                 downloadError = error.localizedDescription
             }
+            await pipeline.llm.setModel(selected)
             llmDownloading = false
             await refreshStats()
         }
@@ -323,12 +363,17 @@ struct SettingsView: View {
         case .ready: llmState = String(localized: "Ready")
         case .failed(let reason): llmState = String(localized: "Failed: \(reason)")
         }
-        llmDownloaded = LLMService.isDownloaded(model: ModelCatalog.option(for: modelID))
+        let selected = ModelCatalog.option(for: modelID)
+        llmDownloaded = ModelCatalog.requiredModels(summaryModel: selected)
+            .allSatisfy { LLMService.isDownloaded(model: $0) }
         let bytes = await pipeline.llm.available()
         availableMemory = ByteCountFormatter.string(
             fromByteCount: Int64(bytes), countStyle: .memory)
         let speed = await pipeline.llm.lastTokensPerSecond
         tokensPerSecond = speed > 0 ? speed : nil
+        llmActiveSeconds = await pipeline.llm.generateActiveSeconds
+        asrActiveSeconds = await pipeline.activeSenseVoiceDecodeSeconds()
+        thermalTransitions = pipeline.thermal.transitions.count
         senseVoiceInstalled = SenseVoiceModelStore.isInstalled
         qwen3Installed = Qwen3ASRModelStore.isInstalled
 

@@ -84,6 +84,18 @@ struct OnboardingCatalogTests {
         }
     }
 
+    @Test func llmItemBytesCoverBothModels() {
+        #expect(OnboardingItemKind.llm.downloadBytes == ModelCatalog.onboardingLLMBytes)
+    }
+
+    @Test func llmItemRequiresBothModelsInstalled() {
+        #expect(!OnboardingItemKind.llmModelsInstalled { $0 == ModelCatalog.default })
+        #expect(!OnboardingItemKind.llmModelsInstalled { $0 == ModelCatalog.liveModel })
+        #expect(OnboardingItemKind.llmModelsInstalled { model in
+            model == ModelCatalog.default || model == ModelCatalog.liveModel
+        })
+    }
+
     @Test func translationPackPairsCoverEveryOrderedLanguagePair() {
         #expect(OnboardingItemKind.translationPairs.count == 12)
         #expect(!OnboardingItemKind.translationPairs.contains {
@@ -102,7 +114,7 @@ struct OnboardingCatalogTests {
             for: [.translationPacks, .senseVoice, .diarizer, .llm], installed: [])
         let expected = SenseVoiceModelStore.totalExpectedBytes
             + StreamingDiarizer.approximateDownloadBytes
-            + ModelCatalog.default.downloadBytes
+            + ModelCatalog.onboardingLLMBytes
         #expect(total == expected)
     }
 

@@ -234,6 +234,7 @@ struct SessionChatSheet: View {
         actionError = nil
         Task {
             do {
+                await pipeline.llm.setModel(ModelCatalog.summaryModel)
                 try await pipeline.llm.load { fraction in
                     Task { @MainActor in downloadProgress = fraction }
                 }

@@ -342,33 +342,57 @@ final class OnboardingDownloadModel {
     }
 
     private func downloadLLM(_ item: Item) async {
-        item.speedometer.start(totalBytes: ModelCatalog.default.downloadBytes)
+        item.speedometer.start(totalBytes: ModelCatalog.onboardingLLMBytes)
         let llm = pipeline.llm
         // The shared pipeline was constructed before the region step wrote
         // the source keys — sync the actor like SettingsView's .task does.
-        await llm.setModel(ModelCatalog.default)
         await llm.setSource(region.llmSource)
+
+        let summary = ModelCatalog.default
+        let live = ModelCatalog.liveModel
+        let summaryShare = Double(summary.downloadBytes)
+            / Double(ModelCatalog.onboardingLLMBytes)
+
         do {
-            try await llm.load { fraction in
-                Task { @MainActor in item.speedometer.update(fraction) }
+            await llm.setModel(summary)
+            do {
+                try await llm.load { fraction in
+                    Task { @MainActor in
+                        item.speedometer.update(fraction * summaryShare)
+                    }
+                }
+            } catch {
+                guard LLMService.isDownloaded(model: summary) else { throw error }
             }
+
+            await llm.setModel(live)
+            do {
+                try await llm.load { fraction in
+                    Task { @MainActor in
+                        item.speedometer.update(summaryShare + fraction * (1 - summaryShare))
+                    }
+                }
+            } catch {
+                guard LLMService.isDownloaded(model: live) else { throw error }
+            }
+
             // Onboarding wants bytes on disk, not 1.5 GB resident while
             // Qwen3-ASR may still download next; the pipeline warm-loads
             // lazily when a session needs it.
             await llm.unload()
-            item.status = .done
-        } catch {
-            if LLMService.isDownloaded(model: ModelCatalog.default) {
-                // Weights completed (the marker is written when the
-                // downloader returns); only the load-into-memory stage
-                // failed — e.g. the simulator, where MLX cannot run.
-                await llm.unload()
+
+            if LLMService.isDownloaded(model: summary), LLMService.isDownloaded(model: live) {
+                item.speedometer.update(1)
                 item.status = .done
-            } else if error is CancellationError {
-                item.status = .skipped
             } else {
-                item.status = .failed(error.localizedDescription)
+                item.status = .failed("Download incomplete")
             }
+        } catch is CancellationError {
+            await llm.unload()
+            item.status = .skipped
+        } catch {
+            await llm.unload()
+            item.status = .failed(error.localizedDescription)
         }
     }
 }
