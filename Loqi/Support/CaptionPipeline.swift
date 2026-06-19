@@ -1594,6 +1594,7 @@ final class CaptionPipeline {
             return
         }
         Task { [llm] in
+            await llm.setModel(ModelCatalog.liveModel)
             // Called on every silence gap; only show status when there is
             // actually a load to do (llm.load joins in-flight loads).
             if case .ready = await llm.loadState {
