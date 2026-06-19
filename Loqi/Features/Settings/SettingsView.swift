@@ -189,7 +189,7 @@ struct SettingsView: View {
                 } header: {
                     Text("On-device AI")
                 } footer: {
-                    Text("One local model powers better translations, summaries, titles, chat and vocabulary suggestions. Turning AI features off disables all of them. The model downloads only when you ask — here, or when a feature offers it.")
+                    Text("This model writes summaries, titles and vocabulary after a recording ends. Live translation always uses the fast 0.8B model so it stays responsive and cool while recording.")
                 }
 
                 Section {
