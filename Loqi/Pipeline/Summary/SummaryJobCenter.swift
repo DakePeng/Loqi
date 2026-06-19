@@ -172,6 +172,14 @@ final class SummaryJobCenter {
                 }
                 activities[sessionID] = .pausedForRecording
                 tasks[sessionID]?.cancel()
+            case .summarizing, .downloadingModel:
+                // A live summary would hold the 2B model the recording needs
+                // freed for the 0.8B tier. Suspend and restart after, exactly
+                // like backgrounding does (the partial summary was never saved).
+                guard let req = activeSummarizeRequest[sessionID] else { break }
+                suspendedSummaries[sessionID] = req
+                activities[sessionID] = .pausedForRecording
+                tasks[sessionID]?.cancel()
             case .importing:
                 tasks[sessionID]?.cancel()
             case .queuedRetranscribe:
@@ -190,9 +198,16 @@ final class SummaryJobCenter {
         pausedForRecording = false
         for (sessionID, activity) in activities {
             if case .pausedForRecording = activity {
-                activities[sessionID] = .queuedRetranscribe
+                // Retranscribes re-queue; summaries restart via resumeLLMJobs,
+                // which clears their held activity before re-running.
+                if suspendedSummaries[sessionID] != nil {
+                    activities[sessionID] = .pausedForBackground
+                } else {
+                    activities[sessionID] = .queuedRetranscribe
+                }
             }
         }
+        resumeLLMJobs()
         drainRetranscribeQueue()
     }
 
