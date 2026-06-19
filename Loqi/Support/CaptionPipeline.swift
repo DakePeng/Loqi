@@ -1286,8 +1286,12 @@ final class CaptionPipeline {
         let text = entry.sourceText
         // Hotword near-misses force refinement even for short utterances —
         // names usually appear in exactly those.
-        let wantsRefinement = refine
-            || matcher.shouldForceRefine(text, language: direction.source)
+        let forced = matcher.shouldForceRefine(text, language: direction.source)
+        let wantsRefinement = (refine || forced) && RefinementGate.shouldRefine(
+            textLength: text.count,
+            forced: forced,
+            thermalState: thermal.thermalState,
+            reduceHeat: reduceHeat)
         // !isBackgrounded: the paused queue silently DROPS enqueued jobs — a
         // backgrounded entry marked refining would spin forever. It takes the
         // draft path instead.
