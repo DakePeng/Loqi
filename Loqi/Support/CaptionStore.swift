@@ -11,7 +11,11 @@ import Observation
 @MainActor
 @Observable
 final class CaptionStore {
-    private(set) var entries: [CaptionEntry] = []
+    private(set) var entries: [CaptionEntry] = [] {
+        didSet { cachedSegments = nil }
+    }
+
+    @ObservationIgnored private var cachedSegments: [CaptionSegment]?
 
     /// Entry currently receiving volatile updates, if any.
     private(set) var activeEntryID: UUID?
@@ -34,6 +38,13 @@ final class CaptionStore {
 
     func entries(in mode: SessionMode) -> [CaptionEntry] {
         entries.filter { $0.mode == mode }
+    }
+
+    func segments() -> [CaptionSegment] {
+        if let cachedSegments { return cachedSegments }
+        let built = CaptionGrouping.segments(from: entries)
+        cachedSegments = built
+        return built
     }
 
     // MARK: Volatile lifecycle
