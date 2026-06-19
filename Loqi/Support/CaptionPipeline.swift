@@ -666,32 +666,23 @@ final class CaptionPipeline {
         return String(text.suffix(400))
     }
 
-    /// Snapshot the running session to the crash journal: a ready-to-archive
-    /// record mirroring exactly what a clean stop would save right now.
-    /// Called at utterance cadence — a small atomic JSON write.
+    /// Snapshot the running session to the crash journal.
     private func writeJournal() {
         guard let sessionID, let startedAt = sessionStartedAt else { return }
-        var record = SessionRecord(
-            id: sessionID,
+        let inputs = JournalSnapshotInputs(
+            sessionID: sessionID,
             mode: sessionMode,
             startedAt: startedAt,
-            endedAt: .now,
-            entries: SessionArchive.mappedEntries(
-                from: archivableEntries,
-                startedAt: startedAt,
-                timeline: audioAnchors.isEmpty ? nil : AudioTimeline(anchors: audioAnchors)),
-            speakerNames: speakerNames)
-        record.recordingSpeakerCount = captionSpeakerCount
-        if recorder != nil {
-            record.audioFileName = SessionRecorder.fileName(for: sessionID)
-        }
-        if !liveNotes.isEmpty {
-            record.chunkNotes = liveNotes
-            record.liveNotesEndEntryID = notesEndEntryID
-        }
-        if !liveAttachments.isEmpty { record.attachments = liveAttachments }
-        let snapshot = record
-        Task { await journalWriter.write(snapshot) }
+            evicted: evictedEntries,
+            live: store.entries,
+            timeline: audioAnchors.isEmpty ? nil : AudioTimeline(anchors: audioAnchors),
+            speakerNames: speakerNames,
+            recordingSpeakerCount: captionSpeakerCount,
+            audioFileName: recorder != nil ? SessionRecorder.fileName(for: sessionID) : nil,
+            chunkNotes: liveNotes,
+            notesEndEntryID: notesEndEntryID,
+            attachments: liveAttachments)
+        Task { await journalWriter.write(building: inputs) }
     }
 
     private func endSession() async {
