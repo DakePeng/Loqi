@@ -9,6 +9,7 @@ struct SettingsView: View {
     @AppStorage(DiarizerSource.defaultsKey) private var diarizerSourceRaw = DiarizerSource.huggingFace.rawValue
     @AppStorage("audio.saveRecordings") private var saveRecordings = true
     @AppStorage("display.keepScreenOn") private var keepScreenOn = true
+    @AppStorage("perf.reduceHeat") private var reduceHeat = false
     @AppStorage("asr.engine") private var asrEngine = "apple"
     @AppStorage("asr.source") private var asrSourceRaw = ASRModelSource.modelScope.rawValue
     @AppStorage("summary.autoPostProcessNewRecordings")
@@ -227,6 +228,14 @@ struct SettingsView: View {
                     Text("Recording")
                 } footer: {
                     Text("Keep each session's audio alongside its transcript. Recordings are stored only on this iPhone and are deleted with their session. Turning off “Keep screen on” lets the display sleep during long recordings — captions keep running and it runs noticeably cooler.")
+                }
+
+                Section {
+                    Toggle("Reduce heat", isOn: $reduceHeat)
+                } header: {
+                    Text("Performance")
+                } footer: {
+                    Text("Lowers sustained heat during long recordings: slower live-caption updates, fewer speech recognition threads, and refinement only on longer sentences. Takes effect on the next recording.")
                 }
 
                 Section("Diagnostics") {
