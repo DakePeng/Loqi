@@ -597,6 +597,7 @@ final class SummaryJobCenter {
         tasks[sessionID] = Task {
             defer { finishJob(sessionID) }
             do {
+                await llm.setModel(ModelCatalog.summaryModel)
                 let importer = FileImportEngine(
                     translator: translator, voiceprint: voiceprint,
                     llm: llm, hotwords: hotwords)
@@ -737,6 +738,7 @@ final class SummaryJobCenter {
     /// may download, reporting progress through the session's activity.
     private func loadModel(sessionID: UUID, allowDownload: Bool) async throws {
         guard llmEnabled else { throw JobError.aiDisabled }
+        await llm.setModel(ModelCatalog.summaryModel)
         if allowDownload {
             try await llm.load { [weak self] fraction in
                 Task { @MainActor in
