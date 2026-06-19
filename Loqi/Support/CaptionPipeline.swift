@@ -510,7 +510,10 @@ final class CaptionPipeline {
         publishSessionStarted(route: route)
         installSystemObservers()
         #if os(iOS)
-        UIApplication.shared.isIdleTimerDisabled = true
+        let keepOn = UserDefaults.standard.object(forKey: "display.keepScreenOn") == nil
+            ? true
+            : UserDefaults.standard.bool(forKey: "display.keepScreenOn")
+        UIApplication.shared.isIdleTimerDisabled = keepOn
         #endif
         watchThermalPolicy()
         // The LLM load (~1.3GB of memory traffic) is deferred to the first

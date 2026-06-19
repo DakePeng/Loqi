@@ -8,6 +8,7 @@ struct SettingsView: View {
     @AppStorage("llm.enabled") private var llmEnabled = true
     @AppStorage(DiarizerSource.defaultsKey) private var diarizerSourceRaw = DiarizerSource.huggingFace.rawValue
     @AppStorage("audio.saveRecordings") private var saveRecordings = true
+    @AppStorage("display.keepScreenOn") private var keepScreenOn = true
     @AppStorage("asr.engine") private var asrEngine = "apple"
     @AppStorage("asr.source") private var asrSourceRaw = ASRModelSource.modelScope.rawValue
     @AppStorage("summary.autoPostProcessNewRecordings")
@@ -221,10 +222,11 @@ struct SettingsView: View {
 
                 Section {
                     Toggle("Save audio recordings", isOn: $saveRecordings)
+                    Toggle("Keep screen on while recording", isOn: $keepScreenOn)
                 } header: {
                     Text("Recording")
                 } footer: {
-                    Text("Keep each session's audio alongside its transcript. Recordings are stored only on this iPhone and are deleted with their session.")
+                    Text("Keep each session's audio alongside its transcript. Recordings are stored only on this iPhone and are deleted with their session. Turning off “Keep screen on” lets the display sleep during long recordings — captions keep running and it runs noticeably cooler.")
                 }
 
                 Section("Diagnostics") {
