@@ -116,7 +116,7 @@ enum OnboardingItemKind: String, CaseIterable, Identifiable {
         case .appleSpeech, .translationPacks: nil
         case .senseVoice: SenseVoiceModelStore.totalExpectedBytes
         case .diarizer: StreamingDiarizer.approximateDownloadBytes
-        case .llm: ModelCatalog.default.downloadBytes
+        case .llm: ModelCatalog.onboardingLLMBytes
         case .qwen3ASR: Qwen3ASRModelStore.totalExpectedBytes
         }
     }
