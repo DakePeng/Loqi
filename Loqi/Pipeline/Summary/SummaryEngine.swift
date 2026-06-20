@@ -33,6 +33,7 @@ struct SummaryEngine {
     static let summaryMaxTokensHardCap = 900
     static let summaryOverviewHardCap = 6
     static let summarySectionHardCap = 8
+    static let reduceInputCharacterBudget = 6_000
 
     enum TranscriptSizeTier: Equatable, Sendable {
         case short
@@ -353,12 +354,15 @@ struct SummaryEngine {
     /// labeled as photo context so the final reduce can fold them into the
     /// surrounding topic instead of copying captions as standalone summary.
     static func reduceInput(
-        notes: [SessionRecord.ChunkNote], style: SummaryStyle
+        notes: [SessionRecord.ChunkNote],
+        style: SummaryStyle,
+        maxCharacters: Int? = nil
     ) -> String {
         let records = SummaryRecordReducer.deduped(
             SummaryRecordReducer.records(from: notes))
         var seen = Set<String>()
         var recent: [(isTopic: Bool, base: String)] = []
+        var lines: [String] = []
 
         func actionText(_ record: SessionRecord.SummaryRecord) -> String {
             let owner = record.owner?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
@@ -411,11 +415,74 @@ struct SummaryEngine {
             return true
         }
 
-        return records.compactMap { record in
+        for record in records {
             guard let (label, text) = labelAndText(record),
-                  keep(label: label, text: text) else { return nil }
-            return "\(label): \(text)"
-        }.joined(separator: "\n")
+                  keep(label: label, text: text) else { continue }
+            lines.append("\(label): \(text)")
+        }
+        if let maxCharacters {
+            lines = boundedReduceInputLines(lines, maxCharacters: maxCharacters)
+        }
+        return lines.joined(separator: "\n")
+    }
+
+    static func boundedReduceInputLines(
+        _ lines: [String], maxCharacters: Int
+    ) -> [String] {
+        guard maxCharacters > 0, !lines.isEmpty else { return [] }
+        let fullLength = lines.reduce(0) { $0 + $1.count } + lines.count - 1
+        guard fullLength > maxCharacters else { return lines }
+
+        let averageLength = max(1, fullLength / lines.count)
+        let targetCount = max(1, min(lines.count, maxCharacters / averageLength))
+        var selected = Set<Int>()
+        var required = Set<Int>()
+        func require(_ index: Int) {
+            selected.insert(index)
+            required.insert(index)
+        }
+        require(0)
+        require(lines.count - 1)
+        var labels = Set<String>()
+        for (index, line) in lines.enumerated() {
+            let label = line.split(separator: ":", maxSplits: 1)
+                .first.map(String.init) ?? line
+            if labels.insert(label).inserted {
+                require(index)
+            }
+        }
+        if targetCount == 1 {
+            selected.insert(0)
+        } else {
+            for slot in 0..<targetCount {
+                selected.insert(Int((Double(slot) * Double(lines.count - 1)
+                    / Double(targetCount - 1)).rounded()))
+            }
+        }
+
+        func length(_ indexes: Set<Int>) -> Int {
+            indexes.reduce(0) { $0 + lines[$1].count } + max(0, indexes.count - 1)
+        }
+        while length(selected) > maxCharacters,
+              let drop = selected.subtracting(required)
+                .max(by: { lines[$0].count < lines[$1].count }) {
+            selected.remove(drop)
+        }
+
+        var result = selected.sorted().map { lines[$0] }
+        if result.joined(separator: "\n").count > maxCharacters {
+            result = required.sorted().reduce(into: []) { output, index in
+                let line = lines[index]
+                let extra = line.count + (output.isEmpty ? 0 : 1)
+                if output.joined(separator: "\n").count + extra <= maxCharacters {
+                    output.append(line)
+                }
+            }
+        }
+        if result.isEmpty, let first = lines.first {
+            return [String(first.prefix(maxCharacters))]
+        }
+        return result
     }
 
     /// Reduce phase: the final summary, written from notes alone. The
@@ -424,6 +491,7 @@ struct SummaryEngine {
         notes: [SessionRecord.ChunkNote],
         style: SummaryStyle = .meeting,
         length: SummaryLength = .standard,
+        maxInputCharacters: Int? = nil,
         transcriptCharacterCount: Int? = nil,
         in language: AppLanguage,
         stitchDetails: Bool = true,
@@ -440,7 +508,8 @@ struct SummaryEngine {
                         + note.actions.reduce(0) { $0 + $1.count }
                 },
             noteCount: notes.count)
-        let input = Self.reduceInput(notes: notes, style: style)
+        let input = Self.reduceInput(
+            notes: notes, style: style, maxCharacters: maxInputCharacters)
         func fallbackSummary() -> String {
             SummaryRecordReducer.render(
                 records: SummaryRecordReducer.records(from: notes),
@@ -573,8 +642,10 @@ struct SummaryEngine {
         in language: AppLanguage,
         progress: @escaping @MainActor @Sendable (Int, Int) -> Void
     ) async throws -> (summary: String, notes: [SessionRecord.ChunkNote]) {
-        try await llm.load(policy: .requireDownloaded)
         let (uncovered, cached) = Self.uncoveredEntries(of: record)
+        if !uncovered.isEmpty {
+            try await llm.load(policy: .requireDownloaded)
+        }
         let mapChunks = Self.chunkEntries(uncovered).count
         let totalSteps = mapChunks + 1
         let fresh = try await makeNotes(
@@ -591,6 +662,7 @@ struct SummaryEngine {
             notes: AttachmentNotes.merged(notes, attachments: record.attachments),
             style: style,
             length: length,
+            maxInputCharacters: Self.reduceInputCharacterBudget,
             transcriptCharacterCount: record.entries.reduce(0) {
                 $0 + $1.sourceText.count
             },
