@@ -96,7 +96,7 @@ enum SummaryStyle: String, Codable, CaseIterable, Identifiable, Sendable {
                         .english: "Key Points", .chinese: "要点",
                         .japanese: "ポイント", .korean: "핵심 사항",
                     ]),
-                    .init(tag: "A", cap: 5, hint: "to-do, start with a verb", headings: [
+                    .init(tag: "A", cap: 5, hint: "to-do that was actually mentioned, start with a verb", headings: [
                         .english: "To-Dos", .chinese: "待办事项",
                         .japanese: "やること", .korean: "할 일",
                     ]),

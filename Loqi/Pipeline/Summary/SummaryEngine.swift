@@ -353,6 +353,17 @@ struct SummaryEngine {
     /// Reduce input: one labeled line per extracted record. Photos are
     /// labeled as photo context so the final reduce can fold them into the
     /// surrounding topic instead of copying captions as standalone summary.
+    /// True when at least one spoken (non-photo) record carries substance
+    /// beyond a bare topic headline. When false the notes are photo-only or
+    /// unintelligible chatter: the structured reduce would invent to-dos and
+    /// key-points to fill its template, so the caller renders deterministically.
+    static func hasSpokenSubstance(_ records: [SessionRecord.SummaryRecord]) -> Bool {
+        records.contains { record in
+            record.source != .photo && record.kind != .topic
+                && !record.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        }
+    }
+
     static func reduceInput(
         notes: [SessionRecord.ChunkNote],
         style: SummaryStyle,
@@ -463,9 +474,17 @@ struct SummaryEngine {
         func length(_ indexes: Set<Int>) -> Int {
             indexes.reduce(0) { $0 + lines[$1].count } + max(0, indexes.count - 1)
         }
+        // Drop the longest droppable line first; break length ties by index so
+        // the choice is a total order. Without the tiebreak `max(by:)` returns
+        // whichever equal-length line `Set` iteration happens to visit first,
+        // and Swift randomizes that per process — making the bounded input
+        // (and every summary built from it) nondeterministic run-to-run.
         while length(selected) > maxCharacters,
-              let drop = selected.subtracting(required)
-                .max(by: { lines[$0].count < lines[$1].count }) {
+              let drop = selected.subtracting(required).max(by: {
+                  lines[$0].count != lines[$1].count
+                      ? lines[$0].count < lines[$1].count
+                      : $0 > $1
+              }) {
             selected.remove(drop)
         }
 
@@ -510,15 +529,20 @@ struct SummaryEngine {
             noteCount: notes.count)
         let input = Self.reduceInput(
             notes: notes, style: style, maxCharacters: maxInputCharacters)
+        let records = SummaryRecordReducer.records(from: notes)
         func fallbackSummary() -> String {
             SummaryRecordReducer.render(
-                records: SummaryRecordReducer.records(from: notes),
+                records: records,
                 style: style,
                 length: length,
                 in: language,
                 stitchDetails: stitchDetails)
         }
-        if input.isEmpty || !stitchDetails {
+        // No spoken substance (photo-only or empty chatter) means the
+        // structured reduce has nothing real to synthesize and pads the
+        // template with invented to-dos/key-points off the photo. The
+        // deterministic renderer states only what's there.
+        if input.isEmpty || !stitchDetails || !Self.hasSpokenSubstance(records) {
             let summary = fallbackSummary()
             guard !summary.isEmpty else { throw SummaryError.generationFailed }
             await progress?(1, 1)
@@ -577,9 +601,10 @@ struct SummaryEngine {
         stitchDetails: Bool
     ) -> String {
         let prompts = PromptBuilder()
+        let records = SummaryRecordReducer.records(from: notes)
         func fallback() -> String {
             SummaryRecordReducer.render(
-                records: SummaryRecordReducer.records(from: notes),
+                records: records,
                 style: style,
                 length: length,
                 in: language,
@@ -587,22 +612,36 @@ struct SummaryEngine {
         }
 
         guard !parsed.isEmpty else { return fallback() }
-        let cleaned = prompts.deduplicatedStructuredSummary(parsed)
+        var cleaned = prompts.deduplicatedStructuredSummary(parsed)
         guard !PromptBuilder.hasDegenerateRepetition(cleaned.joinedValues)
         else { return fallback() }
+
+        // A populated section the model dropped is stitched in from the notes
+        // rather than discarding the whole synthesis: the synthesized
+        // overview and sections survive, and the missing section is still
+        // guaranteed to appear (deterministically rendered, deduped against
+        // what synthesis already used).
         let sectionTags = SummaryRecordReducer.renderedSectionTags(
-            records: SummaryRecordReducer.records(from: notes),
-            style: style,
-            length: length)
+            records: records, style: style, length: length)
+        var used = cleaned.overview + cleaned.sections.flatMap { $0 }
         for (index, section) in style.spec.sections.enumerated()
         where sectionTags.contains(section.tag) && cleaned.sections[index].isEmpty {
-            return fallback()
+            let lines = SummaryRecordReducer.sectionLines(
+                tag: section.tag,
+                records: records,
+                style: style,
+                length: length,
+                excluding: used)
+            guard !lines.isEmpty else { continue }
+            cleaned.sections[index] = lines
+            used += lines
         }
+
         let summary = prompts.renderSummaryMarkdown(cleaned, in: language)
         guard !summary.isEmpty else { return fallback() }
         guard stitchDetails, length == .detailed,
               let details = SummaryRecordReducer.detailBlock(
-                  records: SummaryRecordReducer.records(from: notes),
+                  records: records,
                   usedTexts: cleaned.overview + cleaned.sections.flatMap { $0 },
                   in: language)
         else { return summary }
@@ -820,6 +859,34 @@ enum SummaryRecordReducer {
             if hasLines { tags.insert(section.tag) }
         }
         return tags
+    }
+
+    /// Deterministic bullet text for a single spec section, skipping anything
+    /// whose text already appears in `usedTexts` (cross-section dedup). Used to
+    /// stitch a populated section the reduce model dropped back onto its
+    /// synthesized output, without discarding the synthesis.
+    static func sectionLines(
+        tag: String,
+        records: [Record],
+        style: SummaryStyle,
+        length: SummaryLength,
+        excluding usedTexts: [String]
+    ) -> [String] {
+        guard let section = style.spec.sections.first(where: { $0.tag == tag })
+        else { return [] }
+        let records = deduped(records)
+        var usedKeys = usedTexts
+            .map { SummaryEngine.dedupKey($0) }
+            .filter { !$0.isEmpty }
+        let limit = cap(base: section.cap, length: length, minimum: 1)
+        var lines: [String] = []
+        for record in recordsForSection(tag, style: style, records: records)
+        where lines.count < limit {
+            if let text = displayUnused(record, usedKeys: &usedKeys) {
+                lines.append(text)
+            }
+        }
+        return lines
     }
 
     static func detailBlock(

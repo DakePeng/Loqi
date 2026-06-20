@@ -113,6 +113,8 @@ struct SummaryEngineTests {
         #expect(prompt.system.contains("target"))
         #expect(prompt.system.contains("forbidden") || prompt.system.contains("禁止"))
         #expect(prompt.system.contains("TSV"))
+        // A3: rationale/qualifier clauses are preserved, not stripped.
+        #expect(prompt.system.contains("qualifier"))
         #expect(prompt.user.contains("chunk_id: c003"))
         #expect(prompt.user.contains("context_only:"))
         #expect(prompt.user.contains("target:"))
@@ -133,6 +135,10 @@ struct SummaryEngineTests {
         #expect(prompt.system.contains("complete-thought bullets"))
         #expect(prompt.system.contains("Do not repeat the overview"))
         #expect(prompt.system.contains("Avoid repeated lead-ins"))
+        #expect(prompt.system.contains("most important"))
+        // B2: photos must not be spun into invented to-dos/decisions.
+        #expect(prompt.system.contains("Photos are reference context only"))
+        #expect(prompt.system.contains("never turn a photo into"))
         #expect(prompt.system.contains("Meeting tone"))
         #expect(prompt.system.contains("Output ONLY tagged lines"))
         #expect(prompt.user.contains("Notes:\ntopic: 桌布讨论"))
@@ -268,14 +274,70 @@ struct SummaryEngineTests {
                 actions: index == 42 ? ["负责人处理稀疏待办"] : [])
         }
 
+        // The unbounded input dedups near-identical sequential notes, so its
+        // last surviving line is the tail the bound must still preserve.
+        let lastLine = SummaryEngine.reduceInput(notes: notes, style: .meeting)
+            .split(separator: "\n").last.map(String.init)
+
         let input = SummaryEngine.reduceInput(
             notes: notes, style: .meeting, maxCharacters: 180)
 
         #expect(!input.isEmpty)
         #expect(input.count <= 180)
         #expect(input.split(separator: "\n").allSatisfy { $0.contains(": ") })
+        // The rare action and the session's tail both survive the bound.
         #expect(input.contains("action: 负责人处理稀疏待办"))
-        #expect(input.contains("第 79 段"))
+        #expect(lastLine.map(input.contains) == true)
+    }
+
+    @Test func hasSpokenSubstanceDistinguishesPhotoOnlyNotes() {
+        let timestamp = Date(timeIntervalSince1970: 1_000_000)
+        func record(
+            kind: SessionRecord.SummaryRecord.Kind,
+            source: SessionRecord.SummaryRecord.Source,
+            text: String
+        ) -> SessionRecord.SummaryRecord {
+            .init(
+                kind: kind, source: source, sourceIDs: ["x"],
+                sourceIndex: 0, timestamp: timestamp, text: text)
+        }
+
+        // A spoken non-topic record is real substance.
+        #expect(SummaryEngine.hasSpokenSubstance(
+            [record(kind: .decision, source: .transcript, text: "六月发布")]))
+        // A photo point alone is not — it would seed invented to-dos.
+        #expect(!SummaryEngine.hasSpokenSubstance(
+            [record(kind: .point, source: .photo, text: "这是一张展示马的插画设计图")]))
+        // A bare topic headline alone is not substance either.
+        #expect(!SummaryEngine.hasSpokenSubstance(
+            [record(kind: .topic, source: .transcript, text: "应该是在的")]))
+    }
+
+    @Test func reducePhotoOnlyNotesDoesNotFabricateToDos() async throws {
+        let timestamp = Date(timeIntervalSince1970: 1_000_000)
+        let photo = SessionRecord.Attachment(
+            fileName: "horse.jpg",
+            timestamp: timestamp,
+            vlmDescription: "这是一张展示马的插画设计图。")
+        let notes = AttachmentNotes.merged([], attachments: [photo])
+        // A model that would happily hallucinate is never consulted: the
+        // photo-only guard renders deterministically.
+        let missingModel = ModelOption(
+            id: "loqi-tests/missing-model",
+            displayName: "Missing test model",
+            requiredHeadroom: 1,
+            downloadBytes: 1)
+        let engine = SummaryEngine(llm: LLMService(model: missingModel))
+
+        let summary = try await engine.reduce(
+            notes: notes,
+            style: .memo,
+            length: .detailed,
+            in: .chinese)
+
+        #expect(summary.contains("马的插画设计图"))
+        // No invented to-do / next-step section appears.
+        #expect(!summary.contains("## 待办事项"))
     }
 
     @Test func reduceFallsBackWhenGenerationThrows() async throws {
@@ -445,7 +507,7 @@ struct SummaryEngineTests {
         #expect(summary.contains("传家宝桌子不必铺布"))
     }
 
-    @Test func reducedSummaryFallsBackWhenStructuredOutputOmitsPopulatedSection() {
+    @Test func reducedSummaryStitchesMissingPopulatedSection() {
         var parsed = PromptBuilder.ParsedStructuredSummary(style: .meeting)
         parsed.overview = ["会议讨论发布安排。"]
         let note = SessionRecord.ChunkNote(
@@ -464,6 +526,10 @@ struct SummaryEngineTests {
             in: .chinese,
             stitchDetails: true)
 
+        // Synthesized overview survives — the whole summary is no longer
+        // discarded just because the model dropped the populated sections.
+        #expect(summary.contains("会议讨论发布安排。"))
+        // The dropped sections are stitched back in deterministically.
         #expect(summary.contains("## 决定"))
         #expect(summary.contains("六月发布"))
         #expect(summary.contains("## 待办事项"))
