@@ -441,14 +441,16 @@ struct SummaryEngine {
                 },
             noteCount: notes.count)
         let input = Self.reduceInput(notes: notes, style: style)
-        guard !input.isEmpty else { throw SummaryError.generationFailed }
-        if !stitchDetails {
-            let summary = SummaryRecordReducer.render(
+        func fallbackSummary() -> String {
+            SummaryRecordReducer.render(
                 records: SummaryRecordReducer.records(from: notes),
                 style: style,
                 length: length,
                 in: language,
-                stitchDetails: false)
+                stitchDetails: stitchDetails)
+        }
+        if input.isEmpty || !stitchDetails {
+            let summary = fallbackSummary()
             guard !summary.isEmpty else { throw SummaryError.generationFailed }
             await progress?(1, 1)
             return summary
@@ -519,6 +521,14 @@ struct SummaryEngine {
         let cleaned = prompts.deduplicatedStructuredSummary(parsed)
         guard !PromptBuilder.hasDegenerateRepetition(cleaned.joinedValues)
         else { return fallback() }
+        let sectionTags = SummaryRecordReducer.renderedSectionTags(
+            records: SummaryRecordReducer.records(from: notes),
+            style: style,
+            length: length)
+        for (index, section) in style.spec.sections.enumerated()
+        where sectionTags.contains(section.tag) && cleaned.sections[index].isEmpty {
+            return fallback()
+        }
         let summary = prompts.renderSummaryMarkdown(cleaned, in: language)
         guard !summary.isEmpty else { return fallback() }
         guard stitchDetails, length == .detailed,
@@ -705,6 +715,43 @@ enum SummaryRecordReducer {
             }
         }
         return blocks.joined(separator: "\n\n")
+    }
+
+    static func renderedSectionTags(
+        records: [Record],
+        style: SummaryStyle,
+        length: SummaryLength
+    ) -> Set<String> {
+        let records = deduped(records)
+        guard !records.isEmpty else { return [] }
+        let spec = style.spec
+        var usedKeys: [String] = []
+
+        @discardableResult
+        func consumeUnused(_ records: [Record], limit: Int) -> Bool {
+            var count = 0
+            var consumed = false
+            for record in records where count < limit {
+                if displayUnused(record, usedKeys: &usedKeys) != nil {
+                    count += 1
+                    consumed = true
+                }
+            }
+            return consumed
+        }
+
+        consumeUnused(
+            overviewRecords(records, style: style),
+            limit: cap(base: spec.overviewCap, length: length, minimum: 1))
+
+        var tags = Set<String>()
+        for section in spec.sections {
+            let hasLines = consumeUnused(
+                recordsForSection(section.tag, style: style, records: records),
+                limit: cap(base: section.cap, length: length, minimum: 1))
+            if hasLines { tags.insert(section.tag) }
+        }
+        return tags
     }
 
     static func detailBlock(

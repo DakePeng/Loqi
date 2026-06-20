@@ -542,10 +542,7 @@ struct PromptBuilder: Sendable {
         _ parsed: ParsedStructuredSummary
     ) -> ParsedStructuredSummary {
         var cleaned = ParsedStructuredSummary(style: parsed.style)
-        cleaned.overview = parsed.overview
-        var seen = parsed.overview
-            .map(SummaryEngine.dedupKey)
-            .filter { !$0.isEmpty }
+        var seen: [String] = []
 
         func shouldKeep(_ text: String) -> Bool {
             let key = SummaryEngine.dedupKey(text)
@@ -560,6 +557,7 @@ struct PromptBuilder: Sendable {
             return true
         }
 
+        cleaned.overview = parsed.overview.filter(shouldKeep)
         for index in parsed.sections.indices {
             cleaned.sections[index] = parsed.sections[index].filter(shouldKeep)
         }

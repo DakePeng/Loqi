@@ -179,6 +179,18 @@ struct SummaryEngineTests {
         #expect(cleaned.items("D") == ["暂时不铺桌布。"])
     }
 
+    @Test func structuredSummaryCleanupDropsRepeatedOverviewLines() {
+        var parsed = PromptBuilder.ParsedStructuredSummary(style: .meeting)
+        parsed.overview = [
+            "会议讨论六月发布计划。",
+            "会议讨论六月发布计划",
+        ]
+
+        let cleaned = PromptBuilder().deduplicatedStructuredSummary(parsed)
+
+        #expect(cleaned.overview == ["会议讨论六月发布计划。"])
+    }
+
     @Test func reduceInputLabelsPhotoFactsWithoutRawCaptionDump() {
         let t0 = Date(timeIntervalSince1970: 1_000_000)
         let transcript = SessionRecord.ChunkNote(
@@ -267,6 +279,37 @@ struct SummaryEngineTests {
         #expect(summary.contains("传家宝桌子不必铺布"))
     }
 
+    @Test func reduceFallsBackWhenStructuredInputIsEmptyButDetailsCanRender() async throws {
+        let timestamp = Date(timeIntervalSince1970: 1_000_000)
+        let note = SessionRecord.ChunkNote(
+            headline: "术语",
+            startedAt: timestamp,
+            summaryRecords: [
+                .init(
+                    kind: .term,
+                    source: .transcript,
+                    sourceIDs: ["m001"],
+                    sourceIndex: 0,
+                    timestamp: timestamp,
+                    text: "Loqi 是本地转写工具")
+            ])
+        let missingModel = ModelOption(
+            id: "loqi-tests/missing-model",
+            displayName: "Missing test model",
+            requiredHeadroom: 1,
+            downloadBytes: 1)
+        let engine = SummaryEngine(llm: LLMService(model: missingModel))
+
+        let summary = try await engine.reduce(
+            notes: [note],
+            style: .meeting,
+            length: .detailed,
+            in: .english)
+
+        #expect(summary.contains("## Details"))
+        #expect(summary.contains("Loqi 是本地转写工具"))
+    }
+
     @Test func reduceWithoutStitchedDetailsDoesNotWaitForLLM() async throws {
         let llm = LLMService()
         await llm.setBackgrounded(true)
@@ -344,6 +387,30 @@ struct SummaryEngineTests {
         #expect(!parsed.isEmpty)
         #expect(PromptBuilder.hasDegenerateRepetition(parsed.joinedValues))
         #expect(summary.contains("传家宝桌子不必铺布"))
+    }
+
+    @Test func reducedSummaryFallsBackWhenStructuredOutputOmitsPopulatedSection() {
+        var parsed = PromptBuilder.ParsedStructuredSummary(style: .meeting)
+        parsed.overview = ["会议讨论发布安排。"]
+        let note = SessionRecord.ChunkNote(
+            headline: "发布计划",
+            startedAt: Date(timeIntervalSince1970: 1_000_000),
+            facts: ["需要同步发布材料"],
+            decisions: ["六月发布"],
+            actions: ["王经理确认供应商"])
+
+        let summary = SummaryEngine.renderReducedSummary(
+            raw: "",
+            parsed: parsed,
+            notes: [note],
+            style: .meeting,
+            length: .standard,
+            in: .chinese,
+            stitchDetails: true)
+
+        #expect(summary.contains("## 决定"))
+        #expect(summary.contains("六月发布"))
+        #expect(summary.contains("## 待办事项"))
     }
 
     @Test func reducedDetailedSummaryStitchesDeterministicDetails() {
