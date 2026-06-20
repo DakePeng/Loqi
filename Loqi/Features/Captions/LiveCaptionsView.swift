@@ -50,21 +50,6 @@ struct LiveCaptionsView: View {
     @State private var photoItem: PhotosPickerItem?
     @State private var viewingAttachment: SessionRecord.Attachment?
 
-    /// Push target after the post-stop scenario step: the session detail —
-    /// One card per coherent stretch of speech: same speaker, no long
-    /// pause between utterances, and bounded length — an approximation of
-    /// semantic segments that needs no extra ML.
-    private struct Segment: Identifiable {
-        let id: UUID            // first entry's id — stable
-        let speaker: Int?
-        var entries: [CaptionEntry]
-    }
-
-    /// A pause this long starts a new card even for the same speaker.
-    private static let segmentGap: TimeInterval = 12
-    /// Cards stay "little": cap utterances per card.
-    private static let segmentMaxEntries = 4
-
     private var sourceSelection: RecognitionLanguageSelection {
         RecognitionLanguageSelection(rawValue: sourceRaw)
     }
@@ -233,31 +218,10 @@ struct LiveCaptionsView: View {
         }
     }
 
-    /// Group entries into cards: same speaker, short gaps, bounded size.
-    /// Unattributed entries (the volatile one, or diarization off) attach
-    /// to the current card.
-    private func segments(from entries: [CaptionEntry]) -> [Segment] {
-        var segments: [Segment] = []
-        for entry in entries {
-            if var last = segments.last,
-               entry.speaker == nil || entry.speaker == last.speaker,
-               last.entries.count < Self.segmentMaxEntries,
-               let previous = last.entries.last,
-               entry.createdAt.timeIntervalSince(previous.createdAt) < Self.segmentGap {
-                last.entries.append(entry)
-                segments[segments.count - 1] = last
-            } else {
-                segments.append(Segment(
-                    id: entry.id, speaker: entry.speaker, entries: [entry]))
-            }
-        }
-        return segments
-    }
-
     /// Transcript rows: segment cards with attached photos interleaved at
     /// the moment they were taken.
     private enum LiveRow: Identifiable {
-        case segment(Segment)
+        case segment(CaptionSegment)
         case photo(SessionRecord.Attachment)
 
         var id: UUID {
@@ -268,8 +232,7 @@ struct LiveCaptionsView: View {
         }
     }
 
-    private func rows(from entries: [CaptionEntry]) -> [LiveRow] {
-        let segments = segments(from: entries)
+    private func rows(segments: [CaptionSegment]) -> [LiveRow] {
         let attachments = pipeline.liveAttachments
         guard !attachments.isEmpty else { return segments.map(LiveRow.segment) }
         var rows: [LiveRow] = []
@@ -290,7 +253,7 @@ struct LiveCaptionsView: View {
         [.blue, .green, .orange, .purple, .pink, .teal]
 
     private func transcript(_ entries: [CaptionEntry]) -> some View {
-        let liveRows = rows(from: entries)
+        let liveRows = rows(segments: pipeline.store.segments())
         let scrollBottomID = liveRows.last?.id ?? entries.last?.id
         return ScrollViewReader { proxy in
             ScrollView {
@@ -731,7 +694,7 @@ struct LiveCaptionsView: View {
 
     /// One card: speaker chip (when separating), then the segment's
     /// utterances. The card holding the newest entry renders prominent.
-    private func segmentCard(_ segment: Segment, lastEntryID: UUID?) -> some View {
+    private func segmentCard(_ segment: CaptionSegment, lastEntryID: UUID?) -> some View {
         let isLive = segment.entries.contains { $0.id == lastEntryID }
         let accent = segment.speaker.map {
             Self.speakerColors[$0 % Self.speakerColors.count]

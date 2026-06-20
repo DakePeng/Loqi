@@ -10,7 +10,11 @@ import Observation
 @MainActor
 @Observable
 final class CaptionStore {
-    private(set) var entries: [CaptionEntry] = []
+    private(set) var entries: [CaptionEntry] = [] {
+        didSet { cachedSegments = nil }
+    }
+
+    @ObservationIgnored private var cachedSegments: [CaptionSegment]?
 
     /// Entry currently receiving volatile updates, if any.
     private(set) var activeEntryID: UUID?
@@ -27,6 +31,13 @@ final class CaptionStore {
     /// `onEvict` so they're persisted, never silently lost.
     private let maxEntries = 600
     private let prunedEntries = 500
+
+    func segments() -> [CaptionSegment] {
+        if let cached = cachedSegments { return cached }
+        let built = CaptionGrouping.segments(from: entries)
+        cachedSegments = built
+        return built
+    }
 
     // MARK: Volatile lifecycle
 

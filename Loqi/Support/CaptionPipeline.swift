@@ -177,6 +177,7 @@ final class CaptionPipeline {
     /// Serializes crash-journal writes off the main actor, coalescing the
     /// per-utterance snapshots so encoding + disk I/O never blocks captions.
     private let journalWriter = JournalWriter()
+    private var startupTask: Task<Void, Never>?
     /// Scene is in the background. While true, no Metal-backed work may
     /// start — captions and the recorder run alone.
     private(set) var isBackgrounded = false
@@ -283,11 +284,15 @@ final class CaptionPipeline {
             self?.isRunning ?? false
         }
 
-        // A journal on disk means the last process died mid-recording —
-        // recover BEFORE the orphan sweep, which would otherwise delete
-        // the very audio recovery exists to save.
-        recoverInterruptedSession()
-        archive.sweepOrphans()
+        // Load history before recovery/sweep. Sweeping an empty, unloaded
+        // archive would delete every recording; recovery also dedupes
+        // against loaded sessions.
+        startupTask = Task { @MainActor [weak self] in
+            guard let self else { return }
+            await self.archive.loadIfNeeded()
+            self.recoverInterruptedSession()
+            self.archive.sweepOrphans()
+        }
 
         // UIKit's memory warning only arrives in the foreground; a
         // dispatch source also fires while recording with the screen
@@ -417,6 +422,7 @@ final class CaptionPipeline {
     /// Start a recording session.
     func start(route: RecognitionRoute) async throws {
         try await serialized { [self] in
+            await startupTask?.value
             guard phase == .idle else { return }
             try await beginSession(route: route)
         }
@@ -660,32 +666,23 @@ final class CaptionPipeline {
         return String(text.suffix(400))
     }
 
-    /// Snapshot the running session to the crash journal: a ready-to-archive
-    /// record mirroring exactly what a clean stop would save right now.
-    /// Called at utterance cadence — a small atomic JSON write.
+    /// Snapshot the running session to the crash journal.
     private func writeJournal() {
         guard let sessionID, let startedAt = sessionStartedAt else { return }
-        var record = SessionRecord(
-            id: sessionID,
+        let inputs = JournalSnapshotInputs(
+            sessionID: sessionID,
             mode: .captions,
             startedAt: startedAt,
-            endedAt: .now,
-            entries: SessionArchive.mappedEntries(
-                from: archivableEntries,
-                startedAt: startedAt,
-                timeline: audioAnchors.isEmpty ? nil : AudioTimeline(anchors: audioAnchors)),
-            speakerNames: speakerNames)
-        record.recordingSpeakerCount = captionSpeakerCount
-        if recorder != nil {
-            record.audioFileName = SessionRecorder.fileName(for: sessionID)
-        }
-        if !liveNotes.isEmpty {
-            record.chunkNotes = liveNotes
-            record.liveNotesEndEntryID = notesEndEntryID
-        }
-        if !liveAttachments.isEmpty { record.attachments = liveAttachments }
-        let snapshot = record
-        Task { await journalWriter.write(snapshot) }
+            evicted: evictedEntries,
+            live: store.entries,
+            timeline: audioAnchors.isEmpty ? nil : AudioTimeline(anchors: audioAnchors),
+            speakerNames: speakerNames,
+            recordingSpeakerCount: captionSpeakerCount,
+            audioFileName: recorder != nil ? SessionRecorder.fileName(for: sessionID) : nil,
+            chunkNotes: liveNotes,
+            notesEndEntryID: notesEndEntryID,
+            attachments: liveAttachments)
+        Task { await journalWriter.write(building: inputs) }
     }
 
     private func endSession() async {

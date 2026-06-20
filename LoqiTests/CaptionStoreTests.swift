@@ -177,4 +177,22 @@ struct CaptionStoreTests {
         let second = try #require(entries.last)
         #expect(abs(second.createdAt.timeIntervalSince(first.createdAt) - 2.5) < 0.01)
     }
+
+    @Test func segmentsGroupAndRecomputeAfterMutation() {
+        let store = CaptionStore()
+        let direction = LanguagePair(source: .english, target: .english)
+        store.finalizeActive(text: "first", direction: direction)
+        let firstCount = store.segments().count
+        #expect(firstCount == 1)
+
+        store.finalizeActive(text: "second", direction: direction)
+        #expect(store.segments().reduce(0) { $0 + $1.entries.count } == 2)
+    }
+
+    @Test func segmentsCacheReturnsEqualResultWithoutMutation() {
+        let store = CaptionStore()
+        let direction = LanguagePair(source: .english, target: .english)
+        store.finalizeActive(text: "hello", direction: direction)
+        #expect(store.segments() == store.segments())
+    }
 }

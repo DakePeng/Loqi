@@ -22,6 +22,14 @@ struct SessionJournalTests {
             entries: entries)
     }
 
+    private func eventually(_ condition: () -> Bool) async -> Bool {
+        for _ in 0..<100 {
+            if condition() { return true }
+            try? await Task.sleep(for: .milliseconds(10))
+        }
+        return condition()
+    }
+
     @Test func roundTripPreservesTheSnapshot() {
         defer { SessionJournal.clear() }
         var record = makeRecord()
@@ -62,7 +70,7 @@ struct SessionJournalTests {
     /// A journal left by a dead process surfaces as an archived session
     /// and the post-stop card in "interrupted" framing; the journal is
     /// consumed so the next launch is clean.
-    @Test func pipelineRecoversInterruptedSession() {
+    @Test func pipelineRecoversInterruptedSession() async {
         SessionJournal.clear()
         let record = makeRecord()
         SessionJournal.write(record)
@@ -73,7 +81,12 @@ struct SessionJournalTests {
             SessionJournal.clear()
         }
 
-        #expect(pipeline.archive.sessions.contains { $0.id == record.id })
+        #expect(await eventually {
+            pipeline.archive.sessions.contains { $0.id == record.id }
+                && pipeline.lastFinishedSessionID == record.id
+                && pipeline.lastFinishedWasInterrupted
+                && SessionJournal.read() == nil
+        })
         #expect(pipeline.lastFinishedSessionID == record.id)
         #expect(pipeline.lastFinishedWasInterrupted)
         #expect(SessionJournal.read() == nil)
@@ -81,19 +94,24 @@ struct SessionJournalTests {
 
     /// The crash can race the clean shutdown: if the session already made
     /// it into the archive, recovery must not duplicate it.
-    @Test func recoverySkipsAlreadyArchivedSession() {
+    @Test func recoverySkipsAlreadyArchivedSession() async {
         SessionJournal.clear()
         let record = makeRecord()
 
-        let first = CaptionPipeline(llm: LLMService())
-        first.archive.add(record)
+        let archive = SessionArchive()
+        await archive.loadIfNeeded()
+        archive.add(record)
         defer {
-            first.archive.delete(id: record.id)
+            archive.delete(id: record.id)
             SessionJournal.clear()
         }
         SessionJournal.write(record)
 
         let second = CaptionPipeline(llm: LLMService())
+        #expect(await eventually {
+            second.archive.sessions.filter { $0.id == record.id }.count == 1
+                && SessionJournal.read() == nil
+        })
         #expect(second.archive.sessions.filter { $0.id == record.id }.count == 1)
         #expect(second.lastFinishedSessionID == nil)
     }

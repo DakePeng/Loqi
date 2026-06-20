@@ -21,6 +21,8 @@ struct SessionArtifacts: Sendable {
 @Observable
 final class SessionArchive {
     private(set) var sessions: [SessionRecord] = []
+    private var didLoad = false
+    @ObservationIgnored private var deletedSessionIDs: Set<UUID> = []
 
     private static var directory: URL {
         URL.applicationSupportDirectory.appending(path: "Sessions", directoryHint: .isDirectory)
@@ -43,15 +45,14 @@ final class SessionArchive {
         attachmentsDirectory.appending(path: fileName)
     }
 
-    init() {
-        load()
-    }
+    init() {}
 
     /// Delete recording/attachment files no session references. Called by
     /// the pipeline AFTER crash recovery has claimed the interrupted
     /// session's files — sweeping in init would destroy exactly the audio
     /// recovery exists to save.
     func sweepOrphans() {
+        guard didLoad else { return }
         sweepOrphanedRecordings()
         sweepOrphanedAttachments()
     }
@@ -168,13 +169,15 @@ final class SessionArchive {
 
     func delete(at offsets: IndexSet) {
         for index in offsets {
+            let record = sessions[index]
+            deletedSessionIDs.insert(record.id)
             try? FileManager.default.removeItem(
-                at: Self.directory.appending(path: "\(sessions[index].id.uuidString).json"))
-            if let fileName = sessions[index].audioFileName {
+                at: Self.directory.appending(path: "\(record.id.uuidString).json"))
+            if let fileName = record.audioFileName {
                 try? FileManager.default.removeItem(
                     at: Self.recordingURL(fileName: fileName))
             }
-            for attachment in sessions[index].attachments ?? [] {
+            for attachment in record.attachments ?? [] {
                 try? FileManager.default.removeItem(
                     at: Self.attachmentURL(fileName: attachment.fileName))
             }
@@ -210,9 +213,15 @@ final class SessionArchive {
     /// Delete recording files no session references (e.g. a crash between
     /// recording and archiving). Pure decision logic is static for tests.
     nonisolated static func orphanedRecordings(
-        onDisk: Set<String>, referenced: Set<String>
+        onDisk: Set<String>,
+        referenced: Set<String>,
+        protectedBasenames: Set<String> = []
     ) -> Set<String> {
-        onDisk.subtracting(referenced)
+        let protected = onDisk.filter {
+            protectedBasenames.contains(
+                URL(fileURLWithPath: $0).deletingPathExtension().lastPathComponent)
+        }
+        return onDisk.subtracting(referenced).subtracting(protected)
     }
 
     private func sweepOrphanedRecordings() {
@@ -221,7 +230,13 @@ final class SessionArchive {
             at: Self.recordingsDirectory, includingPropertiesForKeys: nil) else { return }
         let onDisk = Set(files.map(\.lastPathComponent))
         let referenced = Set(sessions.compactMap(\.audioFileName))
-        for orphan in Self.orphanedRecordings(onDisk: onDisk, referenced: referenced) {
+        let importingIDs = Set(sessions.compactMap {
+            $0.importing == true ? $0.id.uuidString : nil
+        })
+        for orphan in Self.orphanedRecordings(
+            onDisk: onDisk,
+            referenced: referenced,
+            protectedBasenames: importingIDs) {
             try? fm.removeItem(at: Self.recordingURL(fileName: orphan))
         }
     }
@@ -241,24 +256,52 @@ final class SessionArchive {
 
     // MARK: Persistence
 
-    private func load() {
+    nonisolated static func decodeAll(in directory: URL) -> [SessionRecord] {
         let fm = FileManager.default
         guard let files = try? fm.contentsOfDirectory(
-            at: Self.directory, includingPropertiesForKeys: nil) else { return }
+            at: directory, includingPropertiesForKeys: nil) else { return [] }
         let decoder = JSONDecoder()
         decoder.dateDecodingStrategy = .iso8601
-        let decoded = files
+        return files
             .filter { $0.pathExtension == "json" }
             .compactMap { try? decoder.decode(SessionRecord.self, from: Data(contentsOf: $0)) }
+    }
+
+    nonisolated static func mergedLoadedSessions(
+        decoded: [SessionRecord],
+        current: [SessionRecord],
+        deletedIDs: Set<UUID>
+    ) -> [SessionRecord] {
+        var byID: [UUID: SessionRecord] = [:]
+        for record in decoded where record.importing != true && !deletedIDs.contains(record.id) {
+            byID[record.id] = record
+        }
+        for record in current where !deletedIDs.contains(record.id) {
+            byID[record.id] = record
+        }
+        return byID.values.sorted { $0.startedAt > $1.startedAt }
+    }
+
+    func loadIfNeeded() async {
+        guard !didLoad else { return }
+        let directory = Self.directory
+        let decoded = await Task.detached {
+            Self.decodeAll(in: directory)
+        }.value
         // Records still marked importing are tombstones of a kill
         // mid-import: no transcript was ever written, so sweep them.
-        for abandoned in decoded where abandoned.importing == true {
+        let fm = FileManager.default
+        let currentIDs = Set(sessions.map(\.id))
+        for abandoned in decoded where abandoned.importing == true
+            && !currentIDs.contains(abandoned.id) {
             try? fm.removeItem(
-                at: Self.directory.appending(path: "\(abandoned.id.uuidString).json"))
+                at: directory.appending(path: "\(abandoned.id.uuidString).json"))
         }
-        sessions = decoded
-            .filter { $0.importing != true }
-            .sorted { $0.startedAt > $1.startedAt }
+        sessions = Self.mergedLoadedSessions(
+            decoded: decoded,
+            current: sessions,
+            deletedIDs: deletedSessionIDs)
+        didLoad = true
     }
 
     private func persist(_ record: SessionRecord) {

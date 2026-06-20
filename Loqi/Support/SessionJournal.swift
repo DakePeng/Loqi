@@ -35,6 +35,21 @@ enum SessionJournal {
     }
 }
 
+struct JournalSnapshotInputs: Sendable {
+    let sessionID: UUID
+    let mode: SessionMode
+    let startedAt: Date
+    let evicted: [CaptionEntry]
+    let live: [CaptionEntry]
+    let timeline: AudioTimeline?
+    let speakerNames: [Int: String]
+    let recordingSpeakerCount: Int
+    let audioFileName: String?
+    let chunkNotes: [SessionRecord.ChunkNote]
+    let notesEndEntryID: UUID?
+    let attachments: [SessionRecord.Attachment]
+}
+
 /// Serializes crash-journal disk writes off the caller (the @MainActor
 /// pipeline) and coalesces bursts: only the latest snapshot between drains is
 /// encoded and written, so a finalized utterance never blocks the main actor
@@ -42,13 +57,44 @@ enum SessionJournal {
 /// snapshot and removes the file, so a clean stop can't be overtaken by an
 /// in-flight write that would resurrect the journal.
 actor JournalWriter {
-    private var pending: SessionRecord?
+    private enum PendingSnapshot {
+        case record(SessionRecord)
+        case inputs(JournalSnapshotInputs)
+    }
+
+    private var pending: PendingSnapshot?
     private var draining = false
+
+    nonisolated static func buildJournalRecord(from inputs: JournalSnapshotInputs) -> SessionRecord {
+        var record = SessionRecord(
+            id: inputs.sessionID,
+            mode: inputs.mode,
+            startedAt: inputs.startedAt,
+            endedAt: .now,
+            entries: SessionArchive.mappedEntries(
+                from: inputs.evicted + inputs.live,
+                startedAt: inputs.startedAt,
+                timeline: inputs.timeline),
+            speakerNames: inputs.speakerNames)
+        record.recordingSpeakerCount = inputs.recordingSpeakerCount
+        if inputs.audioFileName != nil { record.audioFileName = inputs.audioFileName }
+        if !inputs.chunkNotes.isEmpty {
+            record.chunkNotes = inputs.chunkNotes
+            record.liveNotesEndEntryID = inputs.notesEndEntryID
+        }
+        if !inputs.attachments.isEmpty { record.attachments = inputs.attachments }
+        return record
+    }
 
     /// Queue the latest session snapshot. Returns immediately; the encode and
     /// disk write happen on this actor's executor.
     func write(_ record: SessionRecord) {
-        pending = record
+        pending = .record(record)
+        startDraining()
+    }
+
+    func write(building inputs: JournalSnapshotInputs) {
+        pending = .inputs(inputs)
         startDraining()
     }
 
@@ -69,9 +115,14 @@ actor JournalWriter {
     private func drain() {
         // No `await` inside, so this runs atomically on the actor: a `write`
         // arriving meanwhile is picked up on the next iteration (last wins).
-        while let record = pending {
+        while let snapshot = pending {
             pending = nil
-            SessionJournal.write(record)
+            switch snapshot {
+            case .record(let record):
+                SessionJournal.write(record)
+            case .inputs(let inputs):
+                SessionJournal.write(Self.buildJournalRecord(from: inputs))
+            }
         }
         draining = false
     }
