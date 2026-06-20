@@ -76,7 +76,8 @@ enum OnboardingItemKind: String, CaseIterable, Identifiable {
     case translationPacks
     case senseVoice
     case diarizer
-    case llm
+    case liveLLM
+    case summaryLLM
     case qwen3ASR
 
     var id: String { rawValue }
@@ -87,7 +88,8 @@ enum OnboardingItemKind: String, CaseIterable, Identifiable {
         case .translationPacks: String(localized: "Translation language packs")
         case .senseVoice: String(localized: "SenseVoice live recognition")
         case .diarizer: String(localized: "Speaker recognition")
-        case .llm: String(localized: "Qwen3.5 2B AI model")
+        case .liveLLM: String(localized: "Live AI model (0.8B)")
+        case .summaryLLM: String(localized: "Summary AI model (2B)")
         case .qwen3ASR: String(localized: "Qwen3-ASR re-transcription")
         }
     }
@@ -102,8 +104,10 @@ enum OnboardingItemKind: String, CaseIterable, Identifiable {
             String(localized: "More accurate live captions for 中文, English, 日本語, 한국어")
         case .diarizer:
             String(localized: "Tells voices apart in recordings")
-        case .llm:
-            String(localized: "Translations, summaries, titles and chat")
+        case .liveLLM:
+            String(localized: "Fast on-device model for live translation and notes")
+        case .summaryLLM:
+            String(localized: "Higher-quality summaries, titles and chat")
         case .qwen3ASR:
             String(localized: "Slower, high-accuracy second pass for recordings")
         }
@@ -116,21 +120,15 @@ enum OnboardingItemKind: String, CaseIterable, Identifiable {
         case .appleSpeech, .translationPacks: nil
         case .senseVoice: SenseVoiceModelStore.totalExpectedBytes
         case .diarizer: StreamingDiarizer.approximateDownloadBytes
-        case .llm: ModelCatalog.onboardingLLMBytes
+        case .liveLLM: ModelCatalog.liveModel.downloadBytes
+        case .summaryLLM: ModelCatalog.qwen35_2b.downloadBytes
         case .qwen3ASR: Qwen3ASRModelStore.totalExpectedBytes
         }
     }
 
-    static func llmModelsInstalled(
-        isDownloaded: (ModelOption) -> Bool = { LLMService.isDownloaded(model: $0) }
-    ) -> Bool {
-        ModelCatalog.requiredModels(summaryModel: ModelCatalog.default)
-            .allSatisfy(isDownloaded)
-    }
-
     var isRecommended: Bool {
         switch self {
-        case .translationPacks, .senseVoice, .diarizer, .llm: true
+        case .translationPacks, .senseVoice, .diarizer, .liveLLM, .summaryLLM: true
         case .appleSpeech, .qwen3ASR: false
         }
     }
@@ -141,13 +139,17 @@ enum OnboardingItemKind: String, CaseIterable, Identifiable {
         self == .appleSpeech || self == .translationPacks
     }
 
+    var usesSharedLLMWorker: Bool {
+        self == .liveLLM || self == .summaryLLM
+    }
+
     func systemAssetProgressText(_ caption: String) -> String {
         switch self {
         case .appleSpeech:
             String(localized: "Downloading \(caption)…")
         case .translationPacks:
             String(localized: "Preparing \(caption)…")
-        case .senseVoice, .diarizer, .llm, .qwen3ASR:
+        case .senseVoice, .diarizer, .liveLLM, .summaryLLM, .qwen3ASR:
             caption
         }
     }
@@ -159,7 +161,8 @@ enum OnboardingItemKind: String, CaseIterable, Identifiable {
         case .appleSpeech, .translationPacks: false
         case .senseVoice: SenseVoiceModelStore.isInstalled
         case .diarizer: StreamingDiarizer.isModelCached
-        case .llm: Self.llmModelsInstalled()
+        case .liveLLM: LLMService.isDownloaded(model: ModelCatalog.liveModel)
+        case .summaryLLM: LLMService.isDownloaded(model: ModelCatalog.qwen35_2b)
         case .qwen3ASR: Qwen3ASRModelStore.isInstalled
         }
     }
@@ -170,7 +173,7 @@ enum OnboardingItemKind: String, CaseIterable, Identifiable {
 
     /// The recommended set the model step pre-checks.
     static var defaultSelection: Set<OnboardingItemKind> {
-        [.translationPacks, .senseVoice, .diarizer, .llm]
+        [.translationPacks, .senseVoice, .diarizer, .liveLLM, .summaryLLM]
     }
 
     /// Translation packs are system-managed and checked asynchronously, so

@@ -102,6 +102,28 @@ struct ImportEngineTests {
     }
 }
 
+struct ImportAudioSheetTests {
+    @Test func importLanguageDoesNotInheritRecordingAuto() {
+        #expect(ImportAudioSheet.importLanguageRaw("auto") == AppLanguage.english.rawValue)
+        #expect(ImportAudioSheet.importLanguageRaw(nil) == AppLanguage.english.rawValue)
+        #expect(ImportAudioSheet.importLanguageRaw("chinese") == AppLanguage.chinese.rawValue)
+    }
+}
+
+struct SpeakerDefaultTests {
+    @Test func missingSpeakerModelDefaultsLiveCaptionsToOneVoice() {
+        let value = VoiceprintService.defaultLiveSpeakerPickerValue(isModelCached: false)
+        #expect(value == 0)
+        #expect(VoiceprintService.clusterCap(forPickerValue: value) == nil)
+    }
+
+    @Test func cachedSpeakerModelStillDefaultsLiveCaptionsToOneVoice() {
+        let value = VoiceprintService.defaultLiveSpeakerPickerValue(isModelCached: true)
+        #expect(value == 0)
+        #expect(VoiceprintService.clusterCap(forPickerValue: value) == nil)
+    }
+}
+
 /// The Qwen3-ASR store's file manifest: per-source paths and the local
 /// layout the recognizer config depends on (tokenizer/ subdirectory).
 struct Qwen3ASRModelStoreTests {

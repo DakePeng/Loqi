@@ -13,7 +13,7 @@ struct ImportAudioSheet: View {
     @Bindable var pipeline: CaptionPipeline
     @Environment(\.dismiss) private var dismiss
 
-    @AppStorage("captions.source") private var sourceRaw = AppLanguage.english.rawValue
+    @State private var sourceRaw: String
     /// Shared with the Record screen: empty = transcribe only (default).
     @AppStorage("captions.translation") private var translationRaw = ""
     // -1 = Auto (diarize). Default on so imports get speaker labels. Its own
@@ -29,6 +29,20 @@ struct ImportAudioSheet: View {
     /// diarization model hasn't been downloaded yet — consent before a
     /// first-use network fetch.
     @State private var showSpeakerDownloadPrompt = false
+
+    init(url: URL, pipeline: CaptionPipeline) {
+        self.url = url
+        self.pipeline = pipeline
+        _sourceRaw = State(initialValue: Self.importLanguageRaw(
+            UserDefaults.standard.string(forKey: "captions.source")))
+    }
+
+    static func importLanguageRaw(_ rawValue: String?) -> String {
+        guard let rawValue, AppLanguage(rawValue: rawValue) != nil else {
+            return AppLanguage.english.rawValue
+        }
+        return rawValue
+    }
 
     private var translationTarget: AppLanguage? { AppLanguage(rawValue: translationRaw) }
     private var source: AppLanguage { AppLanguage(rawValue: sourceRaw) ?? .english }
@@ -60,6 +74,7 @@ struct ImportAudioSheet: View {
                         }
                     }
                     .onChange(of: sourceRaw) {
+                        UserDefaults.standard.set(sourceRaw, forKey: "captions.source")
                         if translationRaw == source.rawValue { translationRaw = "" }
                     }
                     Picker("Translation", selection: $translationRaw) {

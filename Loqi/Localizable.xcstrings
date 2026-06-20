@@ -1353,6 +1353,23 @@
         }
       }
     },
+    "Download live model" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "ライブモデルをダウンロード"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "下载实时模型"
+          }
+        }
+      }
+    },
     "Download model now" : {
       "extractionState" : "stale",
       "localizations" : {
@@ -1417,6 +1434,23 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "下载说话人模型"
+          }
+        }
+      }
+    },
+    "Download summary model" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "要約モデルをダウンロード"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "下载总结模型"
           }
         }
       }
@@ -1825,6 +1859,23 @@
         }
       }
     },
+    "Fast on-device model for live translation and notes" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "リアルタイム翻訳とメモ用の高速オンデバイスモデル"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "用于实时翻译和笔记的快速设备端模型"
+          }
+        }
+      }
+    },
     "File" : {
       "extractionState" : "stale",
       "localizations" : {
@@ -1955,6 +2006,23 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "高精度重新转写"
+          }
+        }
+      }
+    },
+    "Higher-quality summaries, titles and chat" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "より高品質な要約・タイトル・チャット"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "更高质量的总结、标题和聊天"
           }
         }
       }
@@ -2111,6 +2179,7 @@
       }
     },
     "Keep each session's audio alongside its transcript. Recordings are stored only on this iPhone and are deleted with their session." : {
+      "extractionState" : "stale",
       "localizations" : {
         "ja" : {
           "stringUnit" : {
@@ -2125,6 +2194,9 @@
           }
         }
       }
+    },
+    "Keep each session's audio alongside its transcript. Recordings are stored only on this iPhone and are deleted with their session. Turning off “Keep screen on” lets the display sleep during long recordings — captions keep running and it runs noticeably cooler." : {
+
     },
     "Keep Loqi open while models download." : {
       "localizations" : {
@@ -2229,6 +2301,23 @@
         }
       }
     },
+    "Live AI model (0.8B)" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "ライブAIモデル（0.8B）"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "实时 AI 模型（0.8B）"
+          }
+        }
+      }
+    },
     "Live Captions" : {
       "extractionState" : "stale",
       "localizations" : {
@@ -2242,6 +2331,57 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "实时字幕"
+          }
+        }
+      }
+    },
+    "Live model" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "ライブモデル"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "实时模型"
+          }
+        }
+      }
+    },
+    "Live model files" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "ライブモデルファイル"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "实时模型文件"
+          }
+        }
+      }
+    },
+    "Live recording always uses the fast Qwen3.5 0.8B model so captions and live translation stay responsive and cool. After a recording, summaries, titles, vocabulary and chat use the summary model you pick above." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "録音中は常に高速なQwen3.5 0.8Bモデルを使用し、字幕とリアルタイム翻訳を快適かつ低発熱に保ちます。録音後は、要約・タイトル・単語・チャットに上で選んだ要約モデルを使用します。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "录制时始终使用快速的 Qwen3.5 0.8B 模型，让字幕和实时翻译保持流畅、低发热。录制结束后，总结、标题、生词和聊天会使用你在上方选择的总结模型。"
           }
         }
       }
@@ -2318,6 +2458,9 @@
           }
         }
       }
+    },
+    "Lowers sustained heat during long recordings: slower live-caption updates, fewer speech recognition threads, and refinement only on longer sentences. Takes effect on the next recording." : {
+
     },
     "Markdown" : {
       "extractionState" : "stale",
@@ -2880,6 +3023,7 @@
 
     },
     "One local model powers better translations, summaries, titles, chat and vocabulary suggestions. Turning AI features off disables all of them. The model downloads only when you ask — here, or when a feature offers it." : {
+      "extractionState" : "stale",
       "localizations" : {
         "ja" : {
           "stringUnit" : {
@@ -3027,6 +3171,9 @@
           }
         }
       }
+    },
+    "Performance" : {
+
     },
     "Photo library" : {
       "extractionState" : "stale",
@@ -4523,6 +4670,23 @@
         }
       }
     },
+    "Summary AI model (2B)" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "要約AIモデル（2B）"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "总结 AI 模型（2B）"
+          }
+        }
+      }
+    },
     "Summary failed — try again." : {
       "extractionState" : "stale",
       "localizations" : {
@@ -4553,6 +4717,40 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "摘要长度"
+          }
+        }
+      }
+    },
+    "Summary model" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "要約モデル"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "总结模型"
+          }
+        }
+      }
+    },
+    "Summary model files" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "要約モデルファイル"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "总结模型文件"
           }
         }
       }

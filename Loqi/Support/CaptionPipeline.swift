@@ -222,9 +222,11 @@ final class CaptionPipeline {
 
     /// Captions-mode speaker picker value; 0/1 = diarization off, -1 =
     /// Auto, 2+ = hard cap (see VoiceprintService.clusterCap). Unset defaults
-    /// to off so recording never downloads the speaker model silently.
+    /// stay off until the model is cached, so first recording never fetches
+    /// speaker weights without consent.
     var captionSpeakerCount: Int {
-        (UserDefaults.standard.object(forKey: "captions.speakerCount") as? Int) ?? 0
+        (UserDefaults.standard.object(forKey: "captions.speakerCount") as? Int)
+            ?? VoiceprintService.defaultLiveSpeakerPickerValue()
     }
 
     /// Persisted download source for the speaker model (Settings key

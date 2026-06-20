@@ -109,15 +109,6 @@ enum ModelCatalog {
     /// fast tier, in which case the boundary swap is a no-op.
     static var summaryModel: ModelOption { current }
 
-    static func requiredModels(summaryModel: ModelOption = current) -> [ModelOption] {
-        summaryModel == liveModel ? [liveModel] : [summaryModel, liveModel]
-    }
-
-    /// Bytes onboarding pulls for the LLM step now that both tiers ship.
-    static var onboardingLLMBytes: Int64 {
-        requiredModels(summaryModel: `default`).map(\.downloadBytes).reduce(0, +)
-    }
-
     static let all = [qwen35_2b, qwen35_0_8b]
 
     static func option(for id: String) -> ModelOption {

@@ -319,6 +319,8 @@ Cheap wins (pieces already exist):
 - [ ] **Bilingual transcript export** — side-by-side source/translation
   from the lens data (cross-border teams, language learners). *Bilingual
   SRT shipped with #14; side-by-side markdown remains.*
+- [ ] **PDF + share-card export** — MD/SRT/VTT ship (#14); a clean PDF and
+  a shareable summary card cover the work/social sharing gap.
 - [ ] **Inline transcript edits** that feed hotwords ("teach the app"
   loop). *Partially done 2026-06-11:* Vocabulary tab (hotwords moved out
   of Settings) with alias support; speaker renames silently add hotwords;
@@ -330,6 +332,8 @@ Trust + durability:
 
 - [ ] **Encrypted backup / E2E iCloud sync** — a single-device archive
   contradicts the data-ownership pitch.
+- [ ] **App lock (Face ID / passcode)** — biometric gate on app open +
+  sensitive sessions; obvious fit for the privacy brand, none today.
 - [ ] **"Provably offline" UX** — post-download network kill-switch +
   zero-bytes-sent privacy screen; make the architecture visible.
 
@@ -342,17 +346,16 @@ Moat extensions:
   for deaf/HoH in-person use; HorizontalCaptionView is most of it.
 - [ ] **Weekly journal digest** — one reduce pass over the week's saved
   journal summaries.
-- [ ] **Mac app / desktop surface** — knowledge workers live at a desk;
-  meeting capture on a phone is awkward. Pipeline (ASR, LLM, diarization)
-  is already abstracted; a Catalyst or native SwiftUI Mac target reusing
-  `CaptionPipeline` would expand the use case against Granola/Otter where
-  they're strongest. Large effort, large payoff.
+- ~~**Mac app / desktop surface**~~ — **not a v1 surface.** The iPhone app
+  is the product focus; decide later whether to delete or revive the
+  existing `LoqiMac` target.
 - [ ] **App Store ship path** — iPhone 15+/iOS 26/dev signing are all
   adoption blockers today. Paid developer account ($99/yr), TestFlight
   beta, then public App Store submission is the path from "interesting
   project" to "daily tool."
 - [ ] Later: iPad layout · KV-cache prompt reuse · cross-session
-  voiceprints (biometric consent UX needed).
+  voiceprints (biometric consent UX needed) · Apple Watch quick-capture
+  (start/stop/flag) · Contacts → hotword import (seed names).
 
 ## Device verification queue (needs the physical iPhone)
 

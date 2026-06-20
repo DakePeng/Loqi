@@ -60,6 +60,8 @@ final class OnboardingDownloadModel {
     private var systemAssetQueue: [OnboardingItemKind] = []
     private var systemAssetWorker: Task<Void, Never>?
     private var modelWorkers: [OnboardingItemKind: Task<Void, Never>] = [:]
+    private var llmQueue: [OnboardingItemKind] = []
+    private var llmWorker: Task<Void, Never>?
     private var translationContinuation: CheckedContinuation<Void, Error>?
     private var translationTimeout: Task<Void, Never>?
     private(set) var translationPreparationPair: LanguagePair?
@@ -104,8 +106,13 @@ final class OnboardingDownloadModel {
         systemAssetQueue = pending.filter(\.usesSystemAssetProgress)
         startSystemAssetWorkerIfNeeded()
         for kind in pending where !kind.usesSystemAssetProgress {
-            startModelWorker(for: kind)
+            if kind.usesSharedLLMWorker {
+                llmQueue.append(kind)
+            } else {
+                startModelWorker(for: kind)
+            }
         }
+        startLLMWorkerIfNeeded()
     }
 
     /// Failed rows only: system assets go behind the current system asset;
@@ -116,6 +123,9 @@ final class OnboardingDownloadModel {
         if kind.usesSystemAssetProgress {
             systemAssetQueue.append(kind)
             startSystemAssetWorkerIfNeeded()
+        } else if kind.usesSharedLLMWorker {
+            llmQueue.append(kind)
+            startLLMWorkerIfNeeded()
         } else {
             startModelWorker(for: kind)
         }
@@ -129,6 +139,9 @@ final class OnboardingDownloadModel {
         systemAssetQueue.removeAll()
         systemAssetWorker?.cancel()
         systemAssetWorker = nil
+        llmQueue.removeAll()
+        llmWorker?.cancel()
+        llmWorker = nil
         modelWorkers.values.forEach { $0.cancel() }
         modelWorkers.removeAll()
         senseVoiceStore.cancelDownload()
@@ -155,8 +168,23 @@ final class OnboardingDownloadModel {
         }
     }
 
+    private func startLLMWorkerIfNeeded() {
+        guard llmWorker == nil, !llmQueue.isEmpty else { return }
+        llmWorker = Task { [weak self] in
+            guard let self else { return }
+            while !Task.isCancelled, !llmQueue.isEmpty {
+                let kind = llmQueue.removeFirst()
+                guard let item = item(for: kind), item.status == .pending else { continue }
+                item.status = .downloading
+                await download(kind, into: item)
+            }
+            llmWorker = nil
+        }
+    }
+
     private func startModelWorker(for kind: OnboardingItemKind) {
         guard !kind.usesSystemAssetProgress,
+              !kind.usesSharedLLMWorker,
               modelWorkers[kind] == nil,
               let item = item(for: kind),
               item.status == .pending else { return }
@@ -174,7 +202,8 @@ final class OnboardingDownloadModel {
         case .translationPacks: await downloadTranslationPacks(item)
         case .senseVoice: await downloadSenseVoice(item)
         case .diarizer: await downloadDiarizer(item)
-        case .llm: await downloadLLM(item)
+        case .liveLLM: await downloadSingleLLM(item, model: ModelCatalog.liveModel)
+        case .summaryLLM: await downloadSingleLLM(item, model: ModelCatalog.qwen35_2b)
         case .qwen3ASR: await downloadQwen3ASR(item)
         }
     }
@@ -341,47 +370,23 @@ final class OnboardingDownloadModel {
         }
     }
 
-    private func downloadLLM(_ item: Item) async {
-        item.speedometer.start(totalBytes: ModelCatalog.onboardingLLMBytes)
+    /// One LLM tier in isolation: bytes to disk, then unloaded — onboarding
+    /// wants the file present, not 0.8/1.75 GB resident while later items
+    /// (the other tier, Qwen3-ASR) may still download. The pipeline warm-loads
+    /// lazily when a session needs it.
+    private func downloadSingleLLM(_ item: Item, model: ModelOption) async {
+        item.speedometer.start(totalBytes: model.downloadBytes)
         let llm = pipeline.llm
         // The shared pipeline was constructed before the region step wrote
         // the source keys — sync the actor like SettingsView's .task does.
         await llm.setSource(region.llmSource)
-
-        let summary = ModelCatalog.default
-        let live = ModelCatalog.liveModel
-        let summaryShare = Double(summary.downloadBytes)
-            / Double(ModelCatalog.onboardingLLMBytes)
-
+        await llm.setModel(model)
         do {
-            await llm.setModel(summary)
-            do {
-                try await llm.load { fraction in
-                    Task { @MainActor in
-                        item.speedometer.update(fraction * summaryShare)
-                    }
-                }
-            } catch {
-                guard LLMService.isDownloaded(model: summary) else { throw error }
+            try await llm.load { fraction in
+                Task { @MainActor in item.speedometer.update(fraction) }
             }
-
-            await llm.setModel(live)
-            do {
-                try await llm.load { fraction in
-                    Task { @MainActor in
-                        item.speedometer.update(summaryShare + fraction * (1 - summaryShare))
-                    }
-                }
-            } catch {
-                guard LLMService.isDownloaded(model: live) else { throw error }
-            }
-
-            // Onboarding wants bytes on disk, not 1.5 GB resident while
-            // Qwen3-ASR may still download next; the pipeline warm-loads
-            // lazily when a session needs it.
             await llm.unload()
-
-            if LLMService.isDownloaded(model: summary), LLMService.isDownloaded(model: live) {
+            if LLMService.isDownloaded(model: model) {
                 item.speedometer.update(1)
                 item.status = .done
             } else {
@@ -392,7 +397,10 @@ final class OnboardingDownloadModel {
             item.status = .skipped
         } catch {
             await llm.unload()
-            item.status = .failed(error.localizedDescription)
+            // Tolerate a late error if the bytes actually landed.
+            item.status = LLMService.isDownloaded(model: model)
+                ? .done
+                : .failed(error.localizedDescription)
         }
     }
 }

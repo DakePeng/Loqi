@@ -3,10 +3,11 @@ import Testing
 @testable import Loqi
 
 struct RecordingIntentsTests {
-    @Test func missingDefaultsFallBackToEnglishTranscribeOnly() {
-        let direction = StartRecordingIntent.resolveDirection(
+    @Test func missingDefaultsUseAutoTranscribeOnly() {
+        let route = StartRecordingIntent.resolveRoute(
             sourceRaw: nil, translationRaw: nil)
-        #expect(direction == LanguagePair(source: .english, target: .english))
+        #expect(route.source == .auto)
+        #expect(route.target == nil)
     }
 
     @Test func emptyTranslationMeansTranscribeOnly() {

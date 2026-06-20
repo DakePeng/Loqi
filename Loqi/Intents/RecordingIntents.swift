@@ -55,9 +55,9 @@ struct StartRecordingIntent: AudioRecordingIntent {
     }
 
     /// Pure + testable. Raw values follow LiveCaptionsView's @AppStorage
-    /// conventions: source is an AppLanguage rawValue (missing/garbage →
-    /// English); an empty or unknown translation means transcribe-only
-    /// (target == source).
+    /// conventions: source is an AppLanguage rawValue (missing → Auto,
+    /// garbage → English); an empty or unknown translation means
+    /// transcribe-only (target == source).
     static func resolveDirection(
         sourceRaw: String?, translationRaw: String?
     ) -> LanguagePair {
@@ -67,7 +67,8 @@ struct StartRecordingIntent: AudioRecordingIntent {
     static func resolveRoute(
         sourceRaw: String?, translationRaw: String?
     ) -> RecognitionRoute {
-        let source = RecognitionLanguageSelection(rawValue: sourceRaw)
+        let source = RecognitionLanguageSelection(
+            rawValue: sourceRaw ?? RecognitionLanguageSelection.autoRawValue)
         return RecognitionRoute(
             source: source,
             target: translationRaw.flatMap(AppLanguage.init(rawValue:)))

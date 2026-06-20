@@ -72,15 +72,4 @@ struct ModelCatalogTests {
         #expect(ModelCatalog.summaryModel.id == ModelCatalog.current.id)
     }
 
-    @Test func onboardingBytesCoverBothModels() {
-        #expect(ModelCatalog.onboardingLLMBytes
-            == ModelCatalog.qwen35_2b.downloadBytes + ModelCatalog.qwen35_0_8b.downloadBytes)
-    }
-
-    @Test func requiredModelsIncludeSummaryAndLiveWithoutDuplicates() {
-        #expect(ModelCatalog.requiredModels(summaryModel: ModelCatalog.qwen35_2b)
-            == [ModelCatalog.qwen35_2b, ModelCatalog.qwen35_0_8b])
-        #expect(ModelCatalog.requiredModels(summaryModel: ModelCatalog.liveModel)
-            == [ModelCatalog.liveModel])
-    }
 }
