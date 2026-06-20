@@ -354,7 +354,8 @@ struct SummaryEngine {
     static func reduceInput(
         notes: [SessionRecord.ChunkNote], style: SummaryStyle
     ) -> String {
-        let records = SummaryRecordReducer.records(from: notes)
+        let records = SummaryRecordReducer.deduped(
+            SummaryRecordReducer.records(from: notes))
         var seen = Set<String>()
         var recent: [String] = []
 
@@ -456,27 +457,50 @@ struct SummaryEngine {
             if attempt == 0 { try Task.checkCancellation() }
         }
 
-        let summary: String
-        if parsed.isEmpty {
-            let plain = prompts.cleanSummary(raw)
-            if !plain.isEmpty, !PromptBuilder.hasDegenerateRepetition(plain) {
-                summary = plain
-            } else {
-                summary = SummaryRecordReducer.render(
-                    records: SummaryRecordReducer.records(from: notes),
-                    style: style,
-                    length: length,
-                    in: language,
-                    stitchDetails: stitchDetails)
-            }
-        } else {
-            guard !PromptBuilder.hasDegenerateRepetition(parsed.joinedValues)
-            else { throw SummaryError.generationFailed }
-            summary = prompts.renderSummaryMarkdown(parsed, in: language)
-        }
+        let summary = Self.renderReducedSummary(
+            raw: raw,
+            parsed: parsed,
+            notes: notes,
+            style: style,
+            length: length,
+            in: language,
+            stitchDetails: stitchDetails)
         guard !summary.isEmpty else { throw SummaryError.generationFailed }
         await progress?(1, 1)
         return summary
+    }
+
+    static func renderReducedSummary(
+        raw: String,
+        parsed: PromptBuilder.ParsedStructuredSummary,
+        notes: [SessionRecord.ChunkNote],
+        style: SummaryStyle,
+        length: SummaryLength,
+        in language: AppLanguage,
+        stitchDetails: Bool
+    ) -> String {
+        let prompts = PromptBuilder()
+        func fallback() -> String {
+            SummaryRecordReducer.render(
+                records: SummaryRecordReducer.records(from: notes),
+                style: style,
+                length: length,
+                in: language,
+                stitchDetails: stitchDetails)
+        }
+
+        if parsed.isEmpty {
+            let plain = prompts.cleanSummary(raw)
+            if !plain.isEmpty, !PromptBuilder.hasDegenerateRepetition(plain) {
+                return plain
+            } else {
+                return fallback()
+            }
+        } else {
+            guard !PromptBuilder.hasDegenerateRepetition(parsed.joinedValues)
+            else { return fallback() }
+            return prompts.renderSummaryMarkdown(parsed, in: language)
+        }
     }
 
     /// Best-effort scenario detection for the post-stop selection step.
@@ -777,7 +801,7 @@ enum SummaryRecordReducer {
         }
     }
 
-    private static func deduped(_ records: [Record]) -> [Record] {
+    static func deduped(_ records: [Record]) -> [Record] {
         let sorted = records.sorted { lhs, rhs in
             if lhs.timestamp != rhs.timestamp { return lhs.timestamp < rhs.timestamp }
             return lhs.sourceIndex < rhs.sourceIndex
