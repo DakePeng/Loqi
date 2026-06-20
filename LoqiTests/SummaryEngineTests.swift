@@ -256,6 +256,7 @@ struct SummaryEngineTests {
         #expect(!input.isEmpty)
         #expect(input.count <= 180)
         #expect(input.split(separator: "\n").allSatisfy { $0.contains(": ") })
+        #expect(input.contains("第 79 段"))
     }
 
     @Test func reduceFallsBackWhenGenerationThrows() async throws {

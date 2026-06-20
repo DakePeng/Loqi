@@ -362,7 +362,6 @@ struct SummaryEngine {
         var seen = Set<String>()
         var recent: [(label: String, key: String)] = []
         var lines: [String] = []
-        var characterCount = 0
 
         func actionText(_ record: SessionRecord.SummaryRecord) -> String {
             let owner = record.owner?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
@@ -414,28 +413,49 @@ struct SummaryEngine {
             return true
         }
 
-        func append(_ line: String) {
-            guard let maxCharacters else {
-                lines.append(line)
-                return
-            }
-            guard maxCharacters > 0 else { return }
-            let extra = line.count + (lines.isEmpty ? 0 : 1)
-            if characterCount + extra <= maxCharacters {
-                lines.append(line)
-                characterCount += extra
-            } else if lines.isEmpty {
-                lines.append(String(line.prefix(maxCharacters)))
-                characterCount = maxCharacters
-            }
-        }
-
         for record in records {
             guard let (label, text) = labelAndText(record),
                   keep(label, text) else { continue }
-            append("\(label): \(text)")
+            lines.append("\(label): \(text)")
+        }
+        if let maxCharacters {
+            lines = boundedReduceInputLines(lines, maxCharacters: maxCharacters)
         }
         return lines.joined(separator: "\n")
+    }
+
+    static func boundedReduceInputLines(
+        _ lines: [String], maxCharacters: Int
+    ) -> [String] {
+        guard maxCharacters > 0, !lines.isEmpty else { return [] }
+        let fullLength = lines.reduce(0) { $0 + $1.count } + lines.count - 1
+        guard fullLength > maxCharacters else { return lines }
+
+        let averageLength = max(1, fullLength / lines.count)
+        let targetCount = max(1, min(lines.count, maxCharacters / averageLength))
+        let selected: [Int]
+        if targetCount == 1 {
+            selected = [0]
+        } else {
+            selected = (0..<targetCount).map { slot in
+                Int((Double(slot) * Double(lines.count - 1)
+                    / Double(targetCount - 1)).rounded())
+            }
+        }
+
+        var result: [String] = []
+        var used = 0
+        for index in selected where result.last != lines[index] {
+            let line = lines[index]
+            let extra = line.count + (result.isEmpty ? 0 : 1)
+            guard used + extra <= maxCharacters else { continue }
+            result.append(line)
+            used += extra
+        }
+        if result.isEmpty, let first = lines.first {
+            return [String(first.prefix(maxCharacters))]
+        }
+        return result
     }
 
     /// Reduce phase: the final summary, written from notes alone. The
@@ -604,6 +624,7 @@ struct SummaryEngine {
         progress: @escaping @MainActor @Sendable (Int, Int) -> Void
     ) async throws -> (summary: String, notes: [SessionRecord.ChunkNote]) {
         let (uncovered, cached) = Self.uncoveredEntries(of: record)
+        let cachedOnly = uncovered.isEmpty && !cached.isEmpty
         if !uncovered.isEmpty {
             try await llm.load(policy: .requireDownloaded)
         }
@@ -628,6 +649,7 @@ struct SummaryEngine {
                 $0 + $1.sourceText.count
             },
             in: language,
+            stitchDetails: !cachedOnly,
             progress: { done, _ in
                 progress(mappedCount + done, totalSteps)
             })
