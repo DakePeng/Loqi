@@ -61,33 +61,24 @@ struct CaptionStoreTests {
         #expect(store.entry(for: entry.id)?.draftFailed == false)
     }
 
-    @Test func modesAreIsolated() {
+    @Test func clearDropsTranscriptAndActiveEntry() {
         let store = CaptionStore()
-        store.currentMode = .captions
         store.applyVolatile(text: "caption line", direction: enToZh)
-        store.finalizeActive(text: "caption line", direction: enToZh)
+        #expect(store.activeEntryID != nil)
 
-        store.currentMode = .conversation
-        store.applyVolatile(text: "chat line", direction: enToZh)
-        store.finalizeActive(text: "chat line", direction: enToZh)
+        store.clear()
 
-        #expect(store.entries(in: .captions).count == 1)
-        #expect(store.entries(in: .conversation).count == 1)
-
-        store.clear(.captions)
-        #expect(store.entries(in: .captions).isEmpty)
-        #expect(store.entries(in: .conversation).count == 1)
+        #expect(store.entries.isEmpty)
+        #expect(store.activeEntryID == nil)
     }
 
-    @Test func historyOnlyDrawsFromCurrentMode() {
+    @Test func historyDrawsFromFinalTranslatedEntries() {
         let store = CaptionStore()
-        store.currentMode = .captions
         store.applyVolatile(text: "lecture", direction: enToZh)
         if let entry = store.finalizeActive(text: "lecture", direction: enToZh) {
             store.setDraft("讲座", for: entry.id)
         }
-        store.currentMode = .conversation
-        #expect(store.recentHistory(limit: 6).isEmpty)
+        #expect(store.recentHistory(limit: 6).map(\.sourceText) == ["lecture"])
     }
 
     @Test func pruningKeepsNewestEntries() {
@@ -116,7 +107,7 @@ struct CaptionStoreTests {
         // Something was actually pushed out of the window…
         #expect(!evicted.isEmpty)
         // …and evicted + on-screen reconstructs every line, in order, once.
-        let reconstructed = (evicted + store.entries(in: .captions)).map(\.sourceText)
+        let reconstructed = (evicted + store.entries).map(\.sourceText)
         #expect(reconstructed == (0..<700).map { "line \($0)" })
     }
 
@@ -191,30 +182,17 @@ struct CaptionStoreTests {
         let store = CaptionStore()
         let direction = LanguagePair(source: .english, target: .english)
         store.finalizeActive(text: "first", direction: direction)
-        let firstCount = store.segments(in: .captions).count
+        let firstCount = store.segments().count
         #expect(firstCount == 1)
 
         store.finalizeActive(text: "second", direction: direction)
-        #expect(store.segments(in: .captions).reduce(0) { $0 + $1.entries.count } == 2)
+        #expect(store.segments().reduce(0) { $0 + $1.entries.count } == 2)
     }
 
     @Test func segmentsCacheReturnsEqualResultWithoutMutation() {
         let store = CaptionStore()
         let direction = LanguagePair(source: .english, target: .english)
         store.finalizeActive(text: "hello", direction: direction)
-        #expect(store.segments(in: .captions) == store.segments(in: .captions))
-    }
-
-    @Test func segmentsOnlyIncludeRequestedMode() {
-        let store = CaptionStore()
-        let direction = LanguagePair(source: .english, target: .english)
-
-        store.currentMode = .conversation
-        store.finalizeActive(text: "chat", direction: direction)
-        store.currentMode = .captions
-        store.finalizeActive(text: "caption", direction: direction)
-
-        #expect(store.segments(in: .captions).flatMap(\.entries).map(\.sourceText) == ["caption"])
-        #expect(store.segments(in: .conversation).flatMap(\.entries).map(\.sourceText) == ["chat"])
+        #expect(store.segments() == store.segments())
     }
 }

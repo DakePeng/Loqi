@@ -63,7 +63,7 @@ struct LiveCaptionsView: View {
 
     var body: some View {
         // One filter pass per body evaluation — the helpers all share it.
-        let entries = pipeline.store.entries(in: .captions)
+        let entries = pipeline.store.entries
         // Rotating to landscape turns the screen into a full-bleed caption
         // display; rotating back restores the full Record UI.
         if verticalSizeClass == .compact {
@@ -253,7 +253,7 @@ struct LiveCaptionsView: View {
         [.blue, .green, .orange, .purple, .pink, .teal]
 
     private func transcript(_ entries: [CaptionEntry]) -> some View {
-        let liveRows = rows(segments: pipeline.store.segments(in: .captions))
+        let liveRows = rows(segments: pipeline.store.segments())
         let scrollBottomID = liveRows.last?.id ?? entries.last?.id
         return ScrollViewReader { proxy in
             ScrollView {

@@ -17,7 +17,7 @@ import Tokenizers
 /// Weights download from Hugging Face or ModelScope (user-selectable in
 /// Settings; ModelScope for regions where huggingface.co is unreachable).
 /// MLX requires a real Apple-silicon GPU: this never runs in the simulator.
-actor LLMService: LLMServicing {
+actor LLMService {
     private(set) var loadState: LLMLoadState = .unloaded
     private var container: ModelContainer?
     private(set) var model: ModelOption

@@ -234,7 +234,7 @@ didn't resume and the session was gone. Two failure layers fixed:
   senseVoice / qwen3ASR) with `effectiveBackend` — **Qwen3 wins whenever
   installed** (installing = opt-in) for BOTH "Re-transcribe & summarize"
   and imports; live captions untouched. Hotwords prime the decoder
-  (newline-joined bias strings — SenseVoice has no biasing). Memory: the
+  (comma-separated bias strings — SenseVoice has no biasing). Memory: the
   retranscriber already unloads the LLM; imports now unload it too when
   the Qwen3 backend runs (~940 MB decoder + resident LLM won't coexist
   on 6 GB). Settings section "High-accuracy re-transcription" with the
@@ -244,14 +244,13 @@ didn't resume and the session was gone. Two failure layers fixed:
   (AR decode is slower; progress bar covers it), memory peak OK with the
   LLM unloaded ("qwen3asr"/"retranscribe" log categories); import a long
   file and cancel mid-decode (must abort within ~a second); A/B accuracy
-  vs SenseVoice re-transcribe on names/numbers; confirm the 10s VAD cap
-  keeps segments inside the 512-token budget (watch for truncated long
-  sentences and "empty decode … retrying halves" log warnings).
-- [ ] **Hotword priming is OFF** (`Qwen3ASRFileTranscriber
-  .hotwordPrimingEnabled = false`) — first field run lost transcript
-  content during re-transcribe; an unverified hotword prompt format is a
-  prime suspect (it pollutes the decoder prompt). Verify the format
-  against sherpa's qwen3-asr docs/tests on-device, then flip the flag.
+  vs SenseVoice re-transcribe on names/numbers and a taught hotword;
+  confirm the 10s VAD cap keeps segments inside the 512-token budget
+  (watch for truncated long sentences and "empty decode … retrying
+  halves" log warnings).
+- [x] **Hotword priming is ON** (`Qwen3ASRFileTranscriber
+  .hotwordPrimingEnabled = true`) — Qwen3-ASR expects comma-separated
+  hotwords (`c-api.h:1018`), now locked by `Qwen3ASRHotwordFormatTests`.
 
 ## Field fixes (2026-06-13, first device run of the 1.72GB-model era)
 

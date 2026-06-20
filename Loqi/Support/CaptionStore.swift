@@ -3,25 +3,21 @@ import Observation
 
 /// Single source of truth for the transcript the UI renders.
 /// All pipeline stages funnel their mutations through here on the main actor.
-/// Entries are tagged by SessionMode so Captions and Conversation never leak
-/// into each other's UI, and the render window is bounded so day-long
-/// sessions can't grow the re-grouping cost (or memory) without bound —
-/// entries pushed out of the window are handed to `onEvict` first, so the
-/// owner can retain them for archival rather than losing the transcript.
+/// The render window is bounded so day-long sessions can't grow the
+/// re-grouping cost (or memory) without bound. Entries pushed out of the
+/// window are handed to `onEvict` first, so the owner can retain them for
+/// archival rather than losing the transcript.
 @MainActor
 @Observable
 final class CaptionStore {
     private(set) var entries: [CaptionEntry] = [] {
-        didSet { cachedSegments.removeAll() }
+        didSet { cachedSegments = nil }
     }
 
-    @ObservationIgnored private var cachedSegments: [SessionMode: [CaptionSegment]] = [:]
+    @ObservationIgnored private var cachedSegments: [CaptionSegment]?
 
     /// Entry currently receiving volatile updates, if any.
     private(set) var activeEntryID: UUID?
-
-    /// Mode stamped onto new entries; the pipeline sets this per session.
-    var currentMode: SessionMode = .captions
 
     /// Delivered the finalized entries pruning drops from the render window,
     /// oldest-first, BEFORE they leave the store — the owner (CaptionPipeline)
@@ -36,14 +32,10 @@ final class CaptionStore {
     private let maxEntries = 600
     private let prunedEntries = 500
 
-    func entries(in mode: SessionMode) -> [CaptionEntry] {
-        entries.filter { $0.mode == mode }
-    }
-
-    func segments(in mode: SessionMode) -> [CaptionSegment] {
-        if let cached = cachedSegments[mode] { return cached }
-        let built = CaptionGrouping.segments(from: entries(in: mode))
-        cachedSegments[mode] = built
+    func segments() -> [CaptionSegment] {
+        if let cached = cachedSegments { return cached }
+        let built = CaptionGrouping.segments(from: entries)
+        cachedSegments = built
         return built
     }
 
@@ -60,7 +52,7 @@ final class CaptionStore {
             }
             return id
         }
-        var entry = CaptionEntry(sourceText: text, direction: direction, mode: currentMode)
+        var entry = CaptionEntry(sourceText: text, direction: direction)
         entry.state = .volatile
         entries.append(entry)
         prune()
@@ -100,7 +92,6 @@ final class CaptionStore {
             var entry = CaptionEntry(
                 sourceText: part.text,
                 direction: direction,
-                mode: currentMode,
                 state: .finalized,
                 createdAt: baseDate.addingTimeInterval(part.offset))
             entry.speaker = part.speaker
@@ -167,14 +158,10 @@ final class CaptionStore {
 
     // MARK: Refinement context
 
-    /// Recent completed turns of the current mode, oldest first, for the
-    /// LLM prompt — context must not mix modes.
+    /// Recent completed turns, oldest first, for the LLM prompt.
     func recentHistory(limit: Int) -> [CaptionEntry] {
         entries
-            .filter {
-                $0.mode == currentMode && $0.state != .volatile
-                    && $0.displayTranslation != nil
-            }
+            .filter { $0.state != .volatile && $0.displayTranslation != nil }
             .suffix(limit)
     }
 
@@ -182,12 +169,9 @@ final class CaptionStore {
         index(of: id).map { entries[$0] }
     }
 
-    /// Clear one surface's transcript without touching the other's.
-    func clear(_ mode: SessionMode) {
-        if let id = activeEntryID, entry(for: id)?.mode == mode {
-            activeEntryID = nil
-        }
-        entries.removeAll { $0.mode == mode }
+    func clear() {
+        activeEntryID = nil
+        entries.removeAll()
     }
 
     private func prune() {

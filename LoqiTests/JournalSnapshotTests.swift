@@ -6,13 +6,11 @@ import Testing
 struct JournalSnapshotTests {
     private func finalized(
         _ text: String,
-        at offset: TimeInterval,
-        mode: SessionMode = .captions
+        at offset: TimeInterval
     ) -> CaptionEntry {
         CaptionEntry(
             sourceText: text,
             direction: LanguagePair(source: .english, target: .english),
-            mode: mode,
             state: .finalized,
             createdAt: Date(timeIntervalSince1970: offset))
     }
@@ -61,14 +59,14 @@ struct JournalSnapshotTests {
         #expect(record.entries.map(\.sourceText) == ["kept"])
     }
 
-    @Test func filtersEntriesToSnapshotMode() {
+    @Test func recordsSnapshotMode() {
         let started = Date(timeIntervalSince1970: 0)
         let inputs = JournalSnapshotInputs(
             sessionID: UUID(),
             mode: .captions,
             startedAt: started,
-            evicted: [finalized("chat", at: 1, mode: .conversation)],
-            live: [finalized("caption", at: 2, mode: .captions)],
+            evicted: [],
+            live: [finalized("caption", at: 2)],
             timeline: nil,
             speakerNames: [:],
             recordingSpeakerCount: 0,
@@ -78,6 +76,7 @@ struct JournalSnapshotTests {
             attachments: [])
 
         let record = JournalWriter.buildJournalRecord(from: inputs)
+        #expect(record.mode == .captions)
         #expect(record.entries.map(\.sourceText) == ["caption"])
     }
 }

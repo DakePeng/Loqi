@@ -210,7 +210,7 @@ final class HotwordStore {
         try? FileManager.default.createDirectory(
             at: directory, withIntermediateDirectories: true)
         if let data = try? JSONEncoder().encode(hotwords) {
-            try? data.write(to: fileURL)
+            try? data.write(to: fileURL, options: .atomic)
         }
         onChange?()
     }
@@ -219,7 +219,7 @@ final class HotwordStore {
         try? FileManager.default.createDirectory(
             at: directory, withIntermediateDirectories: true)
         if let data = try? JSONEncoder().encode(pending) {
-            try? data.write(to: pendingFileURL)
+            try? data.write(to: pendingFileURL, options: .atomic)
         }
     }
 }

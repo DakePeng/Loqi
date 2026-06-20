@@ -42,6 +42,20 @@ struct SessionJournalTests {
         #expect(recovered?.speakerNames == [0: "王经理"])
     }
 
+    @Test func roundTripPreservesAttachmentOCR() {
+        defer { SessionJournal.clear() }
+        var record = makeRecord()
+        record.attachments = [
+            SessionRecord.Attachment(
+                fileName: "slide.jpg", timestamp: .now, ocrText: "白板内容")
+        ]
+        SessionJournal.write(record)
+
+        let recovered = SessionJournal.read()
+        #expect(recovered?.attachments?.count == 1)
+        #expect(recovered?.attachments?.first?.ocrText == "白板内容")
+    }
+
     @Test func clearLeavesNothingToRecover() {
         SessionJournal.write(makeRecord())
         SessionJournal.clear()
