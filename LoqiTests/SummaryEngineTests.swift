@@ -126,7 +126,7 @@ struct SummaryEngineTests {
             in: .chinese,
             sizing: SummaryPromptSizing(maxTokens: 420, overviewCap: 2, sectionCaps: [3, 3, 3]))
 
-        #expect(prompt.system.contains("synthesize"))
+        #expect(prompt.system.contains("Synthesize"))
         #expect(prompt.system.contains("Do not concatenate"))
         #expect(prompt.system.contains("photo"))
         #expect(prompt.user.contains("Notes:\n[1] 桌布讨论"))
