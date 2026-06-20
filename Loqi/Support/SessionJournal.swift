@@ -57,7 +57,12 @@ struct JournalSnapshotInputs: Sendable {
 /// snapshot and removes the file, so a clean stop can't be overtaken by an
 /// in-flight write that would resurrect the journal.
 actor JournalWriter {
-    private var pending: SessionRecord?
+    private enum PendingSnapshot {
+        case record(SessionRecord)
+        case inputs(JournalSnapshotInputs)
+    }
+
+    private var pending: PendingSnapshot?
     private var draining = false
 
     nonisolated static func buildJournalRecord(from inputs: JournalSnapshotInputs) -> SessionRecord {
@@ -84,12 +89,12 @@ actor JournalWriter {
     /// Queue the latest session snapshot. Returns immediately; the encode and
     /// disk write happen on this actor's executor.
     func write(_ record: SessionRecord) {
-        pending = record
+        pending = .record(record)
         startDraining()
     }
 
     func write(building inputs: JournalSnapshotInputs) {
-        pending = Self.buildJournalRecord(from: inputs)
+        pending = .inputs(inputs)
         startDraining()
     }
 
@@ -110,9 +115,14 @@ actor JournalWriter {
     private func drain() {
         // No `await` inside, so this runs atomically on the actor: a `write`
         // arriving meanwhile is picked up on the next iteration (last wins).
-        while let record = pending {
+        while let snapshot = pending {
             pending = nil
-            SessionJournal.write(record)
+            switch snapshot {
+            case .record(let record):
+                SessionJournal.write(record)
+            case .inputs(let inputs):
+                SessionJournal.write(Self.buildJournalRecord(from: inputs))
+            }
         }
         draining = false
     }

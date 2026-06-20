@@ -213,9 +213,15 @@ final class SessionArchive {
     /// Delete recording files no session references (e.g. a crash between
     /// recording and archiving). Pure decision logic is static for tests.
     nonisolated static func orphanedRecordings(
-        onDisk: Set<String>, referenced: Set<String>
+        onDisk: Set<String>,
+        referenced: Set<String>,
+        protectedBasenames: Set<String> = []
     ) -> Set<String> {
-        onDisk.subtracting(referenced)
+        let protected = onDisk.filter {
+            protectedBasenames.contains(
+                URL(fileURLWithPath: $0).deletingPathExtension().lastPathComponent)
+        }
+        return onDisk.subtracting(referenced).subtracting(protected)
     }
 
     private func sweepOrphanedRecordings() {
@@ -224,7 +230,13 @@ final class SessionArchive {
             at: Self.recordingsDirectory, includingPropertiesForKeys: nil) else { return }
         let onDisk = Set(files.map(\.lastPathComponent))
         let referenced = Set(sessions.compactMap(\.audioFileName))
-        for orphan in Self.orphanedRecordings(onDisk: onDisk, referenced: referenced) {
+        let importingIDs = Set(sessions.compactMap {
+            $0.importing == true ? $0.id.uuidString : nil
+        })
+        for orphan in Self.orphanedRecordings(
+            onDisk: onDisk,
+            referenced: referenced,
+            protectedBasenames: importingIDs) {
             try? fm.removeItem(at: Self.recordingURL(fileName: orphan))
         }
     }

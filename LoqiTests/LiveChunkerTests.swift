@@ -165,6 +165,15 @@ struct OrphanedRecordingTests {
         #expect(orphans == ["a.m4a", "c.m4a"])
     }
 
+    @Test func importingPlaceholderProtectsCopiedAudioBySessionID() {
+        let sessionID = UUID().uuidString
+        let orphans = SessionArchive.orphanedRecordings(
+            onDisk: ["\(sessionID).m4a", "old.caf"],
+            referenced: [],
+            protectedBasenames: [sessionID])
+        #expect(orphans == ["old.caf"])
+    }
+
     @Test func noFilesMeansNoOrphans() {
         #expect(SessionArchive.orphanedRecordings(
             onDisk: [], referenced: ["x.m4a"]).isEmpty)
