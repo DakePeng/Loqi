@@ -740,10 +740,6 @@ enum SummaryRecordReducer {
             return consumed
         }
 
-        consumeUnused(
-            overviewRecords(records, style: style),
-            limit: cap(base: spec.overviewCap, length: length, minimum: 1))
-
         var tags = Set<String>()
         for section in spec.sections {
             let hasLines = consumeUnused(

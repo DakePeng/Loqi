@@ -413,6 +413,35 @@ struct SummaryEngineTests {
         #expect(summary.contains("## 待办事项"))
     }
 
+    @Test func reducedSummaryFallsBackWhenOnlyDecisionRecordIsOmitted() {
+        var parsed = PromptBuilder.ParsedStructuredSummary(style: .meeting)
+        parsed.overview = ["会议讨论发布安排。"]
+        let timestamp = Date(timeIntervalSince1970: 1_000_000)
+        let note = SessionRecord.ChunkNote(
+            headline: "发布计划",
+            startedAt: timestamp,
+            summaryRecords: [
+                .init(
+                    kind: .decision,
+                    source: .transcript,
+                    sourceIDs: ["m001"],
+                    sourceIndex: 0,
+                    timestamp: timestamp,
+                    text: "六月发布")
+            ])
+
+        let summary = SummaryEngine.renderReducedSummary(
+            raw: "",
+            parsed: parsed,
+            notes: [note],
+            style: .meeting,
+            length: .standard,
+            in: .chinese,
+            stitchDetails: true)
+
+        #expect(summary.contains("六月发布"))
+    }
+
     @Test func reducedDetailedSummaryStitchesDeterministicDetails() {
         var parsed = PromptBuilder.ParsedStructuredSummary(style: .meeting)
         parsed.overview = ["会议讨论预算和六月发布安排。"]
