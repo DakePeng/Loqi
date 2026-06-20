@@ -376,8 +376,7 @@ struct SummaryEngine {
         func labelAndText(_ record: SessionRecord.SummaryRecord) -> (String, String)? {
             switch record.kind {
             case .topic:
-                return ("topic", record.topicTitle?.isEmpty == false
-                    ? record.topicTitle! : record.text)
+                return ("topic", record.text.isEmpty ? record.topicTitle ?? "" : record.text)
             case .point:
                 return (record.source == .photo ? "photo" : "fact", record.text)
             case .decision:
@@ -420,7 +419,7 @@ struct SummaryEngine {
     }
 
     /// Reduce phase: the final summary, written from notes alone. The
-    /// deterministic renderer is used only if the model output is unusable.
+    /// deterministic renderer keeps live peeks local and backs up bad output.
     func reduce(
         notes: [SessionRecord.ChunkNote],
         style: SummaryStyle = .meeting,
@@ -443,33 +442,35 @@ struct SummaryEngine {
             noteCount: notes.count)
         let input = Self.reduceInput(notes: notes, style: style)
         guard !input.isEmpty else { throw SummaryError.generationFailed }
+        if !stitchDetails {
+            let summary = SummaryRecordReducer.render(
+                records: SummaryRecordReducer.records(from: notes),
+                style: style,
+                length: length,
+                in: language,
+                stitchDetails: false)
+            guard !summary.isEmpty else { throw SummaryError.generationFailed }
+            await progress?(1, 1)
+            return summary
+        }
         let prompt = prompts.reduceSummaryPrompt(
             notes: input,
             style: style,
             in: language,
             sizing: sizing)
-        var raw = ""
-        var parsed = PromptBuilder.ParsedStructuredSummary(style: style)
-        for attempt in 0..<2 {
-            do {
-                raw = try await llm.generate(
-                    system: prompt.system,
-                    user: prompt.user,
-                    maxTokens: sizing.maxTokens,
-                    temperature: 0.3)
-                parsed = prompts.parseStructuredSummary(raw, style: style, sizing: sizing)
-                if !parsed.isEmpty { break }
-            } catch is CancellationError {
-                throw CancellationError()
-            } catch {
-                parsed = PromptBuilder.ParsedStructuredSummary(style: style)
-            }
-            if attempt == 0 { try Task.checkCancellation() }
+        let output = try await Self.generateStructuredReduce(style: style) {
+            try await llm.generate(
+                system: prompt.system,
+                user: prompt.user,
+                maxTokens: sizing.maxTokens,
+                temperature: 0.3)
+        } parse: { raw in
+            prompts.parseStructuredSummary(raw, style: style, sizing: sizing)
         }
 
         let summary = Self.renderReducedSummary(
-            raw: raw,
-            parsed: parsed,
+            raw: output.raw,
+            parsed: output.parsed,
             notes: notes,
             style: style,
             length: length,
@@ -478,6 +479,21 @@ struct SummaryEngine {
         guard !summary.isEmpty else { throw SummaryError.generationFailed }
         await progress?(1, 1)
         return summary
+    }
+
+    static func generateStructuredReduce(
+        style: SummaryStyle,
+        _ generate: () async throws -> String,
+        parse: (String) -> PromptBuilder.ParsedStructuredSummary
+    ) async throws -> (raw: String, parsed: PromptBuilder.ParsedStructuredSummary) {
+        do {
+            let raw = try await generate()
+            return (raw, parse(raw))
+        } catch is CancellationError {
+            throw CancellationError()
+        } catch {
+            return ("", PromptBuilder.ParsedStructuredSummary(style: style))
+        }
     }
 
     static func renderReducedSummary(
@@ -504,7 +520,14 @@ struct SummaryEngine {
         guard !PromptBuilder.hasDegenerateRepetition(cleaned.joinedValues)
         else { return fallback() }
         let summary = prompts.renderSummaryMarkdown(cleaned, in: language)
-        return summary.isEmpty ? fallback() : summary
+        guard !summary.isEmpty else { return fallback() }
+        guard stitchDetails, length == .detailed,
+              let details = SummaryRecordReducer.detailBlock(
+                  records: SummaryRecordReducer.records(from: notes),
+                  usedTexts: cleaned.overview + cleaned.sections.flatMap { $0 },
+                  in: language)
+        else { return summary }
+        return [summary, details].joined(separator: "\n\n")
     }
 
     /// Best-effort scenario detection for the post-stop selection step.
@@ -647,22 +670,10 @@ enum SummaryRecordReducer {
         // order) wins. ponytail: O(n²) over the rendered set; it's tiny (≤ ~30).
         var usedKeys: [String] = []
 
-        func displayUnused(_ record: Record) -> String? {
-            let key = SummaryEngine.dedupKey(dedupText(record))
-            guard !key.isEmpty else { return nil }
-            for prior in usedKeys
-            where prior == key
-                || HotwordMatcher.similarity(prior, key) >= crossSectionDedupThreshold {
-                return nil
-            }
-            usedKeys.append(key)
-            return displayText(record, includeSource: true)
-        }
-
         func takeUnused(_ records: [Record], limit: Int) -> [String] {
             var lines: [String] = []
             for record in records where lines.count < limit {
-                if let text = displayUnused(record) {
+                if let text = displayUnused(record, usedKeys: &usedKeys) {
                     lines.append(text)
                 }
             }
@@ -689,16 +700,59 @@ enum SummaryRecordReducer {
         }
 
         if stitchDetails, length == .detailed {
-            let detailRecords = records.filter {
-                $0.kind != .topic && !$0.text.isEmpty
-            }
-            let detailLines = takeUnused(detailRecords, limit: 12).map { "- \($0)" }
-            if !detailLines.isEmpty {
-                blocks.append("## \(detailHeading(for: language))\n"
-                    + detailLines.joined(separator: "\n"))
+            if let details = detailBlock(records: records, usedKeys: &usedKeys, in: language) {
+                blocks.append(details)
             }
         }
         return blocks.joined(separator: "\n\n")
+    }
+
+    static func detailBlock(
+        records: [Record],
+        usedTexts: [String],
+        in language: AppLanguage
+    ) -> String? {
+        var usedKeys = usedTexts
+            .map { SummaryEngine.dedupKey($0) }
+            .filter { !$0.isEmpty }
+        return detailBlock(
+            records: deduped(records),
+            usedKeys: &usedKeys,
+            in: language)
+    }
+
+    private static func detailBlock(
+        records: [Record],
+        usedKeys: inout [String],
+        in language: AppLanguage
+    ) -> String? {
+        let detailRecords = records.filter {
+            $0.kind != .topic && !$0.text.isEmpty
+        }
+        var detailLines: [String] = []
+        for record in detailRecords where detailLines.count < 12 {
+            if let text = displayUnused(record, usedKeys: &usedKeys) {
+                detailLines.append("- \(text)")
+            }
+        }
+        guard !detailLines.isEmpty else { return nil }
+        return "## \(detailHeading(for: language))\n"
+            + detailLines.joined(separator: "\n")
+    }
+
+    private static func displayUnused(
+        _ record: Record,
+        usedKeys: inout [String]
+    ) -> String? {
+        let key = SummaryEngine.dedupKey(dedupText(record))
+        guard !key.isEmpty else { return nil }
+        for prior in usedKeys
+        where prior == key
+            || HotwordMatcher.similarity(prior, key) >= crossSectionDedupThreshold {
+            return nil
+        }
+        usedKeys.append(key)
+        return displayText(record, includeSource: true)
     }
 
     private static func cap(

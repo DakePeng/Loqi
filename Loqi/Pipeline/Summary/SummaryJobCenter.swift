@@ -338,13 +338,13 @@ final class SummaryJobCenter {
         tasks[sessionID] = Task {
             defer { finishJob(sessionID) }
             do {
+                try await loadModel(sessionID: sessionID, allowDownload: allowDownload)
+                activities[sessionID] = .summarizing(done: 0, total: 0)
                 if !suggestVocabulary,
                    try await renderCachedSummaryIfPossible(
                     sessionID: sessionID, style: style, length: length) {
                     return
                 }
-                try await loadModel(sessionID: sessionID, allowDownload: allowDownload)
-                activities[sessionID] = .summarizing(done: 0, total: 0)
                 try await runSummarize(
                     sessionID: sessionID, style: style, length: length,
                     suggestVocabulary: suggestVocabulary)
