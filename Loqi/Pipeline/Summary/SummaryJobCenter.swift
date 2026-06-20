@@ -870,6 +870,7 @@ final class SummaryJobCenter {
             notes: AttachmentNotes.merged(notes, attachments: record.attachments),
             style: style,
             length: length,
+            maxInputCharacters: SummaryEngine.reduceInputCharacterBudget,
             in: SummaryEngine.summaryLanguage(for: record))
         record.summary = summary
         record.summaryEdited = nil

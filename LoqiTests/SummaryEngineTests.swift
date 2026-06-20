@@ -264,7 +264,8 @@ struct SummaryEngineTests {
                 headline: "第 \(index) 段",
                 startedAt: Date(timeIntervalSince1970: 1_000_000 + Double(index)),
                 facts: ["记录第 \(index) 段里的关键事实"],
-                decisions: ["决定第 \(index) 段的处理方式"])
+                decisions: ["决定第 \(index) 段的处理方式"],
+                actions: index == 42 ? ["负责人处理稀疏待办"] : [])
         }
 
         let input = SummaryEngine.reduceInput(
@@ -273,6 +274,7 @@ struct SummaryEngineTests {
         #expect(!input.isEmpty)
         #expect(input.count <= 180)
         #expect(input.split(separator: "\n").allSatisfy { $0.contains(": ") })
+        #expect(input.contains("action: 负责人处理稀疏待办"))
         #expect(input.contains("第 79 段"))
     }
 

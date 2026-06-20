@@ -435,24 +435,49 @@ struct SummaryEngine {
 
         let averageLength = max(1, fullLength / lines.count)
         let targetCount = max(1, min(lines.count, maxCharacters / averageLength))
-        let selected: [Int]
+        var selected = Set<Int>()
+        var required = Set<Int>()
+        func require(_ index: Int) {
+            selected.insert(index)
+            required.insert(index)
+        }
+        require(0)
+        require(lines.count - 1)
+        var labels = Set<String>()
+        for (index, line) in lines.enumerated() {
+            let label = line.split(separator: ":", maxSplits: 1)
+                .first.map(String.init) ?? line
+            if labels.insert(label).inserted {
+                require(index)
+            }
+        }
         if targetCount == 1 {
-            selected = [0]
+            selected.insert(0)
         } else {
-            selected = (0..<targetCount).map { slot in
-                Int((Double(slot) * Double(lines.count - 1)
-                    / Double(targetCount - 1)).rounded())
+            for slot in 0..<targetCount {
+                selected.insert(Int((Double(slot) * Double(lines.count - 1)
+                    / Double(targetCount - 1)).rounded()))
             }
         }
 
-        var result: [String] = []
-        var used = 0
-        for index in selected where result.last != lines[index] {
-            let line = lines[index]
-            let extra = line.count + (result.isEmpty ? 0 : 1)
-            guard used + extra <= maxCharacters else { continue }
-            result.append(line)
-            used += extra
+        func length(_ indexes: Set<Int>) -> Int {
+            indexes.reduce(0) { $0 + lines[$1].count } + max(0, indexes.count - 1)
+        }
+        while length(selected) > maxCharacters,
+              let drop = selected.subtracting(required)
+                .max(by: { lines[$0].count < lines[$1].count }) {
+            selected.remove(drop)
+        }
+
+        var result = selected.sorted().map { lines[$0] }
+        if result.joined(separator: "\n").count > maxCharacters {
+            result = required.sorted().reduce(into: []) { output, index in
+                let line = lines[index]
+                let extra = line.count + (output.isEmpty ? 0 : 1)
+                if output.joined(separator: "\n").count + extra <= maxCharacters {
+                    output.append(line)
+                }
+            }
         }
         if result.isEmpty, let first = lines.first {
             return [String(first.prefix(maxCharacters))]
@@ -618,7 +643,6 @@ struct SummaryEngine {
         progress: @escaping @MainActor @Sendable (Int, Int) -> Void
     ) async throws -> (summary: String, notes: [SessionRecord.ChunkNote]) {
         let (uncovered, cached) = Self.uncoveredEntries(of: record)
-        let cachedOnly = uncovered.isEmpty && !cached.isEmpty
         if !uncovered.isEmpty {
             try await llm.load(policy: .requireDownloaded)
         }
@@ -643,7 +667,6 @@ struct SummaryEngine {
                 $0 + $1.sourceText.count
             },
             in: language,
-            stitchDetails: !cachedOnly,
             progress: { done, _ in
                 progress(mappedCount + done, totalSteps)
             })
