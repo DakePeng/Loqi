@@ -78,7 +78,7 @@ struct LiveCaptionsView: View {
 
     var body: some View {
         // One filter pass per body evaluation — the helpers all share it.
-        let entries = pipeline.store.entries(in: .captions)
+        let entries = pipeline.store.entries
         // Rotating to landscape turns the screen into a full-bleed caption
         // display; rotating back restores the full Record UI.
         if verticalSizeClass == .compact {

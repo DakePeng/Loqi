@@ -1,8 +1,7 @@
 import Foundation
 
-/// Which app surface a transcript entry belongs to. Captions and
-/// Conversation share one pipeline but must not leak entries into each
-/// other's UI ("Clear" in one must not wipe the other).
+/// Persisted session kind. Live sessions are captions-only; conversation
+/// remains so old archives decode and export.
 enum SessionMode: String, Sendable, Codable {
     case captions
     case conversation
@@ -31,7 +30,6 @@ struct CaptionEntry: Identifiable, Sendable, Equatable {
     var refinedTranslation: String?
     var state: State
     var direction: LanguagePair
-    var mode: SessionMode
     /// Diarization slot (0-based) when captions-mode speaker grouping is on.
     var speaker: Int?
     /// Tier-1 translation failed (e.g. language pack missing offline);
@@ -46,14 +44,12 @@ struct CaptionEntry: Identifiable, Sendable, Equatable {
         id: UUID = UUID(),
         sourceText: String = "",
         direction: LanguagePair,
-        mode: SessionMode = .captions,
         state: State = .volatile,
         createdAt: Date = .now
     ) {
         self.id = id
         self.sourceText = sourceText
         self.direction = direction
-        self.mode = mode
         self.state = state
         self.createdAt = createdAt
     }

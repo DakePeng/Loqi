@@ -24,8 +24,6 @@ enum PauseReason: Equatable {
 
 /// Wires the whole pipeline together for one listening session:
 /// audio → transcription → segmentation → tier-1 drafts → tier-2 refinement.
-/// Both app modes drive this; conversation mode additionally switches the
-/// active direction between turns.
 ///
 /// All session transitions (start/stop/switch/release/interrupt/route-change)
 /// are serialized FIFO — two transitions interleaving across their await
@@ -200,7 +198,7 @@ final class CaptionPipeline {
     /// The full session transcript for archival: entries evicted from the
     /// live render window followed by what's still on screen.
     private var archivableEntries: [CaptionEntry] {
-        evictedEntries + store.entries(in: sessionMode)
+        evictedEntries + store.entries
     }
     private var liveChunker = LiveChunker()
     private var noteQueue: ChunkNoteQueue?
@@ -239,10 +237,6 @@ final class CaptionPipeline {
     /// used to attribute the ASR final to a speaker slot.
     private var utteranceStartAudioSeconds: Double?
     private var utteranceEndAudioSeconds: Double?
-
-    /// All live sessions are captions-mode now; the enum survives for old
-    /// archived records.
-    var sessionMode: SessionMode { .captions }
 
     init(llm: LLMService? = nil) {
         // Honor persisted Settings choices even if that screen was never
@@ -433,11 +427,10 @@ final class CaptionPipeline {
         statusMessages.removeAll()
 
         await translator.setDirections(route.eagerTranslationDirections)
-        store.currentMode = sessionMode
         // Fresh page per session: the previous session's transcript (already
         // archived — or deliberately discarded) must not lead the new one,
         // on screen or in refinement history.
-        store.clear(sessionMode)
+        store.clear()
         jobs.yieldToRecording()
         speakerNames.removeAll()
         sessionID = UUID()
@@ -554,7 +547,7 @@ final class CaptionPipeline {
         let attachment = SessionRecord.Attachment(
             fileName: fileName,
             timestamp: .now,
-            anchorEntryID: store.entries(in: sessionMode)
+            anchorEntryID: store.entries
                 .last { $0.state != .volatile }?.id)
         liveAttachments.append(attachment)
         writeJournal()
@@ -658,7 +651,7 @@ final class CaptionPipeline {
     /// Last few finalized transcript lines, for grounding a photo description
     /// in what was being discussed. Empty before any speech is finalized.
     private func recentTranscriptContext() -> String {
-        let text = store.entries(in: sessionMode)
+        let text = store.entries
             .filter { $0.state != .volatile }
             .suffix(4)
             .map(\.sourceText)
@@ -674,7 +667,7 @@ final class CaptionPipeline {
         guard let sessionID, let startedAt = sessionStartedAt else { return }
         var record = SessionRecord(
             id: sessionID,
-            mode: sessionMode,
+            mode: .captions,
             startedAt: startedAt,
             endedAt: .now,
             entries: SessionArchive.mappedEntries(
@@ -725,7 +718,7 @@ final class CaptionPipeline {
         if let startedAt = sessionStartedAt {
             let saved = archive.save(
                 entries: archivableEntries,
-                mode: sessionMode,
+                mode: .captions,
                 speakerNames: speakerNames,
                 startedAt: startedAt,
                 artifacts: SessionArtifacts(

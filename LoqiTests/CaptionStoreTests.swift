@@ -61,33 +61,24 @@ struct CaptionStoreTests {
         #expect(store.entry(for: entry.id)?.draftFailed == false)
     }
 
-    @Test func modesAreIsolated() {
+    @Test func clearDropsTranscriptAndActiveEntry() {
         let store = CaptionStore()
-        store.currentMode = .captions
         store.applyVolatile(text: "caption line", direction: enToZh)
-        store.finalizeActive(text: "caption line", direction: enToZh)
+        #expect(store.activeEntryID != nil)
 
-        store.currentMode = .conversation
-        store.applyVolatile(text: "chat line", direction: enToZh)
-        store.finalizeActive(text: "chat line", direction: enToZh)
+        store.clear()
 
-        #expect(store.entries(in: .captions).count == 1)
-        #expect(store.entries(in: .conversation).count == 1)
-
-        store.clear(.captions)
-        #expect(store.entries(in: .captions).isEmpty)
-        #expect(store.entries(in: .conversation).count == 1)
+        #expect(store.entries.isEmpty)
+        #expect(store.activeEntryID == nil)
     }
 
-    @Test func historyOnlyDrawsFromCurrentMode() {
+    @Test func historyDrawsFromFinalTranslatedEntries() {
         let store = CaptionStore()
-        store.currentMode = .captions
         store.applyVolatile(text: "lecture", direction: enToZh)
         if let entry = store.finalizeActive(text: "lecture", direction: enToZh) {
             store.setDraft("讲座", for: entry.id)
         }
-        store.currentMode = .conversation
-        #expect(store.recentHistory(limit: 6).isEmpty)
+        #expect(store.recentHistory(limit: 6).map(\.sourceText) == ["lecture"])
     }
 
     @Test func pruningKeepsNewestEntries() {
@@ -116,7 +107,7 @@ struct CaptionStoreTests {
         // Something was actually pushed out of the window…
         #expect(!evicted.isEmpty)
         // …and evicted + on-screen reconstructs every line, in order, once.
-        let reconstructed = (evicted + store.entries(in: .captions)).map(\.sourceText)
+        let reconstructed = (evicted + store.entries).map(\.sourceText)
         #expect(reconstructed == (0..<700).map { "line \($0)" })
     }
 
