@@ -139,6 +139,10 @@ enum OnboardingItemKind: String, CaseIterable, Identifiable {
         self == .appleSpeech || self == .translationPacks
     }
 
+    var usesSharedLLMWorker: Bool {
+        self == .liveLLM || self == .summaryLLM
+    }
+
     func systemAssetProgressText(_ caption: String) -> String {
         switch self {
         case .appleSpeech:

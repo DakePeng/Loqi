@@ -95,6 +95,13 @@ struct OnboardingCatalogTests {
         #expect(OnboardingItemKind.summaryLLM.isRecommended)
     }
 
+    @Test func llmTiersUseSharedDownloadWorker() {
+        #expect(OnboardingItemKind.liveLLM.usesSharedLLMWorker)
+        #expect(OnboardingItemKind.summaryLLM.usesSharedLLMWorker)
+        #expect(!OnboardingItemKind.senseVoice.usesSharedLLMWorker)
+        #expect(!OnboardingItemKind.qwen3ASR.usesSharedLLMWorker)
+    }
+
     @Test func translationPackPairsCoverEveryOrderedLanguagePair() {
         #expect(OnboardingItemKind.translationPairs.count == 12)
         #expect(!OnboardingItemKind.translationPairs.contains {

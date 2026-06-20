@@ -30,7 +30,8 @@ struct LiveCaptionsView: View {
     @AppStorage("captions.translation") private var translationRaw = ""
     // 0/1 = single speaker (no diarization), -1 = Auto, 2+ = hard cap.
     // Default off so first recording never downloads the speaker model silently.
-    @AppStorage("captions.speakerCount") private var speakerCount = -1
+    @AppStorage("captions.speakerCount") private var speakerCount
+        = VoiceprintService.defaultLiveSpeakerPickerValue()
     @AppStorage(MicSensitivity.defaultsKey) private var sensitivityRaw
         = MicSensitivity.balanced.rawValue
     @State private var errorMessage: String?

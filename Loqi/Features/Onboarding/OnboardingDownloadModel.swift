@@ -60,6 +60,8 @@ final class OnboardingDownloadModel {
     private var systemAssetQueue: [OnboardingItemKind] = []
     private var systemAssetWorker: Task<Void, Never>?
     private var modelWorkers: [OnboardingItemKind: Task<Void, Never>] = [:]
+    private var llmQueue: [OnboardingItemKind] = []
+    private var llmWorker: Task<Void, Never>?
     private var translationContinuation: CheckedContinuation<Void, Error>?
     private var translationTimeout: Task<Void, Never>?
     private(set) var translationPreparationPair: LanguagePair?
@@ -104,8 +106,13 @@ final class OnboardingDownloadModel {
         systemAssetQueue = pending.filter(\.usesSystemAssetProgress)
         startSystemAssetWorkerIfNeeded()
         for kind in pending where !kind.usesSystemAssetProgress {
-            startModelWorker(for: kind)
+            if kind.usesSharedLLMWorker {
+                llmQueue.append(kind)
+            } else {
+                startModelWorker(for: kind)
+            }
         }
+        startLLMWorkerIfNeeded()
     }
 
     /// Failed rows only: system assets go behind the current system asset;
@@ -116,6 +123,9 @@ final class OnboardingDownloadModel {
         if kind.usesSystemAssetProgress {
             systemAssetQueue.append(kind)
             startSystemAssetWorkerIfNeeded()
+        } else if kind.usesSharedLLMWorker {
+            llmQueue.append(kind)
+            startLLMWorkerIfNeeded()
         } else {
             startModelWorker(for: kind)
         }
@@ -129,6 +139,9 @@ final class OnboardingDownloadModel {
         systemAssetQueue.removeAll()
         systemAssetWorker?.cancel()
         systemAssetWorker = nil
+        llmQueue.removeAll()
+        llmWorker?.cancel()
+        llmWorker = nil
         modelWorkers.values.forEach { $0.cancel() }
         modelWorkers.removeAll()
         senseVoiceStore.cancelDownload()
@@ -155,8 +168,23 @@ final class OnboardingDownloadModel {
         }
     }
 
+    private func startLLMWorkerIfNeeded() {
+        guard llmWorker == nil, !llmQueue.isEmpty else { return }
+        llmWorker = Task { [weak self] in
+            guard let self else { return }
+            while !Task.isCancelled, !llmQueue.isEmpty {
+                let kind = llmQueue.removeFirst()
+                guard let item = item(for: kind), item.status == .pending else { continue }
+                item.status = .downloading
+                await download(kind, into: item)
+            }
+            llmWorker = nil
+        }
+    }
+
     private func startModelWorker(for kind: OnboardingItemKind) {
         guard !kind.usesSystemAssetProgress,
+              !kind.usesSharedLLMWorker,
               modelWorkers[kind] == nil,
               let item = item(for: kind),
               item.status == .pending else { return }

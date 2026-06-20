@@ -13,7 +13,7 @@ struct ImportAudioSheet: View {
     @Bindable var pipeline: CaptionPipeline
     @Environment(\.dismiss) private var dismiss
 
-    @AppStorage("captions.source") private var sourceRaw = RecognitionLanguageSelection.autoRawValue
+    @State private var sourceRaw: String
     /// Shared with the Record screen: empty = transcribe only (default).
     @AppStorage("captions.translation") private var translationRaw = ""
     // -1 = Auto (diarize). Default on so imports get speaker labels.
@@ -28,12 +28,22 @@ struct ImportAudioSheet: View {
     /// first-use network fetch.
     @State private var showSpeakerDownloadPrompt = false
 
-    private var translationTarget: AppLanguage? { AppLanguage(rawValue: translationRaw) }
-    /// "auto" resolves to the device-preferred language for the import
-    /// direction; the ASR engine auto-detects the spoken language regardless.
-    private var source: AppLanguage {
-        RecognitionLanguageSelection(rawValue: sourceRaw).fallbackLanguage
+    init(url: URL, pipeline: CaptionPipeline) {
+        self.url = url
+        self.pipeline = pipeline
+        _sourceRaw = State(initialValue: Self.importLanguageRaw(
+            UserDefaults.standard.string(forKey: "captions.source")))
     }
+
+    static func importLanguageRaw(_ rawValue: String?) -> String {
+        guard let rawValue, AppLanguage(rawValue: rawValue) != nil else {
+            return AppLanguage.english.rawValue
+        }
+        return rawValue
+    }
+
+    private var translationTarget: AppLanguage? { AppLanguage(rawValue: translationRaw) }
+    private var source: AppLanguage { AppLanguage(rawValue: sourceRaw) ?? .english }
 
     /// Diarization is requested but the model isn't on disk yet.
     private var needsSpeakerModelConsent: Bool {
@@ -57,12 +67,12 @@ struct ImportAudioSheet: View {
                 Section {
                     LabeledContent("File", value: url.lastPathComponent)
                     Picker("Language", selection: $sourceRaw) {
-                        Text("Auto").tag(RecognitionLanguageSelection.autoRawValue)
                         ForEach(AppLanguage.allCases) {
                             Text($0.displayName).tag($0.rawValue)
                         }
                     }
                     .onChange(of: sourceRaw) {
+                        UserDefaults.standard.set(sourceRaw, forKey: "captions.source")
                         if translationRaw == source.rawValue { translationRaw = "" }
                     }
                     Picker("Translation", selection: $translationRaw) {

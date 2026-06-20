@@ -23,6 +23,12 @@ actor VoiceprintService {
         }
     }
 
+    nonisolated static func defaultLiveSpeakerPickerValue(
+        isModelCached _: Bool = StreamingDiarizer.isModelCached
+    ) -> Int {
+        0
+    }
+
     /// Whether the offline file-diarization model bundle is already cached on
     /// disk. Derives the path exactly as FluidAudio's loader does so it can't
     /// drift from where `diarizeFile` looks. Lets the import flow ask consent
