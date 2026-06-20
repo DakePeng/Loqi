@@ -90,4 +90,4 @@ The app builds clean (Xcode 26.6, Swift 6 strict concurrency), the unit suite pa
 
 ## Not in v1 (by design)
 
-Two-way interpreter mode and TTS output (removed in the capture-first pivot — Apple ships live translation at the OS level) · automatic spoken-language detection · always-on ambient listening (an explicitly started session does continue in the background) · languages beyond zh/en/ja/ko. The seams exist — see `AppLanguage` and the direction-resolution step in `CaptionPipeline.handle`.
+Two-way interpreter mode and TTS output (removed in the capture-first pivot — Apple ships live translation at the OS level) · a supported Mac / desktop app (the iPhone app is the v1 focus; the existing Mac target is not a shipped surface) · automatic spoken-language detection · always-on ambient listening (an explicitly started session does continue in the background) · languages beyond zh/en/ja/ko. The seams exist — see `AppLanguage` and the direction-resolution step in `CaptionPipeline.handle`.
