@@ -349,10 +349,14 @@ Moat extensions:
 - ~~**Mac app / desktop surface**~~ — **not a v1 surface.** The iPhone app
   is the product focus; decide later whether to delete or revive the
   existing `LoqiMac` target.
-- [ ] **App Store ship path** — iPhone 15+/iOS 26/dev signing are all
-  adoption blockers today. Paid developer account ($99/yr), TestFlight
-  beta, then public App Store submission is the path from "interesting
-  project" to "daily tool."
+- [x] **Developer preview distribution** — current release path is GitHub
+  source tags/changelogs only. README now says there is no installable
+  GitHub `.ipa`, no TestFlight/App Store build yet, and technical users
+  run from source with their own signing team.
+- [ ] **Deferred App Store ship path** — iPhone 15+/iOS 26/dev signing
+  remain adoption blockers. When public-user install matters enough to
+  pay for it, use a paid developer account ($99/yr), TestFlight beta,
+  then public App Store submission.
 - [ ] Later: iPad layout · KV-cache prompt reuse · cross-session
   voiceprints (biometric consent UX needed) · Apple Watch quick-capture
   (start/stop/flag) · Contacts → hotword import (seed names).

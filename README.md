@@ -21,7 +21,13 @@ Private voice notes, transcripts and summaries that run **entirely on your iPhon
 - **Hotwords:** user-defined names/jargon (Settings → Vocabulary) bias ASR recognition, get near-miss-corrected (Levenshtein / pinyin matching), and steer the LLM toward consistent renderings.
 - **Model downloads:** Hugging Face or ModelScope 魔搭 (pick in Settings — use ModelScope where huggingface.co is unreachable). Model tiers: Qwen3.5-2B (default, ~1.75GB) · Qwen3.5-0.8B (fastest, ~650MB) — both natively multimodal (text + photos), so the old Qwen3 text/VL tiers are gone. A repetition-penalty bug in mlx-swift-lm 3.31.3 that crashed every generation routed through the VLM factory (2-D prompts corrupt its TokenRing) is patched locally in `LLMService` — remove the wrapper when the dependency moves past 3.31.3.
 
-**Requires:** iPhone 15 or newer, iOS 26+, Xcode 26. The LLM does **not** run in the simulator — you need a real device for the full pipeline.
+**Requires:** a Mac with Xcode 26, iPhone 15 or newer, iOS 26+, and Developer Mode on the phone. The LLM does **not** run in the simulator — you need a real device for the full pipeline.
+
+## Developer preview
+
+Loqi is currently a **source-only developer preview**. There is no TestFlight/App Store build yet, and GitHub does not host an installable iPhone app. The supported install path is: clone the repo, generate/open the Xcode project, set your own signing team, and run on a physical iPhone.
+
+A free Apple ID can sign local development builds, but installed builds may expire after 7 days. The widget and Control Center toggle use an app group; if a free team cannot provision that entitlement, the core app still runs but those surfaces may show stale state. TestFlight/App Store distribution requires a paid Apple Developer Program membership and is not part of this preview.
 
 ## Getting started (first time on iOS? start here)
 
@@ -34,11 +40,15 @@ Private voice notes, transcripts and summaries that run **entirely on your iPhon
    xcodegen generate
    open Loqi.xcodeproj
    ```
-3. **Set up signing.** In Xcode: click the blue *Loqi* project icon → *Signing & Capabilities* → check *Automatically manage signing* and pick your team (your Apple ID — add it under Xcode → Settings → Accounts) — do the same for the *LoqiWidgets* target. A free Apple ID works for development but re-signs every 7 days; a paid developer account ($99/yr) removes that and enables TestFlight. Note: free teams sometimes fail to provision the app group both targets share — everything still works except the Control Center toggle showing stale state.
+3. **Set up signing.** In Xcode: click the blue *Loqi* project icon → *Signing & Capabilities* → check *Automatically manage signing* and pick your team (your Apple ID — add it under Xcode → Settings → Accounts) — do the same for the *LoqiWidgets* target. A free Apple ID works for local development signing, but installed builds may expire after 7 days. Note: free teams sometimes fail to provision the app group both targets share — everything still works except the Control Center toggle showing stale state.
 4. **Prepare your iPhone.** Plug it in, tap *Trust* on the phone, and enable **Developer Mode** (Settings → Privacy & Security → Developer Mode, then reboot).
 5. **Run.** Select your iPhone as the run destination (top bar) and press ⌘R.
 
 First launch walks through mic permission and downloads the speech models. The LLM (~1.75GB) downloads **only when you ask**: via Settings → "Download model now", or from the consent prompt the first AI feature (summarize, chat, suggestions) shows — do that on Wi-Fi, and pick Hugging Face or ModelScope as the source. Until it's downloaded the app transcribes and records normally, with a status pill pointing to Settings.
+
+## Releases
+
+GitHub Releases are source tags and changelogs for now, not signed `.ipa` downloads. Do not attach an `.ipa` unless it is an ad hoc build for known registered devices.
 
 ## Project layout
 
