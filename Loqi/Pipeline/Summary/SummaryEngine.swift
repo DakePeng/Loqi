@@ -10,9 +10,8 @@ import Foundation
 /// entries past `liveNotesEndEntryID` get mapped, then a single reduce runs
 /// over cached + new notes.
 ///
-/// Detailed summaries don't stop at that single reduce — they append
-/// deterministic chronological sections assembled from the map notes, so
-/// the document scales with the recording without another generation pass.
+/// Final summaries use one grounded reduce generation. The deterministic
+/// renderer is kept as a fallback only, not the normal user-facing summary.
 struct SummaryEngine {
     let llm: LLMService
     /// Hotword matcher for note-glossary injection into the map phase;
@@ -349,24 +348,132 @@ struct SummaryEngine {
             ?? record.entries.last?.direction.target ?? .english
     }
 
-    /// Reduce phase: the final summary, written from notes alone. With
-    /// `stitchDetails`, a detailed length appends deterministic
-    /// chronological note sections; the mid-session "Summary so far" peek
-    /// turns it off to stay compact.
+    /// Reduce input: one labeled line per extracted record. Photos are
+    /// labeled as photo context so the final reduce can fold them into the
+    /// surrounding topic instead of copying captions as standalone summary.
+    static func reduceInput(
+        notes: [SessionRecord.ChunkNote], style: SummaryStyle
+    ) -> String {
+        let records = SummaryRecordReducer.records(from: notes)
+        var seen = Set<String>()
+        var recent: [String] = []
+
+        func actionText(_ record: SessionRecord.SummaryRecord) -> String {
+            let owner = record.owner?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            let deadline = record.deadline?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            var text = record.task?.isEmpty == false ? record.task! : record.text
+            if !owner.isEmpty, owner != "未明确" {
+                text = "\(owner): \(text)"
+            }
+            if !deadline.isEmpty, deadline != "未明确" {
+                text += " (\(deadline))"
+            }
+            return text
+        }
+
+        func labelAndText(_ record: SessionRecord.SummaryRecord) -> (String, String)? {
+            switch record.kind {
+            case .topic:
+                return ("topic", record.topicTitle?.isEmpty == false
+                    ? record.topicTitle! : record.text)
+            case .point:
+                return (record.source == .photo ? "photo" : "fact", record.text)
+            case .decision:
+                return ("decision", record.text)
+            case .action:
+                return ("action", actionText(record))
+            case .question:
+                return ("question", record.text)
+            case .risk:
+                return ("risk", record.text)
+            case .term:
+                guard style.spec.includeTermsInNotes else { return nil }
+                return ("term", record.text)
+            case .reflection:
+                return ("reflection", record.text)
+            }
+        }
+
+        func keep(_ text: String) -> Bool {
+            let key = dedupKey(text)
+            guard !key.isEmpty else { return false }
+            if seen.contains(key) { return false }
+            for prior in recent.suffix(24)
+            where HotwordMatcher.similarity(prior, key) >= 0.9 {
+                return false
+            }
+            seen.insert(key)
+            recent.append(key)
+            return true
+        }
+
+        return records.compactMap { record in
+            guard let (label, text) = labelAndText(record),
+                  keep(text) else { return nil }
+            return "\(label): \(text)"
+        }.joined(separator: "\n")
+    }
+
+    /// Reduce phase: the final summary, written from notes alone. The
+    /// deterministic renderer is used only if the model output is unusable.
     func reduce(
         notes: [SessionRecord.ChunkNote],
         style: SummaryStyle = .meeting,
         length: SummaryLength = .standard,
+        transcriptCharacterCount: Int? = nil,
         in language: AppLanguage,
         stitchDetails: Bool = true,
         progress: (@MainActor @Sendable (Int, Int) -> Void)? = nil
     ) async throws -> String {
-        let summary = SummaryRecordReducer.render(
-            records: SummaryRecordReducer.records(from: notes),
+        let sizing = Self.summaryPromptSizing(
             style: style,
             length: length,
+            transcriptCharacterCount: transcriptCharacterCount
+                ?? notes.reduce(0) { total, note in
+                    total + note.headline.count
+                        + note.facts.reduce(0) { $0 + $1.count }
+                        + note.decisions.reduce(0) { $0 + $1.count }
+                        + note.actions.reduce(0) { $0 + $1.count }
+                },
+            noteCount: notes.count)
+        let input = Self.reduceInput(notes: notes, style: style)
+        guard !input.isEmpty else { throw SummaryError.generationFailed }
+        let prompt = prompts.reduceSummaryPrompt(
+            notes: input,
+            style: style,
             in: language,
-            stitchDetails: stitchDetails)
+            sizing: sizing)
+        var raw = ""
+        var parsed = PromptBuilder.ParsedStructuredSummary(style: style)
+        for attempt in 0..<2 {
+            raw = try await llm.generate(
+                system: prompt.system,
+                user: prompt.user,
+                maxTokens: sizing.maxTokens,
+                temperature: 0.3)
+            parsed = prompts.parseStructuredSummary(raw, style: style, sizing: sizing)
+            if !parsed.isEmpty { break }
+            if attempt == 0 { try Task.checkCancellation() }
+        }
+
+        let summary: String
+        if parsed.isEmpty {
+            let plain = prompts.cleanSummary(raw)
+            if !plain.isEmpty, !PromptBuilder.hasDegenerateRepetition(plain) {
+                summary = plain
+            } else {
+                summary = SummaryRecordReducer.render(
+                    records: SummaryRecordReducer.records(from: notes),
+                    style: style,
+                    length: length,
+                    in: language,
+                    stitchDetails: stitchDetails)
+            }
+        } else {
+            guard !PromptBuilder.hasDegenerateRepetition(parsed.joinedValues)
+            else { throw SummaryError.generationFailed }
+            summary = prompts.renderSummaryMarkdown(parsed, in: language)
+        }
         guard !summary.isEmpty else { throw SummaryError.generationFailed }
         await progress?(1, 1)
         return summary
@@ -423,6 +530,9 @@ struct SummaryEngine {
             notes: AttachmentNotes.merged(notes, attachments: record.attachments),
             style: style,
             length: length,
+            transcriptCharacterCount: record.entries.reduce(0) {
+                $0 + $1.sourceText.count
+            },
             in: language,
             progress: { done, _ in
                 progress(mappedCount + done, totalSteps)

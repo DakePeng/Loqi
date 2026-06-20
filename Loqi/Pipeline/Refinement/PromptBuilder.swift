@@ -436,6 +436,113 @@ struct PromptBuilder: Sendable {
         return note
     }
 
+    /// Reduce phase: synthesize extracted, source-grounded note records into
+    /// the final human summary. The model sees notes, not the raw transcript,
+    /// so it stays inside the small on-device model's useful range.
+    func reduceSummaryPrompt(
+        notes: String,
+        style: SummaryStyle = .meeting,
+        in language: AppLanguage,
+        sizing: SummaryPromptSizing? = nil
+    ) -> (system: String, user: String) {
+        let spec = style.spec
+        let overviewCap = sizing?.overviewCap ?? spec.overviewCap
+        let sectionClauses = spec.sections.enumerated()
+            .map { index, section in
+                let cap = sizing?.sectionCaps[safe: index] ?? section.cap
+                return "up to \(cap) lines \"\(section.tag): <\(section.hint)>\""
+            }
+            .joined(separator: ", ")
+        let system = "\(spec.task) Write entirely in \(language.promptName). "
+            + "Synthesize the notes into a reader-friendly summary. "
+            + "Do not concatenate or copy note/photo lines. "
+            + "Plain text, no markdown. Output ONLY tagged lines: "
+            + "first 1-\(overviewCap) lines \"O: <\(spec.overviewHint)>\", "
+            + "then \(sectionClauses). Use only information from the notes; "
+            + "never invent names, numbers, or events. Keep names, numbers, "
+            + "and dates exactly as written in the notes. "
+            + "Fold photo details into the relevant topic instead of listing "
+            + "photos separately. Skip categories with nothing to report. "
+            + "Merge duplicates. No other text."
+        return (system, "Notes:\n\(notes)")
+    }
+
+    struct ParsedStructuredSummary {
+        let style: SummaryStyle
+        var overview: [String] = []
+        /// One bucket per spec section, parallel to `style.spec.sections`.
+        var sections: [[String]]
+
+        init(style: SummaryStyle = .meeting) {
+            self.style = style
+            sections = Array(repeating: [], count: style.spec.sections.count)
+        }
+
+        var isEmpty: Bool {
+            overview.isEmpty && sections.allSatisfy(\.isEmpty)
+        }
+
+        /// All content with no markdown scaffolding — what repetition
+        /// validation should look at.
+        var joinedValues: String {
+            (overview + sections.flatMap { $0 }).joined(separator: "\n")
+        }
+
+        func items(_ tag: String) -> [String] {
+            guard let index = style.spec.sections.firstIndex(where: { $0.tag == tag })
+            else { return [] }
+            return sections[index]
+        }
+    }
+
+    /// Parse the reduce model's tagged lines against the style's spec.
+    /// Untagged output parses empty so the caller can choose a fallback.
+    func parseStructuredSummary(
+        _ raw: String,
+        style: SummaryStyle = .meeting,
+        sizing: SummaryPromptSizing? = nil
+    ) -> ParsedStructuredSummary {
+        let spec = style.spec
+        let overviewCap = sizing?.overviewCap ?? spec.overviewCap
+        var summary = ParsedStructuredSummary(style: style)
+        for line in cleanResponse(raw).split(separator: "\n") {
+            let trimmed = line.trimmingCharacters(in: .whitespaces)
+                .replacingOccurrences(of: "**", with: "")
+                .replacingOccurrences(of: "##", with: "")
+            guard !Self.hasDegenerateRepetition(trimmed) else { continue }
+            if let value = tagged(trimmed, "O"), summary.overview.count < overviewCap {
+                summary.overview.append(value)
+                continue
+            }
+            for (index, section) in spec.sections.enumerated() {
+                let cap = sizing?.sectionCaps[safe: index] ?? section.cap
+                if let value = tagged(trimmed, section.tag),
+                   summary.sections[index].count < cap {
+                    summary.sections[index].append(value)
+                    break
+                }
+            }
+        }
+        return summary
+    }
+
+    /// Markdown synthesis from parsed tagged output: overview paragraph, then
+    /// one "## Heading" section per non-empty category.
+    func renderSummaryMarkdown(
+        _ parsed: ParsedStructuredSummary, in language: AppLanguage
+    ) -> String {
+        var blocks: [String] = []
+        if !parsed.overview.isEmpty {
+            blocks.append(parsed.overview.joined(separator: " "))
+        }
+        for (section, items) in zip(parsed.style.spec.sections, parsed.sections)
+        where !items.isEmpty {
+            let bullets = items.map { "- \($0)" }.joined(separator: "\n")
+            blocks.append("## \(section.heading(for: language))\n\(bullets)")
+        }
+        return blocks.joined(separator: "\n\n")
+    }
+
     /// Summaries render in a plain Text view; stray markdown reads as
     /// literal asterisks. Strip it even if the model ignores instructions.
     func cleanSummary(_ raw: String) -> String {

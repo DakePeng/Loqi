@@ -119,6 +119,65 @@ struct SummaryEngineTests {
         #expect(prompt.user.contains("Known terms: Loqi (product name)"))
     }
 
+    @Test func reducePromptRequiresSynthesisInsteadOfConcatenation() {
+        let prompt = PromptBuilder().reduceSummaryPrompt(
+            notes: "[1] 桌布讨论\nfact: 传家宝桌子不必铺布\nphoto: 桌面照片显示木纹完整",
+            style: .meeting,
+            in: .chinese,
+            sizing: SummaryPromptSizing(maxTokens: 420, overviewCap: 2, sectionCaps: [3, 3, 3]))
+
+        #expect(prompt.system.contains("synthesize"))
+        #expect(prompt.system.contains("Do not concatenate"))
+        #expect(prompt.system.contains("photo"))
+        #expect(prompt.user.contains("Notes:\n[1] 桌布讨论"))
+    }
+
+    @Test func structuredReduceOutputRendersMarkdown() {
+        let builder = PromptBuilder()
+        let sizing = SummaryPromptSizing(maxTokens: 420, overviewCap: 2, sectionCaps: [3, 3, 3])
+        let parsed = builder.parseStructuredSummary(
+            """
+            O: 讨论围绕桌子是否需要铺桌布，以及转椅是否适合久坐。
+            T: 传家宝桌子可以不铺布，重点是保留原本状态。
+            D: 决定暂时不铺桌布。
+            A: 未明确: 继续确认转椅是否舒服
+            """,
+            style: .meeting,
+            sizing: sizing)
+
+        #expect(parsed.overview == ["讨论围绕桌子是否需要铺桌布，以及转椅是否适合久坐。"])
+        #expect(parsed.items("T") == ["传家宝桌子可以不铺布，重点是保留原本状态。"])
+        #expect(parsed.items("D") == ["决定暂时不铺桌布。"])
+        #expect(parsed.items("A") == ["未明确: 继续确认转椅是否舒服"])
+
+        let markdown = builder.renderSummaryMarkdown(parsed, in: .chinese)
+        #expect(markdown.contains("## 主题"))
+        #expect(markdown.contains("- 传家宝桌子可以不铺布"))
+        #expect(markdown.contains("## 决定"))
+        #expect(markdown.contains("## 待办事项"))
+    }
+
+    @Test func reduceInputLabelsPhotoFactsWithoutRawCaptionDump() {
+        let t0 = Date(timeIntervalSince1970: 1_000_000)
+        let transcript = SessionRecord.ChunkNote(
+            headline: "桌布讨论",
+            startedAt: t0,
+            facts: ["传家宝桌子不必铺布"],
+            decisions: ["暂时不铺桌布"])
+        let photo = SessionRecord.Attachment(
+            fileName: "desk.jpg",
+            timestamp: t0.addingTimeInterval(12),
+            vlmDescription: "照片显示木质桌面，桌上没有桌布。")
+        let input = SummaryEngine.reduceInput(
+            notes: AttachmentNotes.merged([transcript], attachments: [photo]),
+            style: .meeting)
+
+        #expect(input.contains("fact: 传家宝桌子不必铺布"))
+        #expect(input.contains("decision: 暂时不铺桌布"))
+        #expect(input.contains("photo: 照片显示木质桌面，桌上没有桌布。"))
+        #expect(!input.contains("📷"))
+    }
+
     @Test func parsesSummaryRecordTSVAndRejectsInvalidLines() {
         let raw = """
         T	c003	04:00-06:00	摘要去重	讨论本地摘要中的幻觉和重复
