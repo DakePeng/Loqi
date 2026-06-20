@@ -228,11 +228,10 @@ final class FileImportEngine {
         let output = FileManager.default.temporaryDirectory
             .appending(path: UUID().uuidString)
             .appendingPathExtension("m4a")
-        export.outputURL = output
-        export.outputFileType = .m4a
-        await export.export()
-        guard export.status == .completed else {
-            throw export.error ?? ImportError.audioExtractionFailed
+        do {
+            try await export.export(to: output, as: .m4a)
+        } catch {
+            throw ImportError.audioExtractionFailed
         }
         logger.info("import: extracted audio track from video")
         return output

@@ -68,7 +68,17 @@ enum SessionSearch {
         let recordText = (record.chunkNotes ?? []).reduce(0) {
             $0 + ($1.summaryRecords ?? []).reduce(0) { $0 + $1.text.count }
         }
-        return "\(record.entries.count)|\(summary)|\(notes)|\(recordText)|\(names)|\(title)|\(attachments)|\(record.endedAt.timeIntervalSince1970)"
+        // Entry text content, not just count: re-transcribe and hotword-restore
+        // swap words without changing the entry count, so a count-only key
+        // served stale search blobs. Hashed cheaply; safe because the blob
+        // cache is in-memory and never compared across launches.
+        var hasher = Hasher()
+        for entry in record.entries {
+            hasher.combine(entry.sourceText)
+            hasher.combine(entry.translation)
+        }
+        let entryText = hasher.finalize()
+        return "\(record.entries.count)|\(summary)|\(notes)|\(recordText)|\(names)|\(title)|\(attachments)|\(entryText)|\(record.endedAt.timeIntervalSince1970)"
     }
 
     /// Non-overlapping occurrences of the lowercased query in the blob.

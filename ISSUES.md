@@ -10,23 +10,10 @@
   - Evidence: `CaptionPipeline.attachImage` calls synchronous image downscale/JPEG encode/write before returning.
   - Fix: compress and write the image off-main, then append/update the attachment on the main actor.
 
-## Low Priority
-
-- [ ] Session search cache can go stale after transcript text changes with the same entry count.
-  - Evidence: `SessionSearch.fingerprint` tracks `entries.count` but not source/translation text content.
-  - Fix: add a cheap aggregate of entry source/translation text counts to the fingerprint.
-
-- [ ] Speaker separation first-run defaults differ between live recording and import.
-  - Evidence: live recording defaults `captions.speakerCount` to `0`, while import defaults the same key to `-1`.
-  - Fix: align the defaults or make the import-specific behavior explicit.
-
 ## Build Cleanup
 
 - [ ] Resolve Swift concurrency warnings around `AVAudioPCMBuffer` conversion closures.
   - Evidence: warnings in `AudioCaptureService.swift` and `VoiceprintService.swift` for captured mutable state and non-Sendable buffers.
-
-- [ ] Replace deprecated `AVAssetExportSession.export()` usage.
-  - Evidence: iOS 18 deprecation warnings in `FileImportEngine.extractAudioIfNeeded`.
 
 - [ ] Decide Info.plist document/full-screen warnings.
   - Evidence: build warns that document opening does not declare in-place support and `UIRequiresFullScreen` is deprecated on iOS 26.
