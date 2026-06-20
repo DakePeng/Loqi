@@ -241,6 +241,23 @@ struct SummaryEngineTests {
         #expect(input.contains("decision: 六月发布"))
     }
 
+    @Test func reduceInputCanBeBoundForLongSessions() {
+        let notes = (0..<80).map { index in
+            SessionRecord.ChunkNote(
+                headline: "第 \(index) 段",
+                startedAt: Date(timeIntervalSince1970: 1_000_000 + Double(index)),
+                facts: ["记录第 \(index) 段里的关键事实"],
+                decisions: ["决定第 \(index) 段的处理方式"])
+        }
+
+        let input = SummaryEngine.reduceInput(
+            notes: notes, style: .meeting, maxCharacters: 180)
+
+        #expect(!input.isEmpty)
+        #expect(input.count <= 180)
+        #expect(input.split(separator: "\n").allSatisfy { $0.contains(": ") })
+    }
+
     @Test func reduceFallsBackWhenGenerationThrows() async throws {
         let note = SessionRecord.ChunkNote(
             headline: "桌布讨论",
@@ -260,6 +277,42 @@ struct SummaryEngineTests {
             in: .chinese)
 
         #expect(summary.contains("传家宝桌子不必铺布"))
+    }
+
+    @Test func summarizeWithFullCachedNotesFallsBackWithoutLoadingModel() async throws {
+        let timestamp = Date(timeIntervalSince1970: 1_000_000)
+        let entry = SessionRecord.Entry(
+            sourceText: "预算定为 42 万",
+            translation: nil,
+            speaker: nil,
+            direction: LanguagePair(source: .chinese, target: .chinese),
+            timestamp: timestamp)
+        var record = SessionRecord(
+            mode: .captions,
+            startedAt: timestamp,
+            endedAt: timestamp,
+            entries: [entry])
+        record.chunkNotes = [.init(
+            headline: "预算",
+            startedAt: timestamp,
+            anchorEntryID: entry.id,
+            facts: ["预算定为 42 万"])]
+        record.liveNotesEndEntryID = entry.id
+        let missingModel = ModelOption(
+            id: "loqi-tests/missing-model",
+            displayName: "Missing test model",
+            requiredHeadroom: 1,
+            downloadBytes: 1)
+        let engine = SummaryEngine(llm: LLMService(model: missingModel))
+
+        let result = try await engine.summarize(
+            record,
+            style: .meeting,
+            length: .standard,
+            in: .chinese) { _, _ in }
+
+        #expect(result.summary.contains("预算定为 42 万"))
+        #expect(result.notes.map(\.headline) == ["预算"])
     }
 
     @Test func reduceWithoutStitchedDetailsDoesNotWaitForLLM() async throws {

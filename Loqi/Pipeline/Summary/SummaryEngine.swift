@@ -32,6 +32,7 @@ struct SummaryEngine {
     static let summaryMaxTokensHardCap = 900
     static let summaryOverviewHardCap = 6
     static let summarySectionHardCap = 8
+    static let reduceInputCharacterBudget = 6_000
 
     enum TranscriptSizeTier: Equatable, Sendable {
         case short
@@ -352,12 +353,16 @@ struct SummaryEngine {
     /// labeled as photo context so the final reduce can fold them into the
     /// surrounding topic instead of copying captions as standalone summary.
     static func reduceInput(
-        notes: [SessionRecord.ChunkNote], style: SummaryStyle
+        notes: [SessionRecord.ChunkNote],
+        style: SummaryStyle,
+        maxCharacters: Int? = nil
     ) -> String {
         let records = SummaryRecordReducer.deduped(
             SummaryRecordReducer.records(from: notes))
         var seen = Set<String>()
         var recent: [(label: String, key: String)] = []
+        var lines: [String] = []
+        var characterCount = 0
 
         func actionText(_ record: SessionRecord.SummaryRecord) -> String {
             let owner = record.owner?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
@@ -409,11 +414,28 @@ struct SummaryEngine {
             return true
         }
 
-        return records.compactMap { record in
+        func append(_ line: String) {
+            guard let maxCharacters else {
+                lines.append(line)
+                return
+            }
+            guard maxCharacters > 0 else { return }
+            let extra = line.count + (lines.isEmpty ? 0 : 1)
+            if characterCount + extra <= maxCharacters {
+                lines.append(line)
+                characterCount += extra
+            } else if lines.isEmpty {
+                lines.append(String(line.prefix(maxCharacters)))
+                characterCount = maxCharacters
+            }
+        }
+
+        for record in records {
             guard let (label, text) = labelAndText(record),
-                  keep(label, text) else { return nil }
-            return "\(label): \(text)"
-        }.joined(separator: "\n")
+                  keep(label, text) else { continue }
+            append("\(label): \(text)")
+        }
+        return lines.joined(separator: "\n")
     }
 
     /// Reduce phase: the final summary, written from notes alone. The
@@ -422,6 +444,7 @@ struct SummaryEngine {
         notes: [SessionRecord.ChunkNote],
         style: SummaryStyle = .meeting,
         length: SummaryLength = .standard,
+        maxInputCharacters: Int? = nil,
         transcriptCharacterCount: Int? = nil,
         in language: AppLanguage,
         stitchDetails: Bool = true,
@@ -438,7 +461,8 @@ struct SummaryEngine {
                         + note.actions.reduce(0) { $0 + $1.count }
                 },
             noteCount: notes.count)
-        let input = Self.reduceInput(notes: notes, style: style)
+        let input = Self.reduceInput(
+            notes: notes, style: style, maxCharacters: maxInputCharacters)
         guard !input.isEmpty else { throw SummaryError.generationFailed }
         if !stitchDetails {
             let summary = SummaryRecordReducer.render(
@@ -579,8 +603,10 @@ struct SummaryEngine {
         in language: AppLanguage,
         progress: @escaping @MainActor @Sendable (Int, Int) -> Void
     ) async throws -> (summary: String, notes: [SessionRecord.ChunkNote]) {
-        try await llm.load(policy: .requireDownloaded)
         let (uncovered, cached) = Self.uncoveredEntries(of: record)
+        if !uncovered.isEmpty {
+            try await llm.load(policy: .requireDownloaded)
+        }
         let mapChunks = Self.chunkEntries(uncovered).count
         let totalSteps = mapChunks + 1
         let fresh = try await makeNotes(
@@ -597,6 +623,7 @@ struct SummaryEngine {
             notes: AttachmentNotes.merged(notes, attachments: record.attachments),
             style: style,
             length: length,
+            maxInputCharacters: Self.reduceInputCharacterBudget,
             transcriptCharacterCount: record.entries.reduce(0) {
                 $0 + $1.sourceText.count
             },

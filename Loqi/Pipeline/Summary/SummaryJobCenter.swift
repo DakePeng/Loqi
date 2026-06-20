@@ -338,7 +338,9 @@ final class SummaryJobCenter {
         tasks[sessionID] = Task {
             defer { finishJob(sessionID) }
             do {
-                try await loadModel(sessionID: sessionID, allowDownload: allowDownload)
+                if suggestVocabulary || !hasFullCachedSummary(sessionID) {
+                    try await loadModel(sessionID: sessionID, allowDownload: allowDownload)
+                }
                 activities[sessionID] = .summarizing(done: 0, total: 0)
                 try await runSummarize(
                     sessionID: sessionID, style: style, length: length,
@@ -349,6 +351,13 @@ final class SummaryJobCenter {
                 errors[sessionID] = error.localizedDescription
             }
         }
+    }
+
+    private func hasFullCachedSummary(_ sessionID: UUID) -> Bool {
+        guard let session = archive.sessions.first(where: { $0.id == sessionID })
+        else { return false }
+        let coverage = SummaryEngine.uncoveredEntries(of: session)
+        return !coverage.cachedNotes.isEmpty && coverage.entries.isEmpty
     }
 
     /// Second-pass accuracy path: offline re-transcription of the saved
