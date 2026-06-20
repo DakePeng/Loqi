@@ -133,4 +133,20 @@ struct SessionSearchTests {
             in: [first, second], query: "alpha")
         #expect(matches.map(\.sessionID) == [first.id, second.id])
     }
+
+    // Transcript text edits at an unchanged entry count must invalidate the
+    // search-blob cache (re-transcribe / hotword-restore swap words in place).
+    @Test func sourceEditChangesFingerprintAtSameEntryCount() {
+        let a = makeRecord()
+        var b = a                                  // value copy: same id/endedAt/count
+        b.entries[0].sourceText = "完全不同的内容"   // only the source text differs
+        #expect(SessionSearch.fingerprint(of: a) != SessionSearch.fingerprint(of: b))
+    }
+
+    @Test func translationEditChangesFingerprint() {
+        let a = makeRecord()
+        var b = a
+        b.entries[0].translation = "A completely different translation"
+        #expect(SessionSearch.fingerprint(of: a) != SessionSearch.fingerprint(of: b))
+    }
 }
