@@ -1353,6 +1353,23 @@
         }
       }
     },
+    "Download live model" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "ライブモデルをダウンロード"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "下载实时模型"
+          }
+        }
+      }
+    },
     "Download model now" : {
       "extractionState" : "stale",
       "localizations" : {
@@ -1417,6 +1434,23 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "下载说话人模型"
+          }
+        }
+      }
+    },
+    "Download summary model" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "要約モデルをダウンロード"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "下载总结模型"
           }
         }
       }
@@ -1825,6 +1859,23 @@
         }
       }
     },
+    "Fast on-device model for live translation and notes" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "リアルタイム翻訳とメモ用の高速オンデバイスモデル"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "用于实时翻译和笔记的快速设备端模型"
+          }
+        }
+      }
+    },
     "File" : {
       "extractionState" : "stale",
       "localizations" : {
@@ -1955,6 +2006,23 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "高精度重新转写"
+          }
+        }
+      }
+    },
+    "Higher-quality summaries, titles and chat" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "より高品質な要約・タイトル・チャット"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "更高质量的总结、标题和聊天"
           }
         }
       }
@@ -2233,6 +2301,23 @@
         }
       }
     },
+    "Live AI model (0.8B)" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "ライブAIモデル（0.8B）"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "实时 AI 模型（0.8B）"
+          }
+        }
+      }
+    },
     "Live Captions" : {
       "extractionState" : "stale",
       "localizations" : {
@@ -2246,6 +2331,57 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "实时字幕"
+          }
+        }
+      }
+    },
+    "Live model" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "ライブモデル"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "实时模型"
+          }
+        }
+      }
+    },
+    "Live model files" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "ライブモデルファイル"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "实时模型文件"
+          }
+        }
+      }
+    },
+    "Live recording always uses the fast Qwen3.5 0.8B model so captions and live translation stay responsive and cool. After a recording, summaries, titles, vocabulary and chat use the summary model you pick above." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "録音中は常に高速なQwen3.5 0.8Bモデルを使用し、字幕とリアルタイム翻訳を快適かつ低発熱に保ちます。録音後は、要約・タイトル・単語・チャットに上で選んだ要約モデルを使用します。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "录制时始终使用快速的 Qwen3.5 0.8B 模型，让字幕和实时翻译保持流畅、低发热。录制结束后，总结、标题、生词和聊天会使用你在上方选择的总结模型。"
           }
         }
       }
@@ -4534,6 +4670,23 @@
         }
       }
     },
+    "Summary AI model (2B)" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "要約AIモデル（2B）"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "总结 AI 模型（2B）"
+          }
+        }
+      }
+    },
     "Summary failed — try again." : {
       "extractionState" : "stale",
       "localizations" : {
@@ -4564,6 +4717,40 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "摘要长度"
+          }
+        }
+      }
+    },
+    "Summary model" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "要約モデル"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "总结模型"
+          }
+        }
+      }
+    },
+    "Summary model files" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "要約モデルファイル"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "总结模型文件"
           }
         }
       }
@@ -4893,9 +5080,6 @@
           }
         }
       }
-    },
-    "This model writes summaries, titles and vocabulary after a recording ends. Live translation always uses the fast 0.8B model so it stays responsive and cool while recording." : {
-
     },
     "This session has no saved recording to re-transcribe." : {
       "extractionState" : "stale",
@@ -5295,193 +5479,6 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "您编辑过此摘要。再次总结将替换您的修改。"
-          }
-        }
-      }
-    },
-    "Live AI model (0.8B)" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "实时 AI 模型（0.8B）"
-          }
-        },
-        "ja" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "ライブAIモデル（0.8B）"
-          }
-        }
-      }
-    },
-    "Fast on-device model for live translation and notes" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "用于实时翻译和笔记的快速设备端模型"
-          }
-        },
-        "ja" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "リアルタイム翻訳とメモ用の高速オンデバイスモデル"
-          }
-        }
-      }
-    },
-    "Summary AI model (2B)" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "总结 AI 模型（2B）"
-          }
-        },
-        "ja" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "要約AIモデル（2B）"
-          }
-        }
-      }
-    },
-    "Higher-quality summaries, titles and chat" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "更高质量的总结、标题和聊天"
-          }
-        },
-        "ja" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "より高品質な要約・タイトル・チャット"
-          }
-        }
-      }
-    },
-    "Live model" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "实时模型"
-          }
-        },
-        "ja" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "ライブモデル"
-          }
-        }
-      }
-    },
-    "Live model files" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "实时模型文件"
-          }
-        },
-        "ja" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "ライブモデルファイル"
-          }
-        }
-      }
-    },
-    "Download live model" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "下载实时模型"
-          }
-        },
-        "ja" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "ライブモデルをダウンロード"
-          }
-        }
-      }
-    },
-    "Summary model" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "总结模型"
-          }
-        },
-        "ja" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "要約モデル"
-          }
-        }
-      }
-    },
-    "Summary model files" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "总结模型文件"
-          }
-        },
-        "ja" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "要約モデルファイル"
-          }
-        }
-      }
-    },
-    "Download summary model" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "下载总结模型"
-          }
-        },
-        "ja" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "要約モデルをダウンロード"
-          }
-        }
-      }
-    },
-    "Live recording always uses the fast Qwen3.5 0.8B model so captions and live translation stay responsive and cool. After a recording, summaries, titles, vocabulary and chat use the summary model you pick above." : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "录制时始终使用快速的 Qwen3.5 0.8B 模型，让字幕和实时翻译保持流畅、低发热。录制结束后，总结、标题、生词和聊天会使用你在上方选择的总结模型。"
-          }
-        },
-        "ja" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "録音中は常に高速なQwen3.5 0.8Bモデルを使用し、字幕とリアルタイム翻訳を快適かつ低発熱に保ちます。録音後は、要約・タイトル・単語・チャットに上で選んだ要約モデルを使用します。"
           }
         }
       }
