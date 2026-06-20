@@ -213,6 +213,40 @@ struct SummaryEngineTests {
         #expect(!input.contains("fact: 预算定为 42 万"))
     }
 
+    @Test func reduceInputDoesNotLetTopicDropSameTextDecision() {
+        let note = SessionRecord.ChunkNote(
+            headline: "预算定为 42 万",
+            startedAt: Date(timeIntervalSince1970: 1_000_000),
+            decisions: ["预算定为 42 万"])
+
+        let input = SummaryEngine.reduceInput(notes: [note], style: .meeting)
+
+        #expect(input.contains("topic: 预算定为 42 万"))
+        #expect(input.contains("decision: 预算定为 42 万"))
+    }
+
+    @Test func reduceFallsBackWhenGenerationThrows() async throws {
+        let note = SessionRecord.ChunkNote(
+            headline: "桌布讨论",
+            startedAt: Date(timeIntervalSince1970: 1_000_000),
+            facts: ["传家宝桌子不必铺布"])
+        let missingModel = ModelOption(
+            id: "loqi-tests/missing-model",
+            displayName: "Missing test model",
+            requiredHeadroom: 1,
+            downloadBytes: 1)
+        let engine = SummaryEngine(llm: LLMService(model: missingModel))
+
+        let summary = try await engine.reduce(
+            notes: [note],
+            style: .meeting,
+            length: .standard,
+            in: .chinese,
+            stitchDetails: false)
+
+        #expect(summary.contains("传家宝桌子不必铺布"))
+    }
+
     @Test func reducedSummaryFallsBackWhenStructuredOutputRepeats() {
         let builder = PromptBuilder()
         let sizing = SummaryPromptSizing(maxTokens: 420, overviewCap: 6, sectionCaps: [6, 6, 6])

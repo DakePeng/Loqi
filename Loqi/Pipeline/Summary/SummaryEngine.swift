@@ -358,7 +358,7 @@ struct SummaryEngine {
         let records = SummaryRecordReducer.deduped(
             SummaryRecordReducer.records(from: notes))
         var seen = Set<String>()
-        var recent: [String] = []
+        var recent: [(isTopic: Bool, base: String)] = []
 
         func actionText(_ record: SessionRecord.SummaryRecord) -> String {
             let owner = record.owner?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
@@ -396,22 +396,25 @@ struct SummaryEngine {
             }
         }
 
-        func keep(_ text: String) -> Bool {
-            let key = dedupKey(text)
-            guard !key.isEmpty else { return false }
+        func keep(label: String, text: String) -> Bool {
+            let base = dedupKey(text)
+            guard !base.isEmpty else { return false }
+            let isTopic = label == "topic"
+            let key = isTopic ? "topic:\(base)" : base
             if seen.contains(key) { return false }
             for prior in recent.suffix(24)
-            where HotwordMatcher.similarity(prior, key) >= 0.9 {
+            where prior.isTopic == isTopic
+                && HotwordMatcher.similarity(prior.base, base) >= 0.9 {
                 return false
             }
             seen.insert(key)
-            recent.append(key)
+            recent.append((isTopic, base))
             return true
         }
 
         return records.compactMap { record in
             guard let (label, text) = labelAndText(record),
-                  keep(text) else { return nil }
+                  keep(label: label, text: text) else { return nil }
             return "\(label): \(text)"
         }.joined(separator: "\n")
     }
@@ -448,13 +451,19 @@ struct SummaryEngine {
         var raw = ""
         var parsed = PromptBuilder.ParsedStructuredSummary(style: style)
         for attempt in 0..<2 {
-            raw = try await llm.generate(
-                system: prompt.system,
-                user: prompt.user,
-                maxTokens: sizing.maxTokens,
-                temperature: 0.3)
-            parsed = prompts.parseStructuredSummary(raw, style: style, sizing: sizing)
-            if !parsed.isEmpty { break }
+            do {
+                raw = try await llm.generate(
+                    system: prompt.system,
+                    user: prompt.user,
+                    maxTokens: sizing.maxTokens,
+                    temperature: 0.3)
+                parsed = prompts.parseStructuredSummary(raw, style: style, sizing: sizing)
+                if !parsed.isEmpty { break }
+            } catch is CancellationError {
+                throw CancellationError()
+            } catch {
+                parsed = PromptBuilder.ParsedStructuredSummary(style: style)
+            }
             if attempt == 0 { try Task.checkCancellation() }
         }
 
