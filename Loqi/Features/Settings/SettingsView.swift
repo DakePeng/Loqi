@@ -30,9 +30,13 @@ struct SettingsView: View {
     @State private var asrActiveSeconds: Double = 0
     @State private var thermalTransitions = 0
     @State private var llmState = "—"
-    @State private var llmDownloaded = false
+    @State private var liveDownloaded = false
+    @State private var summaryDownloaded = false
     @State private var availableMemory = "—"
-    @State private var llmDownloading = false
+    // ponytail: one in-flight download (the LLM actor serializes loads); the
+    // id picks which row renders the progress bar. Per-row flags would buy
+    // nothing the actor doesn't already enforce.
+    @State private var downloadingModelID: String?
     @State private var llmSpeedometer = DownloadSpeedometer()
     @State private var downloadError: String?
 
@@ -140,7 +144,27 @@ struct SettingsView: View {
                         }
 
                     Group {
-                        Picker("Model", selection: $modelID) {
+                        // Live tier — fixed 0.8B, runs during recording.
+                        LabeledContent("Live model", value: "Qwen3.5 0.8B")
+                        LabeledContent(
+                            "Live model files",
+                            value: liveDownloaded
+                                ? String(localized: "Downloaded")
+                                : String(localized: "Not downloaded"))
+                        if !liveDownloaded {
+                            if downloadingModelID == ModelCatalog.liveModel.id {
+                                DownloadProgressRow(
+                                    speedometer: llmSpeedometer, onStop: stopDownload)
+                            } else {
+                                Button("Download live model") {
+                                    startDownload(ModelCatalog.liveModel)
+                                }
+                                .disabled(downloadingModelID != nil)
+                            }
+                        }
+
+                        // Summary tier — user's pick, runs after recording.
+                        Picker("Summary model", selection: $modelID) {
                             ForEach(ModelCatalog.all) { option in
                                 Text(option.displayName).tag(option.id)
                             }
@@ -149,6 +173,23 @@ struct SettingsView: View {
                             Task {
                                 await pipeline.llm.setModel(ModelCatalog.option(for: modelID))
                                 await refreshStats()
+                            }
+                        }
+                        LabeledContent(
+                            "Summary model files",
+                            value: summaryDownloaded
+                                ? String(localized: "Downloaded")
+                                : String(localized: "Not downloaded"))
+                        if !summaryDownloaded {
+                            let summary = ModelCatalog.option(for: modelID)
+                            if downloadingModelID == summary.id {
+                                DownloadProgressRow(
+                                    speedometer: llmSpeedometer, onStop: stopDownload)
+                            } else {
+                                Button("Download summary model") {
+                                    startDownload(summary)
+                                }
+                                .disabled(downloadingModelID != nil)
                             }
                         }
 
@@ -164,32 +205,17 @@ struct SettingsView: View {
                             }
                         }
 
-                        LabeledContent(
-                            "Model files",
-                            value: llmDownloaded
-                                ? String(localized: "Downloaded")
-                                : String(localized: "Not downloaded"))
-
-                        if !llmDownloaded {
-                            if llmDownloading {
-                                DownloadProgressRow(
-                                    speedometer: llmSpeedometer,
-                                    onStop: stopDownload)
-                            } else {
-                                Button("Download model now") { startDownload() }
-                            }
-                            if let downloadError {
-                                Text(downloadError)
-                                    .font(.footnote)
-                                    .foregroundStyle(.red)
-                            }
+                        if let downloadError {
+                            Text(downloadError)
+                                .font(.footnote)
+                                .foregroundStyle(.red)
                         }
                     }
                     .disabled(!llmEnabled)
                 } header: {
                     Text("On-device AI")
                 } footer: {
-                    Text("This model writes summaries, titles and vocabulary after a recording ends. Live translation always uses the fast 0.8B model so it stays responsive and cool while recording.")
+                    Text("Live recording always uses the fast Qwen3.5 0.8B model so captions and live translation stay responsive and cool. After a recording, summaries, titles, vocabulary and chat use the summary model you pick above.")
                 }
 
                 Section {
@@ -313,40 +339,24 @@ struct SettingsView: View {
         }
     }
 
-    private func startDownload() {
+    private func startDownload(_ model: ModelOption) {
         downloadError = nil
-        llmDownloading = true
-        let selected = ModelCatalog.option(for: modelID)
-        let missing = ModelCatalog.requiredModels(summaryModel: selected)
-            .filter { !LLMService.isDownloaded(model: $0) }
-        let totalBytes = missing.map(\.downloadBytes).reduce(0, +)
-        guard totalBytes > 0 else {
-            llmDownloading = false
-            return
-        }
-        llmSpeedometer.start(totalBytes: totalBytes)
+        downloadingModelID = model.id
+        llmSpeedometer.start(totalBytes: model.downloadBytes)
         Task {
+            await pipeline.llm.setModel(model)
             do {
-                var completedBytes: Int64 = 0
-                for model in missing {
-                    await pipeline.llm.setModel(model)
-                    let completedBeforeModel = completedBytes
-                    try await pipeline.llm.load { progress in
-                        let done = Double(completedBeforeModel)
-                            + progress * Double(model.downloadBytes)
-                        Task { @MainActor in
-                            llmSpeedometer.update(done / Double(totalBytes))
-                        }
-                    }
-                    completedBytes += model.downloadBytes
+                try await pipeline.llm.load { progress in
+                    Task { @MainActor in llmSpeedometer.update(progress) }
                 }
             } catch is CancellationError {
                 // Stopped by the user — not an error.
             } catch {
                 downloadError = error.localizedDescription
             }
-            await pipeline.llm.setModel(selected)
-            llmDownloading = false
+            // Restore the user's summary pick as the resident model.
+            await pipeline.llm.setModel(ModelCatalog.option(for: modelID))
+            downloadingModelID = nil
             await refreshStats()
         }
     }
@@ -363,9 +373,9 @@ struct SettingsView: View {
         case .ready: llmState = String(localized: "Ready")
         case .failed(let reason): llmState = String(localized: "Failed: \(reason)")
         }
-        let selected = ModelCatalog.option(for: modelID)
-        llmDownloaded = ModelCatalog.requiredModels(summaryModel: selected)
-            .allSatisfy { LLMService.isDownloaded(model: $0) }
+        liveDownloaded = LLMService.isDownloaded(model: ModelCatalog.liveModel)
+        summaryDownloaded = LLMService.isDownloaded(
+            model: ModelCatalog.option(for: modelID))
         let bytes = await pipeline.llm.available()
         availableMemory = ByteCountFormatter.string(
             fromByteCount: Int64(bytes), countStyle: .memory)

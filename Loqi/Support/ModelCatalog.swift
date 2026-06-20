@@ -109,10 +109,6 @@ enum ModelCatalog {
     /// fast tier, in which case the boundary swap is a no-op.
     static var summaryModel: ModelOption { current }
 
-    static func requiredModels(summaryModel: ModelOption = current) -> [ModelOption] {
-        summaryModel == liveModel ? [liveModel] : [summaryModel, liveModel]
-    }
-
     static let all = [qwen35_2b, qwen35_0_8b]
 
     static func option(for id: String) -> ModelOption {
