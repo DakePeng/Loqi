@@ -221,9 +221,11 @@ final class CaptionPipeline {
 
     /// Captions-mode speaker picker value; 0/1 = diarization off, -1 =
     /// Auto, 2+ = hard cap (see VoiceprintService.clusterCap). Unset defaults
-    /// to off so recording never downloads the speaker model silently.
+    /// to Auto, matching the picker — the model loads on demand behind a
+    /// "Preparing speaker separation…" status, the same path a manual Auto
+    /// pick uses.
     var captionSpeakerCount: Int {
-        (UserDefaults.standard.object(forKey: "captions.speakerCount") as? Int) ?? 0
+        (UserDefaults.standard.object(forKey: "captions.speakerCount") as? Int) ?? -1
     }
 
     /// Persisted download source for the speaker model (Settings key

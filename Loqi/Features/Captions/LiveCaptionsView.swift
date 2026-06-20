@@ -25,12 +25,12 @@ struct LiveCaptionsView: View {
     @Bindable var pipeline: CaptionPipeline
     var switchToSessions: () -> Void = {}
 
-    @AppStorage("captions.source") private var sourceRaw = AppLanguage.english.rawValue
+    @AppStorage("captions.source") private var sourceRaw = RecognitionLanguageSelection.autoRawValue
     /// Translation is opt-in: empty = off (plain transcription, the default).
     @AppStorage("captions.translation") private var translationRaw = ""
     // 0/1 = single speaker (no diarization), -1 = Auto, 2+ = hard cap.
     // Default off so first recording never downloads the speaker model silently.
-    @AppStorage("captions.speakerCount") private var speakerCount = 0
+    @AppStorage("captions.speakerCount") private var speakerCount = -1
     @AppStorage(MicSensitivity.defaultsKey) private var sensitivityRaw
         = MicSensitivity.balanced.rawValue
     @State private var errorMessage: String?

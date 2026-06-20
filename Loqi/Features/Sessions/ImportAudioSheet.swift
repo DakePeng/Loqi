@@ -13,7 +13,7 @@ struct ImportAudioSheet: View {
     @Bindable var pipeline: CaptionPipeline
     @Environment(\.dismiss) private var dismiss
 
-    @AppStorage("captions.source") private var sourceRaw = AppLanguage.english.rawValue
+    @AppStorage("captions.source") private var sourceRaw = RecognitionLanguageSelection.autoRawValue
     /// Shared with the Record screen: empty = transcribe only (default).
     @AppStorage("captions.translation") private var translationRaw = ""
     // -1 = Auto (diarize). Default on so imports get speaker labels.
@@ -29,7 +29,11 @@ struct ImportAudioSheet: View {
     @State private var showSpeakerDownloadPrompt = false
 
     private var translationTarget: AppLanguage? { AppLanguage(rawValue: translationRaw) }
-    private var source: AppLanguage { AppLanguage(rawValue: sourceRaw) ?? .english }
+    /// "auto" resolves to the device-preferred language for the import
+    /// direction; the ASR engine auto-detects the spoken language regardless.
+    private var source: AppLanguage {
+        RecognitionLanguageSelection(rawValue: sourceRaw).fallbackLanguage
+    }
 
     /// Diarization is requested but the model isn't on disk yet.
     private var needsSpeakerModelConsent: Bool {
@@ -53,6 +57,7 @@ struct ImportAudioSheet: View {
                 Section {
                     LabeledContent("File", value: url.lastPathComponent)
                     Picker("Language", selection: $sourceRaw) {
+                        Text("Auto").tag(RecognitionLanguageSelection.autoRawValue)
                         ForEach(AppLanguage.allCases) {
                             Text($0.displayName).tag($0.rawValue)
                         }
