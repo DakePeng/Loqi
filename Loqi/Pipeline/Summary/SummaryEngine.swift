@@ -375,8 +375,7 @@ struct SummaryEngine {
         func labelAndText(_ record: SessionRecord.SummaryRecord) -> (String, String)? {
             switch record.kind {
             case .topic:
-                return ("topic", record.topicTitle?.isEmpty == false
-                    ? record.topicTitle! : record.text)
+                return ("topic", record.text.isEmpty ? record.topicTitle ?? "" : record.text)
             case .point:
                 return (record.source == .photo ? "photo" : "fact", record.text)
             case .decision:
@@ -416,7 +415,7 @@ struct SummaryEngine {
     }
 
     /// Reduce phase: the final summary, written from notes alone. The
-    /// deterministic renderer is used only if the model output is unusable.
+    /// deterministic renderer keeps live peeks local and backs up bad output.
     func reduce(
         notes: [SessionRecord.ChunkNote],
         style: SummaryStyle = .meeting,
@@ -439,27 +438,35 @@ struct SummaryEngine {
             noteCount: notes.count)
         let input = Self.reduceInput(notes: notes, style: style)
         guard !input.isEmpty else { throw SummaryError.generationFailed }
+        if !stitchDetails {
+            let summary = SummaryRecordReducer.render(
+                records: SummaryRecordReducer.records(from: notes),
+                style: style,
+                length: length,
+                in: language,
+                stitchDetails: false)
+            guard !summary.isEmpty else { throw SummaryError.generationFailed }
+            await progress?(1, 1)
+            return summary
+        }
         let prompt = prompts.reduceSummaryPrompt(
             notes: input,
             style: style,
             in: language,
             sizing: sizing)
-        var raw = ""
-        var parsed = PromptBuilder.ParsedStructuredSummary(style: style)
-        for attempt in 0..<2 {
-            raw = try await llm.generate(
+        let output = try await Self.generateStructuredReduce(style: style) {
+            try await llm.generate(
                 system: prompt.system,
                 user: prompt.user,
                 maxTokens: sizing.maxTokens,
                 temperature: 0.3)
-            parsed = prompts.parseStructuredSummary(raw, style: style, sizing: sizing)
-            if !parsed.isEmpty { break }
-            if attempt == 0 { try Task.checkCancellation() }
+        } parse: { raw in
+            prompts.parseStructuredSummary(raw, style: style, sizing: sizing)
         }
 
         let summary = Self.renderReducedSummary(
-            raw: raw,
-            parsed: parsed,
+            raw: output.raw,
+            parsed: output.parsed,
             notes: notes,
             style: style,
             length: length,
@@ -468,6 +475,21 @@ struct SummaryEngine {
         guard !summary.isEmpty else { throw SummaryError.generationFailed }
         await progress?(1, 1)
         return summary
+    }
+
+    static func generateStructuredReduce(
+        style: SummaryStyle,
+        _ generate: () async throws -> String,
+        parse: (String) -> PromptBuilder.ParsedStructuredSummary
+    ) async throws -> (raw: String, parsed: PromptBuilder.ParsedStructuredSummary) {
+        do {
+            let raw = try await generate()
+            return (raw, parse(raw))
+        } catch is CancellationError {
+            throw CancellationError()
+        } catch {
+            return ("", PromptBuilder.ParsedStructuredSummary(style: style))
+        }
     }
 
     static func renderReducedSummary(
@@ -489,18 +511,11 @@ struct SummaryEngine {
                 stitchDetails: stitchDetails)
         }
 
-        if parsed.isEmpty {
-            let plain = prompts.cleanSummary(raw)
-            if !plain.isEmpty, !PromptBuilder.hasDegenerateRepetition(plain) {
-                return plain
-            } else {
-                return fallback()
-            }
-        } else {
-            guard !PromptBuilder.hasDegenerateRepetition(parsed.joinedValues)
-            else { return fallback() }
-            return prompts.renderSummaryMarkdown(parsed, in: language)
-        }
+        guard !parsed.isEmpty else { return fallback() }
+        guard !PromptBuilder.hasDegenerateRepetition(parsed.joinedValues)
+        else { return fallback() }
+        let summary = prompts.renderSummaryMarkdown(parsed, in: language)
+        return summary.isEmpty ? fallback() : summary
     }
 
     /// Best-effort scenario detection for the post-stop selection step.

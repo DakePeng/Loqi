@@ -191,6 +191,125 @@ struct SummaryEngineTests {
         #expect(!input.contains("fact: 预算定为 42 万"))
     }
 
+    @Test func reduceInputIncludesTopicSummaryWhenTitleExists() {
+        let timestamp = Date(timeIntervalSince1970: 1_000_000)
+        let note = SessionRecord.ChunkNote(
+            headline: "预算",
+            startedAt: timestamp,
+            summaryRecords: [
+                .init(
+                    kind: .topic,
+                    source: .transcript,
+                    sourceIDs: ["m001"],
+                    sourceIndex: 0,
+                    timestamp: timestamp,
+                    text: "预算定为 42 万，并且六月发布前完成验收",
+                    topicTitle: "预算")
+            ])
+
+        let input = SummaryEngine.reduceInput(notes: [note], style: .meeting)
+
+        #expect(input.contains("topic: 预算定为 42 万，并且六月发布前完成验收"))
+    }
+
+    @Test func reduceFallsBackWhenGenerationThrows() async throws {
+        let note = SessionRecord.ChunkNote(
+            headline: "桌布讨论",
+            startedAt: Date(timeIntervalSince1970: 1_000_000),
+            facts: ["传家宝桌子不必铺布"])
+        let missingModel = ModelOption(
+            id: "loqi-tests/missing-model",
+            displayName: "Missing test model",
+            requiredHeadroom: 1,
+            downloadBytes: 1)
+        let engine = SummaryEngine(llm: LLMService(model: missingModel))
+
+        let summary = try await engine.reduce(
+            notes: [note],
+            style: .meeting,
+            length: .standard,
+            in: .chinese)
+
+        #expect(summary.contains("传家宝桌子不必铺布"))
+    }
+
+    @Test func reduceWithoutStitchedDetailsDoesNotWaitForLLM() async throws {
+        let llm = LLMService()
+        await llm.setBackgrounded(true)
+        let engine = SummaryEngine(llm: llm)
+        let note = SessionRecord.ChunkNote(
+            headline: "现场摘要",
+            startedAt: Date(timeIntervalSince1970: 1_000_000),
+            facts: ["录音中查看摘要不应占用模型"])
+
+        let didRender = await withTaskGroup(of: Bool.self) { group in
+            group.addTask {
+                do {
+                    let summary = try await engine.reduce(
+                        notes: [note],
+                        style: .meeting,
+                        length: .standard,
+                        in: .chinese,
+                        stitchDetails: false)
+                    return summary.contains("录音中查看摘要不应占用模型")
+                } catch {
+                    return false
+                }
+            }
+            group.addTask {
+                try? await Task.sleep(for: .milliseconds(50))
+                return false
+            }
+            let first = await group.next() ?? false
+            group.cancelAll()
+            return first
+        }
+        await llm.setBackgrounded(false)
+
+        #expect(didRender)
+    }
+
+    @Test func structuredReduceGenerationFallsBackAfterOneThrow() async throws {
+        var attempts = 0
+
+        let output = try await SummaryEngine.generateStructuredReduce(style: .meeting) {
+            attempts += 1
+            throw LLMServiceError.modelNotLoaded
+        } parse: { _ in
+            var parsed = PromptBuilder.ParsedStructuredSummary(style: .meeting)
+            parsed.overview = ["不应解析"]
+            return parsed
+        }
+
+        #expect(attempts == 1)
+        #expect(output.raw.isEmpty)
+        #expect(output.parsed.isEmpty)
+    }
+
+    @Test func reducedSummaryFallsBackWhenStructuredOutputIsEmpty() {
+        let builder = PromptBuilder()
+        let sizing = SummaryPromptSizing(maxTokens: 420, overviewCap: 6, sectionCaps: [6, 6, 6])
+        let raw = "topic: 桌布讨论\nfact: 传家宝桌子不必铺布"
+        let parsed = builder.parseStructuredSummary(raw, style: .meeting, sizing: sizing)
+        let note = SessionRecord.ChunkNote(
+            headline: "桌布讨论",
+            startedAt: Date(timeIntervalSince1970: 1_000_000),
+            facts: ["传家宝桌子不必铺布"])
+
+        let summary = SummaryEngine.renderReducedSummary(
+            raw: raw,
+            parsed: parsed,
+            notes: [note],
+            style: .meeting,
+            length: .standard,
+            in: .chinese,
+            stitchDetails: false)
+
+        #expect(parsed.isEmpty)
+        #expect(summary.contains("传家宝桌子不必铺布"))
+        #expect(!summary.contains("topic:"))
+    }
+
     @Test func reducedSummaryFallsBackWhenStructuredOutputRepeats() {
         let builder = PromptBuilder()
         let sizing = SummaryPromptSizing(maxTokens: 420, overviewCap: 6, sectionCaps: [6, 6, 6])
