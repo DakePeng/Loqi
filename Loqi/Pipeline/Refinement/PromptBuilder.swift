@@ -261,12 +261,14 @@ struct PromptBuilder: Sendable {
         for understanding only; extracting records from context_only is \
         forbidden. If target continues the same topic as context_only, reuse \
         a consistent topic_title and record only information not already in \
-        context_only. Use only facts explicitly present in target; never infer, \
-        add, or expand. Do not add anything that is not in the target. Copy \
+        context_only. Use only facts explicitly present in target; never add \
+        facts, names, numbers, or events that are not in the target. When the \
+        target states a reason, condition, or qualifier for a point, keep that \
+        clause so the point keeps its meaning. Copy \
         names, numbers, dates, and amounts exactly. If target appears to be \
         a mis-hearing of one of the known terms, use the known-term spelling. \
         Every non-topic record must cite source_ids from target. If owner or \
-        deadline is unclear, write "未明确". Keep each content field short. \
+        deadline is unclear, write "未明确". Keep each content field to one line. \
         Maximum records: 1 T, 3 P, 3 D, 3 A, 2 Q, 2 R, 3 E, 3 J. Skip empty \
         categories.
 
@@ -469,13 +471,17 @@ struct PromptBuilder: Sendable {
             + "Synthesize the notes into a reader-friendly summary with a natural overview "
             + "and concise complete-thought bullets. Do not concatenate or copy note/photo "
             + "lines. Do not repeat the overview in section bullets. Avoid repeated lead-ins "
-            + "across bullets. \(tone) Plain text, no markdown. Output ONLY tagged lines: "
+            + "across bullets. Lead with the most important, decision- or outcome-bearing "
+            + "points; when a category has more lines than its budget, keep the most important "
+            + "and drop minor details. \(tone) Plain text, no markdown. Output ONLY tagged lines: "
             + "first 1-\(overviewCap) lines \"O: <\(spec.overviewHint)>\", "
             + "then \(sectionClauses). Use only information from the notes; never invent "
             + "names, numbers, or events. Keep names, numbers, and dates exactly as written "
-            + "in the notes. Fold photo details into the relevant topic instead of listing "
-            + "photos separately. Skip categories with nothing to report. Merge duplicates. "
-            + "No other text."
+            + "in the notes. Photos are reference context only: fold a photo into the "
+            + "relevant topic, and never turn a photo into a key point, decision, to-do, or "
+            + "next step. Never invent goals, plans, or follow-ups that were not spoken — "
+            + "leave a category empty rather than filling it. Skip categories with nothing "
+            + "to report. Merge duplicates. No other text."
         return (system, "Notes:\n\(notes)")
     }
 

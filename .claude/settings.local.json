@@ -29,7 +29,9 @@
       "Bash(python3)",
       "Bash(git -C /Users/kunzhipeng/Desktop/Loqi status --short)",
       "Bash(git -C /Users/kunzhipeng/Desktop/Loqi log --oneline -3)",
-      "Read(//Applications/Xcode.app/Contents/Developer/Platforms/iPhoneSimulator.platform/Developer/SDKs/iPhoneSimulator.sdk/System/Library/Frameworks/SwiftUI.framework/Modules/SwiftUI.swiftmodule/**)"
+      "Read(//Applications/Xcode.app/Contents/Developer/Platforms/iPhoneSimulator.platform/Developer/SDKs/iPhoneSimulator.sdk/System/Library/Frameworks/SwiftUI.framework/Modules/SwiftUI.swiftmodule/**)",
+      "Bash(xargs ls -la)",
+      "Bash(git log *)"
     ]
   }
 }
