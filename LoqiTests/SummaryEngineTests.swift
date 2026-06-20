@@ -119,6 +119,66 @@ struct SummaryEngineTests {
         #expect(prompt.user.contains("Known terms: Loqi (product name)"))
     }
 
+    @Test func reducePromptRequiresNaturalWritingConstraints() {
+        let prompt = PromptBuilder().reduceSummaryPrompt(
+            notes: "topic: 桌布讨论\nfact: 传家宝桌子不必铺布\nphoto: 桌面照片显示木纹完整",
+            style: .meeting,
+            in: .chinese,
+            sizing: SummaryPromptSizing(
+                maxTokens: 420,
+                overviewCap: 2,
+                sectionCaps: [3, 3, 3]))
+
+        #expect(prompt.system.contains("natural overview"))
+        #expect(prompt.system.contains("complete-thought bullets"))
+        #expect(prompt.system.contains("Do not repeat the overview"))
+        #expect(prompt.system.contains("Avoid repeated lead-ins"))
+        #expect(prompt.system.contains("Meeting tone"))
+        #expect(prompt.system.contains("Output ONLY tagged lines"))
+        #expect(prompt.user.contains("Notes:\ntopic: 桌布讨论"))
+    }
+
+    @Test func structuredReduceOutputRendersMarkdown() {
+        let builder = PromptBuilder()
+        let sizing = SummaryPromptSizing(maxTokens: 420, overviewCap: 2, sectionCaps: [3, 3, 3])
+        let parsed = builder.parseStructuredSummary(
+            """
+            O: 讨论围绕桌子是否需要铺桌布，以及转椅是否适合久坐。
+            T: 传家宝桌子可以不铺布，重点是保留原本状态。
+            D: 决定暂时不铺桌布。
+            A: 未明确: 继续确认转椅是否舒服
+            """,
+            style: .meeting,
+            sizing: sizing)
+
+        #expect(parsed.overview == ["讨论围绕桌子是否需要铺桌布，以及转椅是否适合久坐。"])
+        #expect(parsed.items("T") == ["传家宝桌子可以不铺布，重点是保留原本状态。"])
+        #expect(parsed.items("D") == ["决定暂时不铺桌布。"])
+        #expect(parsed.items("A") == ["未明确: 继续确认转椅是否舒服"])
+
+        let markdown = builder.renderSummaryMarkdown(parsed, in: .chinese)
+        #expect(markdown.contains("## 主题"))
+        #expect(markdown.contains("- 传家宝桌子可以不铺布"))
+        #expect(markdown.contains("## 决定"))
+        #expect(markdown.contains("## 待办事项"))
+    }
+
+    @Test func structuredSummaryCleanupDropsOverviewDuplicates() {
+        var parsed = PromptBuilder.ParsedStructuredSummary(style: .meeting)
+        parsed.overview = ["讨论围绕桌布和转椅选择。"]
+        parsed.sections[0] = [
+            "讨论围绕桌布和转椅选择",
+            "传家宝桌子可以不铺布，重点是保留原本状态。",
+        ]
+        parsed.sections[1] = ["暂时不铺桌布。"]
+
+        let cleaned = PromptBuilder().deduplicatedStructuredSummary(parsed)
+
+        #expect(cleaned.overview == ["讨论围绕桌布和转椅选择。"])
+        #expect(cleaned.items("T") == ["传家宝桌子可以不铺布，重点是保留原本状态。"])
+        #expect(cleaned.items("D") == ["暂时不铺桌布。"])
+    }
+
     @Test func parsesSummaryRecordTSVAndRejectsInvalidLines() {
         let raw = """
         T	c003	04:00-06:00	摘要去重	讨论本地摘要中的幻觉和重复
