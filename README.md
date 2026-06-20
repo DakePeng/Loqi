@@ -1,5 +1,17 @@
 # Loqi
 
+[English](README.md) | [简体中文](README.zh-Hans.md)
+
+<p align="center">
+  <img src="Loqi/Assets.xcassets/BrandBanner.imageset/banner.png" alt="Loqi audio waveform banner" width="900">
+</p>
+
+<p align="center">
+  <img src="Loqi/Assets.xcassets/AppIcon.appiconset/icon-1024-premium.png" alt="Loqi app icon" width="96">
+  &nbsp;&nbsp;
+  <img src="Loqi/Assets.xcassets/WaveGlyph.imageset/glyph.png" alt="Loqi wave glyph" width="96">
+</p>
+
 Private voice notes, transcripts and summaries that run **entirely on your iPhone** — no servers, no internet needed after setup. Live translation included as an optional lens.
 
 - **Main line:** Record → live transcript (with speakers) → instant summary → searchable archive. Pick the same language for both sides and the app is a pure recorder/transcriber; pick different ones and live translation appears alongside.
