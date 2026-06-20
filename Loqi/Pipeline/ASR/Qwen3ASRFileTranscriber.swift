@@ -9,11 +9,8 @@ import os
 /// Hotwords prime the decoder itself — the vocabulary the user taught the
 /// app reaches recognition here, not just the downstream fixup.
 actor Qwen3ASRFileTranscriber {
-    /// Hotword priming is plumbed end-to-end but OFF until the prompt
-    /// format is device-verified against sherpa's expectations — a
-    /// malformed hotword string pollutes the decoder prompt and can blank
-    /// whole segments, which costs transcript content silently.
-    nonisolated static let hotwordPrimingEnabled = false
+    /// Keep priming behind one flag so a bad field run can disable it quickly.
+    nonisolated static let hotwordPrimingEnabled = true
 
     private let hotwords: [String]
     private let logger = Logger(subsystem: "com.kunzhipeng.loqi", category: "qwen3asr")
@@ -56,7 +53,12 @@ actor Qwen3ASRDecoder {
     private let hotwords: String
 
     init(hotwords: [String] = []) {
-        self.hotwords = hotwords.joined(separator: "\n")
+        self.hotwords = Self.hotwordString(from: hotwords)
+    }
+
+    /// sherpa's Qwen3-ASR `hotwords` field is comma-separated (c-api.h:1018).
+    nonisolated static func hotwordString(from words: [String]) -> String {
+        words.filter { !$0.isEmpty }.joined(separator: ",")
     }
 
     func decode(_ samples: [Float]) -> String {
