@@ -10,8 +10,9 @@ import Foundation
 /// entries past `liveNotesEndEntryID` get mapped, then a single reduce runs
 /// over cached + new notes.
 ///
-/// Final summaries use one grounded reduce generation. The deterministic
-/// renderer is kept as a fallback only, not the normal user-facing summary.
+/// Detailed summaries don't stop at that single reduce — they append
+/// deterministic chronological sections assembled from the map notes, so
+/// the document scales with the recording without another generation pass.
 struct SummaryEngine {
     let llm: LLMService
     /// Hotword matcher for note-glossary injection into the map phase;
@@ -360,7 +361,7 @@ struct SummaryEngine {
         let records = SummaryRecordReducer.deduped(
             SummaryRecordReducer.records(from: notes))
         var seen = Set<String>()
-        var recent: [(label: String, key: String)] = []
+        var recent: [(isTopic: Bool, base: String)] = []
         var lines: [String] = []
 
         func actionText(_ record: SessionRecord.SummaryRecord) -> String {
@@ -398,24 +399,25 @@ struct SummaryEngine {
             }
         }
 
-        func keep(_ label: String, _ text: String) -> Bool {
-            let key = dedupKey(text)
-            guard !key.isEmpty else { return false }
-            let labeledKey = "\(label):\(key)"
-            if seen.contains(labeledKey) { return false }
+        func keep(label: String, text: String) -> Bool {
+            let base = dedupKey(text)
+            guard !base.isEmpty else { return false }
+            let isTopic = label == "topic"
+            let key = isTopic ? "topic:\(base)" : base
+            if seen.contains(key) { return false }
             for prior in recent.suffix(24)
-            where prior.label == label
-                && HotwordMatcher.similarity(prior.key, key) >= 0.9 {
+            where prior.isTopic == isTopic
+                && HotwordMatcher.similarity(prior.base, base) >= 0.9 {
                 return false
             }
-            seen.insert(labeledKey)
-            recent.append((label, key))
+            seen.insert(key)
+            recent.append((isTopic, base))
             return true
         }
 
         for record in records {
             guard let (label, text) = labelAndText(record),
-                  keep(label, text) else { continue }
+                  keep(label: label, text: text) else { continue }
             lines.append("\(label): \(text)")
         }
         if let maxCharacters {
@@ -483,14 +485,16 @@ struct SummaryEngine {
             noteCount: notes.count)
         let input = Self.reduceInput(
             notes: notes, style: style, maxCharacters: maxInputCharacters)
-        guard !input.isEmpty else { throw SummaryError.generationFailed }
-        if !stitchDetails {
-            let summary = SummaryRecordReducer.render(
+        func fallbackSummary() -> String {
+            SummaryRecordReducer.render(
                 records: SummaryRecordReducer.records(from: notes),
                 style: style,
                 length: length,
                 in: language,
-                stitchDetails: false)
+                stitchDetails: stitchDetails)
+        }
+        if input.isEmpty || !stitchDetails {
+            let summary = fallbackSummary()
             guard !summary.isEmpty else { throw SummaryError.generationFailed }
             await progress?(1, 1)
             return summary
@@ -558,36 +562,26 @@ struct SummaryEngine {
         }
 
         guard !parsed.isEmpty else { return fallback() }
-        guard !PromptBuilder.hasDegenerateRepetition(parsed.joinedValues)
+        let cleaned = prompts.deduplicatedStructuredSummary(parsed)
+        guard !PromptBuilder.hasDegenerateRepetition(cleaned.joinedValues)
         else { return fallback() }
-        let parsed = dedupedStructuredSummary(parsed)
-        guard !parsed.isEmpty else { return fallback() }
-        let summary = prompts.renderSummaryMarkdown(parsed, in: language)
-        return summary.isEmpty ? fallback() : summary
-    }
-
-    static func dedupedStructuredSummary(
-        _ parsed: PromptBuilder.ParsedStructuredSummary
-    ) -> PromptBuilder.ParsedStructuredSummary {
-        var copy = parsed
-        var usedKeys: [String] = []
-
-        func keep(_ text: String) -> Bool {
-            let key = dedupKey(text)
-            guard !key.isEmpty else { return false }
-            for prior in usedKeys
-            where prior == key
-                || HotwordMatcher.similarity(prior, key)
-                    >= SummaryRecordReducer.crossSectionDedupThreshold {
-                return false
-            }
-            usedKeys.append(key)
-            return true
+        let sectionTags = SummaryRecordReducer.renderedSectionTags(
+            records: SummaryRecordReducer.records(from: notes),
+            style: style,
+            length: length)
+        for (index, section) in style.spec.sections.enumerated()
+        where sectionTags.contains(section.tag) && cleaned.sections[index].isEmpty {
+            return fallback()
         }
-
-        copy.overview = copy.overview.filter { keep($0) }
-        copy.sections = copy.sections.map { $0.filter { keep($0) } }
-        return copy
+        let summary = prompts.renderSummaryMarkdown(cleaned, in: language)
+        guard !summary.isEmpty else { return fallback() }
+        guard stitchDetails, length == .detailed,
+              let details = SummaryRecordReducer.detailBlock(
+                  records: SummaryRecordReducer.records(from: notes),
+                  usedTexts: cleaned.overview + cleaned.sections.flatMap { $0 },
+                  in: language)
+        else { return summary }
+        return [summary, details].joined(separator: "\n\n")
     }
 
     /// Best-effort scenario detection for the post-stop selection step.
@@ -735,22 +729,10 @@ enum SummaryRecordReducer {
         // order) wins. ponytail: O(n²) over the rendered set; it's tiny (≤ ~30).
         var usedKeys: [String] = []
 
-        func displayUnused(_ record: Record) -> String? {
-            let key = SummaryEngine.dedupKey(dedupText(record))
-            guard !key.isEmpty else { return nil }
-            for prior in usedKeys
-            where prior == key
-                || HotwordMatcher.similarity(prior, key) >= crossSectionDedupThreshold {
-                return nil
-            }
-            usedKeys.append(key)
-            return displayText(record, includeSource: true)
-        }
-
         func takeUnused(_ records: [Record], limit: Int) -> [String] {
             var lines: [String] = []
             for record in records where lines.count < limit {
-                if let text = displayUnused(record) {
+                if let text = displayUnused(record, usedKeys: &usedKeys) {
                     lines.append(text)
                 }
             }
@@ -777,16 +759,92 @@ enum SummaryRecordReducer {
         }
 
         if stitchDetails, length == .detailed {
-            let detailRecords = records.filter {
-                $0.kind != .topic && !$0.text.isEmpty
-            }
-            let detailLines = takeUnused(detailRecords, limit: 12).map { "- \($0)" }
-            if !detailLines.isEmpty {
-                blocks.append("## \(detailHeading(for: language))\n"
-                    + detailLines.joined(separator: "\n"))
+            if let details = detailBlock(records: records, usedKeys: &usedKeys, in: language) {
+                blocks.append(details)
             }
         }
         return blocks.joined(separator: "\n\n")
+    }
+
+    static func renderedSectionTags(
+        records: [Record],
+        style: SummaryStyle,
+        length: SummaryLength
+    ) -> Set<String> {
+        let records = deduped(records)
+        guard !records.isEmpty else { return [] }
+        let spec = style.spec
+        var usedKeys: [String] = []
+
+        @discardableResult
+        func consumeUnused(_ records: [Record], limit: Int) -> Bool {
+            var count = 0
+            var consumed = false
+            for record in records where count < limit {
+                if displayUnused(record, usedKeys: &usedKeys) != nil {
+                    count += 1
+                    consumed = true
+                }
+            }
+            return consumed
+        }
+
+        var tags = Set<String>()
+        for section in spec.sections {
+            let hasLines = consumeUnused(
+                recordsForSection(section.tag, style: style, records: records),
+                limit: cap(base: section.cap, length: length, minimum: 1))
+            if hasLines { tags.insert(section.tag) }
+        }
+        return tags
+    }
+
+    static func detailBlock(
+        records: [Record],
+        usedTexts: [String],
+        in language: AppLanguage
+    ) -> String? {
+        var usedKeys = usedTexts
+            .map { SummaryEngine.dedupKey($0) }
+            .filter { !$0.isEmpty }
+        return detailBlock(
+            records: deduped(records),
+            usedKeys: &usedKeys,
+            in: language)
+    }
+
+    private static func detailBlock(
+        records: [Record],
+        usedKeys: inout [String],
+        in language: AppLanguage
+    ) -> String? {
+        let detailRecords = records.filter {
+            $0.kind != .topic && !$0.text.isEmpty
+        }
+        var detailLines: [String] = []
+        for record in detailRecords where detailLines.count < 12 {
+            if let text = displayUnused(record, usedKeys: &usedKeys) {
+                detailLines.append("- \(text)")
+            }
+        }
+        guard !detailLines.isEmpty else { return nil }
+        return "## \(detailHeading(for: language))\n"
+            + detailLines.joined(separator: "\n")
+    }
+
+    private static func displayUnused(
+        _ record: Record,
+        usedKeys: inout [String]
+    ) -> String? {
+        let key = SummaryEngine.dedupKey(dedupText(record))
+        guard !key.isEmpty else { return nil }
+        for prior in usedKeys
+        where prior == key
+            || HotwordMatcher.similarity(prior, key) >= crossSectionDedupThreshold {
+            return nil
+        }
+        usedKeys.append(key)
+        return displayText(record, includeSource: true)
     }
 
     private static func cap(
@@ -893,7 +951,7 @@ enum SummaryRecordReducer {
         }
     }
 
-    static func deduped(_ records: [Record]) -> [Record] {
+    fileprivate static func deduped(_ records: [Record]) -> [Record] {
         let sorted = records.sorted { lhs, rhs in
             if lhs.timestamp != rhs.timestamp { return lhs.timestamp < rhs.timestamp }
             return lhs.sourceIndex < rhs.sourceIndex

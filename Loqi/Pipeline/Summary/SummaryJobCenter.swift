@@ -338,10 +338,13 @@ final class SummaryJobCenter {
         tasks[sessionID] = Task {
             defer { finishJob(sessionID) }
             do {
-                if suggestVocabulary || !hasFullCachedSummary(sessionID) {
-                    try await loadModel(sessionID: sessionID, allowDownload: allowDownload)
-                }
+                try await loadModel(sessionID: sessionID, allowDownload: allowDownload)
                 activities[sessionID] = .summarizing(done: 0, total: 0)
+                if !suggestVocabulary,
+                   try await renderCachedSummaryIfPossible(
+                    sessionID: sessionID, style: style, length: length) {
+                    return
+                }
                 try await runSummarize(
                     sessionID: sessionID, style: style, length: length,
                     suggestVocabulary: suggestVocabulary)
@@ -351,13 +354,6 @@ final class SummaryJobCenter {
                 errors[sessionID] = error.localizedDescription
             }
         }
-    }
-
-    private func hasFullCachedSummary(_ sessionID: UUID) -> Bool {
-        guard let session = archive.sessions.first(where: { $0.id == sessionID })
-        else { return false }
-        let coverage = SummaryEngine.uncoveredEntries(of: session)
-        return !coverage.cachedNotes.isEmpty && coverage.entries.isEmpty
     }
 
     /// Second-pass accuracy path: offline re-transcription of the saved
@@ -848,6 +844,42 @@ final class SummaryJobCenter {
             .filter { !hotwords.isKnown($0.term) }
         hotwords.enqueueSuggestions(
             suggestions, sessionID: record.id, sessionTitle: record.title)
+    }
+
+    func renderCachedSummaryIfPossible(
+        sessionID: UUID,
+        style: SummaryStyle,
+        length: SummaryLength
+    ) async throws -> Bool {
+        guard let session = archive.sessions.first(where: { $0.id == sessionID }),
+              let notes = session.chunkNotes, !notes.isEmpty,
+              session.liveNotesEndEntryID == session.entries.last?.id,
+              !notes.contains(where: { $0.isFallback == true })
+        else { return false }
+
+        let refreshed = await refreshAttachmentText(in: session)
+        var record = refreshed.record
+        let engine = SummaryEngine(llm: llm, matcher: hotwords.matcher)
+        let hygiene = await engine.hygienePass(record)
+        record = hygiene.record
+        if hygiene.changed {
+            archive.update(record)
+            return false
+        }
+        let summary = try await engine.reduce(
+            notes: AttachmentNotes.merged(notes, attachments: record.attachments),
+            style: style,
+            length: length,
+            in: SummaryEngine.summaryLanguage(for: record))
+        record.summary = summary
+        record.summaryEdited = nil
+        record.summaryStyle = style.rawValue
+        record.summaryLength = length.rawValue
+        if refreshed.changed {
+            record.attachments = refreshed.record.attachments
+        }
+        archive.update(record)
+        return true
     }
 
     private func refreshAttachmentText(

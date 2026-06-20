@@ -197,3 +197,103 @@ struct SummaryAccuracyTests {
         #expect(cleaned.entries.isEmpty)
     }
 }
+
+@Suite(.serialized)
+@MainActor
+struct SummaryJobCenterCacheTests {
+    private func makeTempDirectory() -> URL {
+        let url = FileManager.default.temporaryDirectory
+            .appending(path: UUID().uuidString)
+        try? FileManager.default.createDirectory(
+            at: url, withIntermediateDirectories: true)
+        return url
+    }
+
+    private func waitForIdle(
+        _ jobs: SummaryJobCenter,
+        sessionID: UUID,
+        timeout: Duration = .seconds(2)
+    ) async -> Bool {
+        let clock = ContinuousClock()
+        let deadline = clock.now.advanced(by: timeout)
+        while clock.now < deadline {
+            if !jobs.isBusy(sessionID) { return true }
+            try? await Task.sleep(for: .milliseconds(20))
+        }
+        return !jobs.isBusy(sessionID)
+    }
+
+    @Test func cachedSummaryPathRunsHygieneBeforeUsingLiveNotes() async throws {
+        let hotwordDirectory = makeTempDirectory()
+        defer { try? FileManager.default.removeItem(at: hotwordDirectory) }
+        let archive = SessionArchive()
+        let hotwords = HotwordStore(directory: hotwordDirectory)
+        hotwords.add(Hotword(term: "Zhipeng", note: "person name"))
+        let jobs = SummaryJobCenter(
+            llm: LLMService(), archive: archive, hotwords: hotwords,
+            translator: TranslationCoordinator(), voiceprint: VoiceprintService(),
+            isRecording: { false })
+
+        let direction = LanguagePair(source: .english, target: .english)
+        let entry = SessionRecord.Entry(
+            sourceText: "ask Zhipemg about the rollout", translation: nil,
+            speaker: nil, direction: direction, timestamp: .now,
+            rawSourceText: "ask Zhipemg about the rollout")
+        var record = SessionRecord(
+            mode: .captions, startedAt: .now, endedAt: .now,
+            entries: [entry])
+        record.chunkNotes = [.init(
+            headline: "h", startedAt: .now, anchorEntryID: entry.id,
+            facts: ["f"])]
+        record.liveNotesEndEntryID = entry.id
+        archive.add(record)
+        defer { archive.delete(id: record.id) }
+
+        let rendered = try await jobs.renderCachedSummaryIfPossible(
+            sessionID: record.id, style: .meeting, length: .standard)
+
+        #expect(!rendered)
+        let updated = try #require(archive.sessions.first { $0.id == record.id })
+        #expect(updated.entries[0].sourceText == "ask Zhipeng about the rollout")
+        #expect(updated.chunkNotes == nil)
+        #expect(updated.liveNotesEndEntryID == nil)
+        #expect(updated.summary == nil)
+    }
+
+    @Test func cachedSummarizeRespectsDisabledAISetting() async throws {
+        UserDefaults.standard.set(false, forKey: "llm.enabled")
+        defer { UserDefaults.standard.removeObject(forKey: "llm.enabled") }
+        let hotwordDirectory = makeTempDirectory()
+        defer { try? FileManager.default.removeItem(at: hotwordDirectory) }
+        let archive = SessionArchive()
+        let jobs = SummaryJobCenter(
+            llm: LLMService(), archive: archive,
+            hotwords: HotwordStore(directory: hotwordDirectory),
+            translator: TranslationCoordinator(), voiceprint: VoiceprintService(),
+            isRecording: { false })
+
+        let direction = LanguagePair(source: .english, target: .english)
+        let entry = SessionRecord.Entry(
+            sourceText: "Budget is forty two.", translation: nil,
+            speaker: nil, direction: direction, timestamp: .now)
+        var record = SessionRecord(
+            mode: .captions, startedAt: .now, endedAt: .now,
+            entries: [entry])
+        record.chunkNotes = [.init(
+            headline: "Budget", startedAt: .now, anchorEntryID: entry.id,
+            facts: ["Budget is forty two."])]
+        record.liveNotesEndEntryID = entry.id
+        archive.add(record)
+        defer { archive.delete(id: record.id) }
+
+        jobs.summarize(
+            sessionID: record.id,
+            style: .meeting,
+            length: .standard)
+
+        #expect(await waitForIdle(jobs, sessionID: record.id))
+        let updated = try #require(archive.sessions.first { $0.id == record.id })
+        #expect(updated.summary == nil)
+        #expect(jobs.error(for: record.id) == SummaryJobCenter.JobError.aiDisabled.localizedDescription)
+    }
+}

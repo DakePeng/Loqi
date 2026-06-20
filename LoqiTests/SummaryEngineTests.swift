@@ -119,17 +119,23 @@ struct SummaryEngineTests {
         #expect(prompt.user.contains("Known terms: Loqi (product name)"))
     }
 
-    @Test func reducePromptRequiresSynthesisInsteadOfConcatenation() {
+    @Test func reducePromptRequiresNaturalWritingConstraints() {
         let prompt = PromptBuilder().reduceSummaryPrompt(
-            notes: "[1] 桌布讨论\nfact: 传家宝桌子不必铺布\nphoto: 桌面照片显示木纹完整",
+            notes: "topic: 桌布讨论\nfact: 传家宝桌子不必铺布\nphoto: 桌面照片显示木纹完整",
             style: .meeting,
             in: .chinese,
-            sizing: SummaryPromptSizing(maxTokens: 420, overviewCap: 2, sectionCaps: [3, 3, 3]))
+            sizing: SummaryPromptSizing(
+                maxTokens: 420,
+                overviewCap: 2,
+                sectionCaps: [3, 3, 3]))
 
-        #expect(prompt.system.contains("Synthesize"))
-        #expect(prompt.system.contains("Do not concatenate"))
-        #expect(prompt.system.contains("photo"))
-        #expect(prompt.user.contains("Notes:\n[1] 桌布讨论"))
+        #expect(prompt.system.contains("natural overview"))
+        #expect(prompt.system.contains("complete-thought bullets"))
+        #expect(prompt.system.contains("Do not repeat the overview"))
+        #expect(prompt.system.contains("Avoid repeated lead-ins"))
+        #expect(prompt.system.contains("Meeting tone"))
+        #expect(prompt.system.contains("Output ONLY tagged lines"))
+        #expect(prompt.user.contains("Notes:\ntopic: 桌布讨论"))
     }
 
     @Test func structuredReduceOutputRendersMarkdown() {
@@ -155,6 +161,34 @@ struct SummaryEngineTests {
         #expect(markdown.contains("- 传家宝桌子可以不铺布"))
         #expect(markdown.contains("## 决定"))
         #expect(markdown.contains("## 待办事项"))
+    }
+
+    @Test func structuredSummaryCleanupDropsOverviewDuplicates() {
+        var parsed = PromptBuilder.ParsedStructuredSummary(style: .meeting)
+        parsed.overview = ["讨论围绕桌布和转椅选择。"]
+        parsed.sections[0] = [
+            "讨论围绕桌布和转椅选择",
+            "传家宝桌子可以不铺布，重点是保留原本状态。",
+        ]
+        parsed.sections[1] = ["暂时不铺桌布。"]
+
+        let cleaned = PromptBuilder().deduplicatedStructuredSummary(parsed)
+
+        #expect(cleaned.overview == ["讨论围绕桌布和转椅选择。"])
+        #expect(cleaned.items("T") == ["传家宝桌子可以不铺布，重点是保留原本状态。"])
+        #expect(cleaned.items("D") == ["暂时不铺桌布。"])
+    }
+
+    @Test func structuredSummaryCleanupDropsRepeatedOverviewLines() {
+        var parsed = PromptBuilder.ParsedStructuredSummary(style: .meeting)
+        parsed.overview = [
+            "会议讨论六月发布计划。",
+            "会议讨论六月发布计划",
+        ]
+
+        let cleaned = PromptBuilder().deduplicatedStructuredSummary(parsed)
+
+        #expect(cleaned.overview == ["会议讨论六月发布计划。"])
     }
 
     @Test func reduceInputLabelsPhotoFactsWithoutRawCaptionDump() {
@@ -191,6 +225,18 @@ struct SummaryEngineTests {
         #expect(!input.contains("fact: 预算定为 42 万"))
     }
 
+    @Test func reduceInputDoesNotLetTopicDropSameTextDecision() {
+        let note = SessionRecord.ChunkNote(
+            headline: "预算定为 42 万",
+            startedAt: Date(timeIntervalSince1970: 1_000_000),
+            decisions: ["预算定为 42 万"])
+
+        let input = SummaryEngine.reduceInput(notes: [note], style: .meeting)
+
+        #expect(input.contains("topic: 预算定为 42 万"))
+        #expect(input.contains("decision: 预算定为 42 万"))
+    }
+
     @Test func reduceInputIncludesTopicSummaryWhenTitleExists() {
         let timestamp = Date(timeIntervalSince1970: 1_000_000)
         let note = SessionRecord.ChunkNote(
@@ -210,35 +256,6 @@ struct SummaryEngineTests {
         let input = SummaryEngine.reduceInput(notes: [note], style: .meeting)
 
         #expect(input.contains("topic: 预算定为 42 万，并且六月发布前完成验收"))
-    }
-
-    @Test func reduceInputKeepsDecisionWhenTopicRepeatsIt() {
-        let timestamp = Date(timeIntervalSince1970: 1_000_000)
-        let note = SessionRecord.ChunkNote(
-            headline: "发布计划",
-            startedAt: timestamp,
-            summaryRecords: [
-                .init(
-                    kind: .topic,
-                    source: .transcript,
-                    sourceIDs: ["m001"],
-                    sourceIndex: 0,
-                    timestamp: timestamp,
-                    text: "六月发布",
-                    topicTitle: "发布计划"),
-                .init(
-                    kind: .decision,
-                    source: .transcript,
-                    sourceIDs: ["m002"],
-                    sourceIndex: 1,
-                    timestamp: timestamp.addingTimeInterval(1),
-                    text: "六月发布"),
-            ])
-
-        let input = SummaryEngine.reduceInput(notes: [note], style: .meeting)
-
-        #expect(input.contains("topic: 六月发布"))
-        #expect(input.contains("decision: 六月发布"))
     }
 
     @Test func reduceInputCanBeBoundForLongSessions() {
@@ -316,6 +333,37 @@ struct SummaryEngineTests {
         #expect(result.notes.map(\.headline) == ["预算"])
     }
 
+    @Test func reduceFallsBackWhenStructuredInputIsEmptyButDetailsCanRender() async throws {
+        let timestamp = Date(timeIntervalSince1970: 1_000_000)
+        let note = SessionRecord.ChunkNote(
+            headline: "术语",
+            startedAt: timestamp,
+            summaryRecords: [
+                .init(
+                    kind: .term,
+                    source: .transcript,
+                    sourceIDs: ["m001"],
+                    sourceIndex: 0,
+                    timestamp: timestamp,
+                    text: "Loqi 是本地转写工具")
+            ])
+        let missingModel = ModelOption(
+            id: "loqi-tests/missing-model",
+            displayName: "Missing test model",
+            requiredHeadroom: 1,
+            downloadBytes: 1)
+        let engine = SummaryEngine(llm: LLMService(model: missingModel))
+
+        let summary = try await engine.reduce(
+            notes: [note],
+            style: .meeting,
+            length: .detailed,
+            in: .english)
+
+        #expect(summary.contains("## Details"))
+        #expect(summary.contains("Loqi 是本地转写工具"))
+    }
+
     @Test func reduceWithoutStitchedDetailsDoesNotWaitForLLM() async throws {
         let llm = LLMService()
         await llm.setBackgrounded(true)
@@ -369,58 +417,6 @@ struct SummaryEngineTests {
         #expect(output.parsed.isEmpty)
     }
 
-    @Test func reducedSummaryFallsBackWhenStructuredOutputIsEmpty() {
-        let builder = PromptBuilder()
-        let sizing = SummaryPromptSizing(maxTokens: 420, overviewCap: 6, sectionCaps: [6, 6, 6])
-        let raw = "topic: 桌布讨论\nfact: 传家宝桌子不必铺布"
-        let parsed = builder.parseStructuredSummary(raw, style: .meeting, sizing: sizing)
-        let note = SessionRecord.ChunkNote(
-            headline: "桌布讨论",
-            startedAt: Date(timeIntervalSince1970: 1_000_000),
-            facts: ["传家宝桌子不必铺布"])
-
-        let summary = SummaryEngine.renderReducedSummary(
-            raw: raw,
-            parsed: parsed,
-            notes: [note],
-            style: .meeting,
-            length: .standard,
-            in: .chinese,
-            stitchDetails: false)
-
-        #expect(parsed.isEmpty)
-        #expect(summary.contains("传家宝桌子不必铺布"))
-        #expect(!summary.contains("topic:"))
-    }
-
-    @Test func reducedSummaryDedupesStructuredOutputBeforeRendering() {
-        let builder = PromptBuilder()
-        let sizing = SummaryPromptSizing(maxTokens: 420, overviewCap: 6, sectionCaps: [6, 6, 6])
-        let raw = """
-        O: 预算定为 42 万
-        T: 预算定为42万
-        D: 六月发布
-        """
-        let parsed = builder.parseStructuredSummary(raw, style: .meeting, sizing: sizing)
-        let note = SessionRecord.ChunkNote(
-            headline: "fallback-only",
-            startedAt: Date(timeIntervalSince1970: 1_000_000),
-            facts: ["fallback-only"])
-
-        let summary = SummaryEngine.renderReducedSummary(
-            raw: raw,
-            parsed: parsed,
-            notes: [note],
-            style: .meeting,
-            length: .standard,
-            in: .chinese,
-            stitchDetails: false)
-
-        #expect(summary.components(separatedBy: "预算定为").count - 1 == 1)
-        #expect(summary.contains("六月发布"))
-        #expect(!summary.contains("fallback-only"))
-    }
-
     @Test func reducedSummaryFallsBackWhenStructuredOutputRepeats() {
         let builder = PromptBuilder()
         let sizing = SummaryPromptSizing(maxTokens: 420, overviewCap: 6, sectionCaps: [6, 6, 6])
@@ -445,6 +441,91 @@ struct SummaryEngineTests {
         #expect(!parsed.isEmpty)
         #expect(PromptBuilder.hasDegenerateRepetition(parsed.joinedValues))
         #expect(summary.contains("传家宝桌子不必铺布"))
+    }
+
+    @Test func reducedSummaryFallsBackWhenStructuredOutputOmitsPopulatedSection() {
+        var parsed = PromptBuilder.ParsedStructuredSummary(style: .meeting)
+        parsed.overview = ["会议讨论发布安排。"]
+        let note = SessionRecord.ChunkNote(
+            headline: "发布计划",
+            startedAt: Date(timeIntervalSince1970: 1_000_000),
+            facts: ["需要同步发布材料"],
+            decisions: ["六月发布"],
+            actions: ["王经理确认供应商"])
+
+        let summary = SummaryEngine.renderReducedSummary(
+            raw: "",
+            parsed: parsed,
+            notes: [note],
+            style: .meeting,
+            length: .standard,
+            in: .chinese,
+            stitchDetails: true)
+
+        #expect(summary.contains("## 决定"))
+        #expect(summary.contains("六月发布"))
+        #expect(summary.contains("## 待办事项"))
+    }
+
+    @Test func reducedSummaryFallsBackWhenOnlyDecisionRecordIsOmitted() {
+        var parsed = PromptBuilder.ParsedStructuredSummary(style: .meeting)
+        parsed.overview = ["会议讨论发布安排。"]
+        let timestamp = Date(timeIntervalSince1970: 1_000_000)
+        let note = SessionRecord.ChunkNote(
+            headline: "发布计划",
+            startedAt: timestamp,
+            summaryRecords: [
+                .init(
+                    kind: .decision,
+                    source: .transcript,
+                    sourceIDs: ["m001"],
+                    sourceIndex: 0,
+                    timestamp: timestamp,
+                    text: "六月发布")
+            ])
+
+        let summary = SummaryEngine.renderReducedSummary(
+            raw: "",
+            parsed: parsed,
+            notes: [note],
+            style: .meeting,
+            length: .standard,
+            in: .chinese,
+            stitchDetails: true)
+
+        #expect(summary.contains("六月发布"))
+    }
+
+    @Test func reducedDetailedSummaryStitchesDeterministicDetails() {
+        var parsed = PromptBuilder.ParsedStructuredSummary(style: .meeting)
+        parsed.overview = ["会议讨论预算和六月发布安排。"]
+        parsed.sections[0] = ["预算是 42 万"]
+        let note = SessionRecord.ChunkNote(
+            headline: "发布计划",
+            startedAt: Date(timeIntervalSince1970: 1_000_000),
+            facts: ["预算是 42 万", "团队需要在六月发布前完成验收"],
+            decisions: ["六月发布"])
+
+        let detailed = SummaryEngine.renderReducedSummary(
+            raw: "",
+            parsed: parsed,
+            notes: [note],
+            style: .meeting,
+            length: .detailed,
+            in: .chinese,
+            stitchDetails: true)
+        let compact = SummaryEngine.renderReducedSummary(
+            raw: "",
+            parsed: parsed,
+            notes: [note],
+            style: .meeting,
+            length: .detailed,
+            in: .chinese,
+            stitchDetails: false)
+
+        #expect(detailed.contains("## 详细记录"))
+        #expect(detailed.contains("- 团队需要在六月发布前完成验收"))
+        #expect(!compact.contains("## 详细记录"))
     }
 
     @Test func parsesSummaryRecordTSVAndRejectsInvalidLines() {
