@@ -26,10 +26,11 @@ Private voice notes, transcripts and summaries that run **entirely on your iPhon
 ## Getting started (first time on iOS? start here)
 
 1. **Install Xcode 26** from the Mac App Store (it's big — ~10GB+). Launch it once so it installs its tools.
-2. **Generate the Xcode project.** This repo uses [XcodeGen](https://github.com/yonaskolb/XcodeGen) so the project file isn't committed:
+2. **Refresh the Xcode project if needed.** This repo uses [XcodeGen](https://github.com/yonaskolb/XcodeGen): `project.yml` is the source of truth, and `Loqi.xcodeproj` is committed for convenience. Regenerate after changing targets, packages, build settings, or entitlements. The sherpa-onnx frameworks are vendored under `ThirdParty/`; run the fetch script only if they are missing or stale.
    ```sh
    brew install xcodegen
    cd ~/Desktop/Loqi
+   Scripts/fetch-sherpa-onnx.sh   # only if ThirdParty/sherpa-onnx is missing/stale
    xcodegen generate
    open Loqi.xcodeproj
    ```
@@ -50,23 +51,30 @@ Loqi/
 │   ├── Onboarding/             Permission + model download flow
 │   ├── Settings/               Model pickers, recording toggle, diagnostics
 │   └── Shared/                 Status bar, mic button, caption rows
+├── Intents/                    Siri, Shortcuts, Action Button, widget intents
 ├── Pipeline/
-│   ├── Audio/                  Mic capture → AsyncStream; session recorder
-│   ├── ASR/                    SpeechAnalyzer wrapper + segmentation logic
+│   ├── Audio/                  Mic capture → AsyncStream; CAF/AAC recorder
+│   ├── ASR/                    Apple SpeechAnalyzer, SenseVoice, Qwen3-ASR
 │   ├── Translation/            Tier-1: system Translation framework
 │   ├── Refinement/             Tier-2: MLX LLM queue + prompt builder
 │   ├── Summary/                Map-reduce summaries; live chunker + note queue
 │   ├── Speaker/                Diarization (FluidAudio embeddings + clustering)
+│   ├── Vision/                 Vision OCR + Qwen3.5 image descriptions
 │   └── Import/                 Audio-file transcription (Voice Memos share)
 ├── Models/                     CaptionEntry, SessionRecord, AppLanguage
-└── Support/                    CaptionPipeline (orchestrator), CaptionStore,
-                                SessionArchive, ThermalMonitor, ModelCatalog
-LoqiTests/                   Pure-logic tests (run in the simulator)
+├── Shared/                     Live Activity attributes + app-group state
+└── Support/                    CaptionPipeline, CaptionStore, SessionArchive,
+                                HotwordStore, ModelCatalog, export/search helpers
+LoqiWidgets/                 Live Activity UI + Control Center / Lock Screen toggle
+LoqiTests/                   Swift Testing logic suite
+LoqiUITests/                 Onboarding smoke tests
+LoqiMac/                     Buildable Mac target, not a v1 shipped surface
+project.yml                  XcodeGen manifest; edit this before regenerating
 ```
 
 ### Architecture in one paragraph
 
-`CaptionPipeline` wires everything: `AudioCaptureService` taps the mic and fans buffers out to the `TranscriptionEngine` (one per language), the diarization tee, and the `SessionRecorder` (AAC file). `TranscriptSegmenter` decides what's worth keeping; `LiveChunker` groups finalized lines into chunks whose notes `ChunkNoteQueue` generates during silences; `RefinementQueue` upgrades `TranslationCoordinator`'s instant draft translations when source ≠ target (transcript text itself is never LLM-rewritten) — `LLMService` is the only file that touches MLX, and all LLM consumers yield to live speech. Everything lands in `CaptionStore`, the single observable source of truth the UI renders; on stop, `SessionArchive` persists the transcript, audio file name, and live notes as one record. `ThermalMonitor` sheds load in order: LLM work first, the LLM itself second — never ASR.
+`CaptionPipeline` wires everything: `AudioCaptureService` taps the mic and fans buffers out to the chosen live ASR engine (Apple `SpeechAnalyzer` or SenseVoice), streaming diarization, and `SessionRecorder` (AAC-in-CAF for crash tolerance). `TranscriptSegmenter` decides what's worth keeping; `LiveChunker` groups finalized lines into chunks whose notes `ChunkNoteQueue` generates during silences; `RefinementQueue` upgrades `TranslationCoordinator`'s instant draft translations when source ≠ target (transcript text itself is never LLM-rewritten). `SummaryJobCenter` owns post-hoc imports, Qwen3-ASR re-transcription, and summarize jobs so navigation cannot double-run them. `LLMService` is the only file that touches MLX; live work uses the fixed 0.8B tier, summary/chat/title/vocabulary work uses the selected summary tier, and all LLM consumers yield to live speech. Everything lands in `CaptionStore`, the observable source of truth the UI renders; on stop, `SessionArchive` persists transcript, audio file name, attachments, chat history, and live notes as one record. `ThermalMonitor` sheds load in order: LLM work first, the LLM itself second — never ASR.
 
 ## Build-up milestones
 
@@ -86,7 +94,7 @@ The codebase is complete, but if you're learning iOS, verify it in this order (e
 
 ## Honest status
 
-The app builds clean (Xcode 26.6, Swift 6 strict concurrency), the unit suite passes (279 tests), and the core pipeline — streaming ASR, polish/translation, summaries, model downloads from both sources — is verified working on a real iPhone, fully offline. The capture-first restructure (session audio recording, live summary mapping) and the 2026-06-12 UX-orchestration pass (model-download consent, shared summarize job state, post-stop flow rework) are new and need a device pass. Remaining open items live in [todo.md](todo.md); headline ones: AAC recording path needs real-device verification, diarization thresholds benefit from more multi-speaker calibration, and the thermal/battery soak hasn't been run.
+Latest docs scan: 2026-06-20. The repo is an iOS-first Swift 6 / XcodeGen app with a widget extension, a buildable-but-unshipped Mac target, a broad Swift Testing logic suite, and onboarding UI smoke tests. This README refresh did not run a fresh Xcode build or real-device pass; older green-build notes in [todo.md](todo.md) are historical evidence, not current proof. Remaining open items live in [ISSUES.md](ISSUES.md) and [todo.md](todo.md): large imports and photo processing can still hitch the UI, Swift concurrency / plist warning cleanup remains, and the multimodal Qwen3.5 default plus crash-recovery / thermal behavior still deserve a real-iPhone verification pass.
 
 ## Not in v1 (by design)
 
