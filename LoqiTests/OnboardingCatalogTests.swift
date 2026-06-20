@@ -56,12 +56,13 @@ struct OnboardingCatalogTests {
 
     // MARK: Item lineup
 
-    @Test func recommendedSelectionIncludesTranslationPacks() {
+    @Test func recommendedSelectionIncludesBothLLMTiers() {
         #expect(OnboardingItemKind.defaultSelection == [
             .translationPacks,
             .senseVoice,
             .diarizer,
-            .llm,
+            .liveLLM,
+            .summaryLLM,
         ])
     }
 
@@ -84,16 +85,14 @@ struct OnboardingCatalogTests {
         }
     }
 
-    @Test func llmItemBytesCoverBothModels() {
-        #expect(OnboardingItemKind.llm.downloadBytes == ModelCatalog.onboardingLLMBytes)
+    @Test func liveLLMItemMatchesTheFastTier() {
+        #expect(OnboardingItemKind.liveLLM.downloadBytes == ModelCatalog.liveModel.downloadBytes)
+        #expect(OnboardingItemKind.liveLLM.isRecommended)
     }
 
-    @Test func llmItemRequiresBothModelsInstalled() {
-        #expect(!OnboardingItemKind.llmModelsInstalled { $0 == ModelCatalog.default })
-        #expect(!OnboardingItemKind.llmModelsInstalled { $0 == ModelCatalog.liveModel })
-        #expect(OnboardingItemKind.llmModelsInstalled { model in
-            model == ModelCatalog.default || model == ModelCatalog.liveModel
-        })
+    @Test func summaryLLMItemMatchesTheTwoBTier() {
+        #expect(OnboardingItemKind.summaryLLM.downloadBytes == ModelCatalog.qwen35_2b.downloadBytes)
+        #expect(OnboardingItemKind.summaryLLM.isRecommended)
     }
 
     @Test func translationPackPairsCoverEveryOrderedLanguagePair() {
@@ -111,16 +110,18 @@ struct OnboardingCatalogTests {
 
     @Test func totalSumsSelectedUninstalledItems() {
         let total = OnboardingItemKind.totalBytes(
-            for: [.translationPacks, .senseVoice, .diarizer, .llm], installed: [])
+            for: [.translationPacks, .senseVoice, .diarizer, .liveLLM, .summaryLLM],
+            installed: [])
         let expected = SenseVoiceModelStore.totalExpectedBytes
             + StreamingDiarizer.approximateDownloadBytes
-            + ModelCatalog.onboardingLLMBytes
+            + ModelCatalog.liveModel.downloadBytes
+            + ModelCatalog.qwen35_2b.downloadBytes
         #expect(total == expected)
     }
 
     @Test func totalIgnoresInstalledAndAppleSpeech() {
         let total = OnboardingItemKind.totalBytes(
-            for: [.appleSpeech, .senseVoice, .llm], installed: [.llm])
+            for: [.appleSpeech, .senseVoice, .summaryLLM], installed: [.summaryLLM])
         #expect(total == SenseVoiceModelStore.totalExpectedBytes)
     }
 
@@ -135,7 +136,8 @@ struct OnboardingCatalogTests {
             selection: [
                 .translationPacks,
                 .qwen3ASR,
-                .llm,
+                .liveLLM,
+                .summaryLLM,
                 .diarizer,
                 .senseVoice,
             ],
@@ -145,15 +147,16 @@ struct OnboardingCatalogTests {
             .translationPacks,
             .senseVoice,
             .diarizer,
-            .llm,
+            .liveLLM,
+            .summaryLLM,
             .qwen3ASR,
         ])
     }
 
     @Test func queueDropsInstalledAndUnselected() {
         let queue = OnboardingItemKind.queueOrder(
-            selection: [.senseVoice, .llm], installed: [.senseVoice])
-        #expect(queue == [.appleSpeech, .llm])
+            selection: [.senseVoice, .summaryLLM], installed: [.senseVoice])
+        #expect(queue == [.appleSpeech, .summaryLLM])
     }
 
     @Test func appleSpeechSurvivesEmptySelection() {
