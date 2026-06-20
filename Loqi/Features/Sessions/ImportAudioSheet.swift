@@ -16,8 +16,10 @@ struct ImportAudioSheet: View {
     @AppStorage("captions.source") private var sourceRaw = AppLanguage.english.rawValue
     /// Shared with the Record screen: empty = transcribe only (default).
     @AppStorage("captions.translation") private var translationRaw = ""
-    // -1 = Auto (diarize). Default on so imports get speaker labels.
-    @AppStorage("captions.speakerCount") private var speakerCount = -1
+    // -1 = Auto (diarize). Default on so imports get speaker labels. Its own
+    // key (not the live "captions.speakerCount") so import and Record keep
+    // independent defaults and don't inherit each other's last choice.
+    @AppStorage("import.speakerCount") private var speakerCount = -1
     /// Per-import engine choice. Defaults to the fast accurate option;
     /// Qwen3-ASR decodes near realtime, so it's an explicit pick per file,
     /// never an auto-upgrade (re-transcribe is the automatic Qwen3 pass).
