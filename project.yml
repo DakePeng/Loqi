@@ -49,6 +49,7 @@ targets:
         PRODUCT_BUNDLE_IDENTIFIER: com.kunzhipeng.loqi
         CODE_SIGN_ENTITLEMENTS: Loqi/Loqi.entitlements
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+        ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME: AccentColor
         # sherpa-onnx (SenseVoice ASR): C API via bridging header, static
         # xcframeworks under ThirdParty/ (fetched by Scripts/fetch-sherpa-onnx.sh).
         SWIFT_OBJC_BRIDGING_HEADER: Loqi/Pipeline/ASR/SherpaOnnx/SherpaOnnx-Bridging-Header.h
@@ -123,6 +124,7 @@ targets:
         PRODUCT_NAME: Loqi
         CODE_SIGN_ENTITLEMENTS: LoqiMac/LoqiMac.entitlements
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+        ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME: AccentColor
         SUPPORTED_PLATFORMS: macosx
         SDKROOT: macosx
         MACOSX_DEPLOYMENT_TARGET: "26.0"
