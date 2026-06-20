@@ -179,6 +179,66 @@ struct SummaryEngineTests {
         #expect(cleaned.items("D") == ["暂时不铺桌布。"])
     }
 
+    @Test func reduceInputLabelsPhotoFactsWithoutRawCaptionDump() {
+        let t0 = Date(timeIntervalSince1970: 1_000_000)
+        let transcript = SessionRecord.ChunkNote(
+            headline: "桌布讨论",
+            startedAt: t0,
+            facts: ["传家宝桌子不必铺布"],
+            decisions: ["暂时不铺桌布"])
+        let photo = SessionRecord.Attachment(
+            fileName: "desk.jpg",
+            timestamp: t0.addingTimeInterval(12),
+            vlmDescription: "照片显示木质桌面，桌上没有桌布。")
+        let input = SummaryEngine.reduceInput(
+            notes: AttachmentNotes.merged([transcript], attachments: [photo]),
+            style: .meeting)
+
+        #expect(input.contains("fact: 传家宝桌子不必铺布"))
+        #expect(input.contains("decision: 暂时不铺桌布"))
+        #expect(input.contains("photo: 照片显示木质桌面，桌上没有桌布。"))
+        #expect(!input.contains("📷"))
+    }
+
+    @Test func reduceInputKeepsSpecificLabelForDuplicateDecision() {
+        let note = SessionRecord.ChunkNote(
+            headline: "预算讨论",
+            startedAt: Date(timeIntervalSince1970: 1_000_000),
+            facts: ["预算定为 42 万"],
+            decisions: ["预算定为 42 万"])
+
+        let input = SummaryEngine.reduceInput(notes: [note], style: .meeting)
+
+        #expect(input.contains("decision: 预算定为 42 万"))
+        #expect(!input.contains("fact: 预算定为 42 万"))
+    }
+
+    @Test func reducedSummaryFallsBackWhenStructuredOutputRepeats() {
+        let builder = PromptBuilder()
+        let sizing = SummaryPromptSizing(maxTokens: 420, overviewCap: 6, sectionCaps: [6, 6, 6])
+        let raw = (Array(repeating: "O: 好好", count: 6)
+            + Array(repeating: "T: 好好", count: 6))
+            .joined(separator: "\n")
+        let parsed = builder.parseStructuredSummary(raw, style: .meeting, sizing: sizing)
+        let note = SessionRecord.ChunkNote(
+            headline: "桌布讨论",
+            startedAt: Date(timeIntervalSince1970: 1_000_000),
+            facts: ["传家宝桌子不必铺布"])
+
+        let summary = SummaryEngine.renderReducedSummary(
+            raw: raw,
+            parsed: parsed,
+            notes: [note],
+            style: .meeting,
+            length: .standard,
+            in: .chinese,
+            stitchDetails: false)
+
+        #expect(!parsed.isEmpty)
+        #expect(PromptBuilder.hasDegenerateRepetition(parsed.joinedValues))
+        #expect(summary.contains("传家宝桌子不必铺布"))
+    }
+
     @Test func parsesSummaryRecordTSVAndRejectsInvalidLines() {
         let raw = """
         T	c003	04:00-06:00	摘要去重	讨论本地摘要中的幻觉和重复
