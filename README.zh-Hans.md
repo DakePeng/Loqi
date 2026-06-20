@@ -21,7 +21,7 @@
 - **高准确率二次识别（可选）：** 下载 **Qwen3-ASR-0.6B**（设置 -> 高准确率重新转录，约 990 MB，HF 或 ModelScope）后，“重新转录并总结”和导入会自动使用它。这是 Speech-LLM（Whisper 风格编码器 -> Qwen3 解码器，52 种语言），比实时识别慢，但准确率明显更高，并会使用你的词汇热词作为提示（SenseVoice 做不到这一点）。实时字幕仍使用快速引擎。
 - **音频录制：** 每次会话都会保留音频（AAC in crash-tolerant CAF container，约 14 MB/小时），可在会话详情中播放，也可在设置中关闭。如果 app 在录音中被杀死（崩溃、内存压力），下次启动会恢复该会话，包括崩溃前的转录、笔记和音频，并明确提示。
 - **实时总结映射：** 录音时，沉默间隙会生成分段笔记，所以长会议结束后的“总结”几乎是即时的；录音中也可以查看“目前总结”。
-- **说话人分离：** 告诉 app 有几个人在说话（2-6 人，或自动检测人数），转录会按说话人分成彩色块，并在本机会话内按声纹聚类（FluidAudio embeddings，约 50 MB）。可以随时重命名说话人。
+- **说话人分离：** 实时录音在选择 Auto 或 2-4 人时使用 FluidAudio Streaming Sortformer（约 80 MB，Hugging Face/HF-Mirror，最多 4 个声道槽位）；它会在音频流入时打说话人标签，并且身份只在当前会话内保留，不保存 voiceprint。导入、说话人分离重试，以及已下载模型的新录音后处理使用 FluidAudio 的离线 Pyannote Community-1/VBx 流水线，对整段文件分析，支持 Auto 或 2-6 人。可以随时重命名说话人。
 - **麦克风拾音预设：** 近讲 / 均衡 / 会议室会调整采集增益和两个引擎的语音活动检测。可在录音栏中随时切换。会议室模式更适合桌子对面的说话人；近讲模式会更主动过滤背景人声。
 - **导入：** 从语音备忘录（或任意音频文件）分享录音，即可得到同样的转录、说话人和总结处理。
 - **照片附件：** 录音中可以拍摄幻灯片/白板（录音栏的相机按钮，拍照路径不会打断麦克风），也可以给已保存会话补充照片。本机 Vision OCR（中/日/韩/英）会把提取的文字提供给总结、聊天答案和搜索；缩略图会嵌入转录流。Qwen3.5 原生多模态，所以照片还会由默认模型生成 LLM 描述（图表也不只是 OCR 文本），不需要单独的视觉模型层。
@@ -31,7 +31,7 @@
 - **与会话聊天：** 对已保存会话提问（例如“有哪些行动项？”），答案完全基于本机笔记和转录生成，并使用你的提问语言回答。
 - **低摩擦采集：** 锁屏后录音继续（LLM 工作暂停，回到前台后追赶）；Live Activity / Dynamic Island 显示计时并提供停止按钮；可通过 Siri（“Start recording with Loqi”）、Action Button 或 Control Center 开关开始/停止。
 - **热词：** 用户定义的人名和术语（设置 -> 词汇）会影响 ASR 识别，近似错误会被修正（Levenshtein / 拼音匹配），并引导 LLM 保持一致写法。
-- **模型下载：** Hugging Face 或 ModelScope 魔搭（在设置里选择；如果 huggingface.co 不可达，使用 ModelScope）。模型层级：Qwen3.5-2B（默认，约 1.75 GB）· Qwen3.5-0.8B（最快，约 650 MB）。两者都是原生多模态（文本 + 照片），旧的 Qwen3 文本/VL 层级已经移除。mlx-swift-lm 3.31.3 中有一个 repetition-penalty bug，会让经由 VLM factory 的生成崩溃（2-D prompt 破坏 TokenRing）；`LLMService` 已在本地绕过。依赖版本高于 3.31.3 后可移除该 wrapper。
+- **模型下载：** 语音/LLM 模型可使用 Hugging Face 或 ModelScope 魔搭（在设置里选择；如果 huggingface.co 不可达，使用 ModelScope）。说话人识别使用 Hugging Face/HF-Mirror，因为 FluidAudio diarizer 不在 ModelScope 上。模型层级：Qwen3.5-2B（默认，约 1.75 GB）· Qwen3.5-0.8B（最快，约 650 MB）。两者都是原生多模态（文本 + 照片），旧的 Qwen3 文本/VL 层级已经移除。mlx-swift-lm 3.31.3 中有一个 repetition-penalty bug，会让经由 VLM factory 的生成崩溃（2-D prompt 破坏 TokenRing）；`LLMService` 已在本地绕过。依赖版本高于 3.31.3 后可移除该 wrapper。
 
 **要求：** 一台装有 Xcode 26 的 Mac、iPhone 15 或更新机型、iOS 26+，并在手机上开启 Developer Mode。LLM **不能**在模拟器中运行，完整流水线需要真机。
 
@@ -80,7 +80,7 @@ Loqi/
 │   ├── Translation/         第一层：系统 Translation 框架
 │   ├── Refinement/          第二层：MLX LLM 队列与 prompt builder
 │   ├── Summary/             Map-reduce 总结；live chunker 与 note queue
-│   ├── Speaker/             说话人分离（FluidAudio embeddings + clustering）
+│   ├── Speaker/             实时 Sortformer + 离线 Pyannote/VBx 说话人分离
 │   ├── Vision/              Vision OCR + Qwen3.5 图像描述
 │   └── Import/              音频文件转录（语音备忘录分享）
 ├── Models/                  CaptionEntry、SessionRecord、AppLanguage
@@ -96,7 +96,7 @@ project.yml                  XcodeGen manifest；重新生成前先改这里
 
 ### 架构概览
 
-`CaptionPipeline` 负责把所有东西串起来：`AudioCaptureService` 读取麦克风，并把 buffer 分发给当前实时 ASR 引擎（Apple `SpeechAnalyzer` 或 SenseVoice）、流式说话人分离和 `SessionRecorder`（AAC-in-CAF，用于崩溃容错）。`TranscriptSegmenter` 决定哪些内容值得保留；`LiveChunker` 把最终转录行聚成 chunk，`ChunkNoteQueue` 在沉默间隙生成笔记；当源语言和目标语言不同时，`RefinementQueue` 会升级 `TranslationCoordinator` 的即时翻译草稿（转录文本本身不会被 LLM 重写）。`SummaryJobCenter` 负责后处理导入、Qwen3-ASR 重新转录和总结任务，避免导航造成重复执行。`LLMService` 是唯一直接接触 MLX 的文件；实时工作使用固定的 0.8B 层级，总结/聊天/标题/词汇工作使用所选总结层级，所有 LLM 消费者都会让路给实时语音。所有状态落在 `CaptionStore`，由 UI 渲染；停止录音时，`SessionArchive` 会把转录、音频文件名、附件、聊天历史和实时笔记作为一个 record 保存。`ThermalMonitor` 的降载顺序是：先停 LLM 工作，再卸载 LLM 本身，永远不先牺牲 ASR。
+`CaptionPipeline` 负责把所有东西串起来：`AudioCaptureService` 读取麦克风，并把 buffer 分发给当前实时 ASR 引擎（Apple `SpeechAnalyzer` 或 SenseVoice）、Streaming Sortformer 说话人分离和 `SessionRecorder`（AAC-in-CAF，用于崩溃容错）。`TranscriptSegmenter` 决定哪些内容值得保留；`LiveChunker` 把最终转录行聚成 chunk，`ChunkNoteQueue` 在沉默间隙生成笔记；当源语言和目标语言不同时，`RefinementQueue` 会升级 `TranslationCoordinator` 的即时翻译草稿（转录文本本身不会被 LLM 重写）。`SummaryJobCenter` 负责后处理导入、Qwen3-ASR 重新转录、离线说话人重试/后处理和总结任务，避免导航造成重复执行。`LLMService` 是唯一直接接触 MLX 的文件；实时工作使用固定的 0.8B 层级，总结/聊天/标题/词汇工作使用所选总结层级，所有 LLM 消费者都会让路给实时语音。所有状态落在 `CaptionStore`，由 UI 渲染；停止录音时，`SessionArchive` 会把转录、音频文件名、附件、聊天历史和实时笔记作为一个 record 保存。`ThermalMonitor` 的降载顺序是：先停 LLM 工作，再卸载 LLM 本身，永远不先牺牲 ASR。
 
 ## 验证里程碑
 
@@ -111,7 +111,7 @@ project.yml                  XcodeGen manifest；重新生成前先改这里
 | 4 | 翻译视图 | EN -> ZH 字幕实时更新；ZH ↔ JA 可能自动经由英文中转 |
 | 5 | LLM 加载 | 设置 -> Download model now；看到 “Model state: Ready”；记录 tok/s 体感 |
 | 6 | 停止 -> 归档 | 会话出现在 Sessions 中，录音可播放；长会话总结几乎即时 |
-| 7 | 说话人 | 2 人会话并设置说话人数：出现彩色分组；重命名可用 |
+| 7 | 说话人 | 选择 Auto 或 2 人；说话人模型就绪后出现彩色分组；重命名可用 |
 | 8 | 热稳定性 | 在较热环境录 30 分钟；app 应降载 LLM，而不是死掉 |
 
 ## 真实状态

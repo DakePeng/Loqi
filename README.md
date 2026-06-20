@@ -21,7 +21,7 @@ Private voice notes, transcripts and summaries that run **entirely on your iPhon
 - **High-accuracy second pass (optional):** download **Qwen3-ASR-0.6B** (Settings → High-accuracy re-transcription, ~990 MB, HF or ModelScope) and "Re-transcribe & summarize" plus imports use it automatically — a Speech-LLM (Whisper-style encoder → Qwen3 decoder, 52 languages) that's slower than live recognition but noticeably more accurate, primed with your vocabulary hotwords (which SenseVoice can't do). Live captions stay on the fast engines.
 - **Audio recording:** each session's audio is kept (AAC in a crash-tolerant CAF container, ~14 MB/hour) and playable from the session detail — toggle off in Settings. If the app is ever killed mid-recording (crash, memory pressure), the next launch recovers the session — transcript, notes, and audio up to the kill — and says so.
 - **Live summary mapping:** chunk notes generate during silences while you record, so "Summarize" after a long meeting is near-instant, and a "Summary so far" digest is available mid-session.
-- **Speaker separation:** tell the app how many people are talking (2–6, or Auto to detect the count) and the transcript groups into color-coded speaker blocks, clustered by voice on-device per session (FluidAudio embeddings, ~50MB). Rename speakers any time.
+- **Speaker separation:** live recordings use FluidAudio's Streaming Sortformer (~80 MB, Hugging Face/HF-Mirror, up to 4 voices) when you choose Auto or 2–4 speakers; it labels audio as it streams and keeps identities session-scoped without saving voiceprints. Imports, speaker-separation retry, and downloaded-model post-process for new recordings use FluidAudio's offline Pyannote Community-1/VBx pipeline on the whole file, with Auto or 2–6 speakers. Rename speakers any time.
 - **Mic pickup presets:** Close-up / Balanced / Meeting room tune the capture boost and both engines' voice-activity detection for the situation — switchable mid-recording from the Record bar. Meeting room reaches for talkers across the table; Close-up keeps background voices out of the transcript.
 - **Import:** share a recording from Voice Memos (or any audio file) and get the same transcript/speakers/summary treatment.
 - **Photo attachments:** snap slides/whiteboards mid-recording (camera button on the recording bar — a capture path that can't interrupt the mic) or add photos to a saved session. On-device Vision OCR (zh/ja/ko/en) feeds the extracted text into the summary, chat answers, and search; thumbnails sit inline in the transcript. Qwen3.5 is natively multimodal, so photos additionally get an LLM description (diagrams, not just text) from the default model — no separate vision tier.
@@ -31,7 +31,7 @@ Private voice notes, transcripts and summaries that run **entirely on your iPhon
 - **Chat with a session:** ask a saved session questions ("what were the action items?") — answered on-device from its notes and transcript, in the language you ask in.
 - **Frictionless capture:** recording keeps going with the screen locked (LLM work pauses and catches up); a Live Activity / Dynamic Island shows elapsed time with a stop button; start/stop from Siri ("Start recording with Loqi"), the Action Button, or a Control Center toggle.
 - **Hotwords:** user-defined names/jargon (Settings → Vocabulary) bias ASR recognition, get near-miss-corrected (Levenshtein / pinyin matching), and steer the LLM toward consistent renderings.
-- **Model downloads:** Hugging Face or ModelScope 魔搭 (pick in Settings — use ModelScope where huggingface.co is unreachable). Model tiers: Qwen3.5-2B (default, ~1.75GB) · Qwen3.5-0.8B (fastest, ~650MB) — both natively multimodal (text + photos), so the old Qwen3 text/VL tiers are gone. A repetition-penalty bug in mlx-swift-lm 3.31.3 that crashed every generation routed through the VLM factory (2-D prompts corrupt its TokenRing) is patched locally in `LLMService` — remove the wrapper when the dependency moves past 3.31.3.
+- **Model downloads:** Hugging Face or ModelScope 魔搭 for speech/LLM models (pick in Settings — use ModelScope where huggingface.co is unreachable). Speaker recognition uses Hugging Face/HF-Mirror because the FluidAudio diarizer is not on ModelScope. Model tiers: Qwen3.5-2B (default, ~1.75GB) · Qwen3.5-0.8B (fastest, ~650MB) — both natively multimodal (text + photos), so the old Qwen3 text/VL tiers are gone. A repetition-penalty bug in mlx-swift-lm 3.31.3 that crashed every generation routed through the VLM factory (2-D prompts corrupt its TokenRing) is patched locally in `LLMService` — remove the wrapper when the dependency moves past 3.31.3.
 
 **Requires:** a Mac with Xcode 26, iPhone 15 or newer, iOS 26+, and Developer Mode on the phone. The LLM does **not** run in the simulator — you need a real device for the full pipeline.
 
@@ -80,7 +80,7 @@ Loqi/
 │   ├── Translation/            Tier-1: system Translation framework
 │   ├── Refinement/             Tier-2: MLX LLM queue + prompt builder
 │   ├── Summary/                Map-reduce summaries; live chunker + note queue
-│   ├── Speaker/                Diarization (FluidAudio embeddings + clustering)
+│   ├── Speaker/                Live Sortformer + offline Pyannote/VBx diarization
 │   ├── Vision/                 Vision OCR + Qwen3.5 image descriptions
 │   └── Import/                 Audio-file transcription (Voice Memos share)
 ├── Models/                     CaptionEntry, SessionRecord, AppLanguage
@@ -96,7 +96,7 @@ project.yml                  XcodeGen manifest; edit this before regenerating
 
 ### Architecture in one paragraph
 
-`CaptionPipeline` wires everything: `AudioCaptureService` taps the mic and fans buffers out to the chosen live ASR engine (Apple `SpeechAnalyzer` or SenseVoice), streaming diarization, and `SessionRecorder` (AAC-in-CAF for crash tolerance). `TranscriptSegmenter` decides what's worth keeping; `LiveChunker` groups finalized lines into chunks whose notes `ChunkNoteQueue` generates during silences; `RefinementQueue` upgrades `TranslationCoordinator`'s instant draft translations when source ≠ target (transcript text itself is never LLM-rewritten). `SummaryJobCenter` owns post-hoc imports, Qwen3-ASR re-transcription, and summarize jobs so navigation cannot double-run them. `LLMService` is the only file that touches MLX; live work uses the fixed 0.8B tier, summary/chat/title/vocabulary work uses the selected summary tier, and all LLM consumers yield to live speech. Everything lands in `CaptionStore`, the observable source of truth the UI renders; on stop, `SessionArchive` persists transcript, audio file name, attachments, chat history, and live notes as one record. `ThermalMonitor` sheds load in order: LLM work first, the LLM itself second — never ASR.
+`CaptionPipeline` wires everything: `AudioCaptureService` taps the mic and fans buffers out to the chosen live ASR engine (Apple `SpeechAnalyzer` or SenseVoice), Streaming Sortformer speaker separation, and `SessionRecorder` (AAC-in-CAF for crash tolerance). `TranscriptSegmenter` decides what's worth keeping; `LiveChunker` groups finalized lines into chunks whose notes `ChunkNoteQueue` generates during silences; `RefinementQueue` upgrades `TranslationCoordinator`'s instant draft translations when source ≠ target (transcript text itself is never LLM-rewritten). `SummaryJobCenter` owns post-hoc imports, Qwen3-ASR re-transcription, offline speaker retry/post-process, and summarize jobs so navigation cannot double-run them. `LLMService` is the only file that touches MLX; live work uses the fixed 0.8B tier, summary/chat/title/vocabulary work uses the selected summary tier, and all LLM consumers yield to live speech. Everything lands in `CaptionStore`, the observable source of truth the UI renders; on stop, `SessionArchive` persists transcript, audio file name, attachments, chat history, and live notes as one record. `ThermalMonitor` sheds load in order: LLM work first, the LLM itself second — never ASR.
 
 ## Build-up milestones
 
@@ -111,7 +111,7 @@ The codebase is complete, but if you're learning iOS, verify it in this order (e
 | 4 | Translation lens | EN→ZH captions update live; ZH↔JA may pivot through English automatically |
 | 5 | LLM loads | Settings → Download model now; "Model state: Ready"; note tok/s feel |
 | 6 | Stop → archive | Session appears in Sessions with a playable recording; Summarize is near-instant after a long session |
-| 7 | Speakers | 2-person session with speaker count set: color-coded blocks; rename works |
+| 7 | Speakers | Choose Auto or 2 speakers; color-coded blocks appear once the speaker model is ready; rename works |
 | 8 | Thermal soak | 30-min session in a warm spot; app should shed LLM work, not die |
 
 ## Honest status
