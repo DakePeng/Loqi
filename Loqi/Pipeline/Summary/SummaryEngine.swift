@@ -357,7 +357,7 @@ struct SummaryEngine {
         let records = SummaryRecordReducer.deduped(
             SummaryRecordReducer.records(from: notes))
         var seen = Set<String>()
-        var recent: [String] = []
+        var recent: [(label: String, key: String)] = []
 
         func actionText(_ record: SessionRecord.SummaryRecord) -> String {
             let owner = record.owner?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
@@ -394,22 +394,24 @@ struct SummaryEngine {
             }
         }
 
-        func keep(_ text: String) -> Bool {
+        func keep(_ label: String, _ text: String) -> Bool {
             let key = dedupKey(text)
             guard !key.isEmpty else { return false }
-            if seen.contains(key) { return false }
+            let labeledKey = "\(label):\(key)"
+            if seen.contains(labeledKey) { return false }
             for prior in recent.suffix(24)
-            where HotwordMatcher.similarity(prior, key) >= 0.9 {
+            where prior.label == label
+                && HotwordMatcher.similarity(prior.key, key) >= 0.9 {
                 return false
             }
-            seen.insert(key)
-            recent.append(key)
+            seen.insert(labeledKey)
+            recent.append((label, key))
             return true
         }
 
         return records.compactMap { record in
             guard let (label, text) = labelAndText(record),
-                  keep(text) else { return nil }
+                  keep(label, text) else { return nil }
             return "\(label): \(text)"
         }.joined(separator: "\n")
     }
@@ -514,8 +516,34 @@ struct SummaryEngine {
         guard !parsed.isEmpty else { return fallback() }
         guard !PromptBuilder.hasDegenerateRepetition(parsed.joinedValues)
         else { return fallback() }
+        let parsed = dedupedStructuredSummary(parsed)
+        guard !parsed.isEmpty else { return fallback() }
         let summary = prompts.renderSummaryMarkdown(parsed, in: language)
         return summary.isEmpty ? fallback() : summary
+    }
+
+    static func dedupedStructuredSummary(
+        _ parsed: PromptBuilder.ParsedStructuredSummary
+    ) -> PromptBuilder.ParsedStructuredSummary {
+        var copy = parsed
+        var usedKeys: [String] = []
+
+        func keep(_ text: String) -> Bool {
+            let key = dedupKey(text)
+            guard !key.isEmpty else { return false }
+            for prior in usedKeys
+            where prior == key
+                || HotwordMatcher.similarity(prior, key)
+                    >= SummaryRecordReducer.crossSectionDedupThreshold {
+                return false
+            }
+            usedKeys.append(key)
+            return true
+        }
+
+        copy.overview = copy.overview.filter { keep($0) }
+        copy.sections = copy.sections.map { $0.filter { keep($0) } }
+        return copy
     }
 
     /// Best-effort scenario detection for the post-stop selection step.

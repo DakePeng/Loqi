@@ -212,6 +212,35 @@ struct SummaryEngineTests {
         #expect(input.contains("topic: 预算定为 42 万，并且六月发布前完成验收"))
     }
 
+    @Test func reduceInputKeepsDecisionWhenTopicRepeatsIt() {
+        let timestamp = Date(timeIntervalSince1970: 1_000_000)
+        let note = SessionRecord.ChunkNote(
+            headline: "发布计划",
+            startedAt: timestamp,
+            summaryRecords: [
+                .init(
+                    kind: .topic,
+                    source: .transcript,
+                    sourceIDs: ["m001"],
+                    sourceIndex: 0,
+                    timestamp: timestamp,
+                    text: "六月发布",
+                    topicTitle: "发布计划"),
+                .init(
+                    kind: .decision,
+                    source: .transcript,
+                    sourceIDs: ["m002"],
+                    sourceIndex: 1,
+                    timestamp: timestamp.addingTimeInterval(1),
+                    text: "六月发布"),
+            ])
+
+        let input = SummaryEngine.reduceInput(notes: [note], style: .meeting)
+
+        #expect(input.contains("topic: 六月发布"))
+        #expect(input.contains("decision: 六月发布"))
+    }
+
     @Test func reduceFallsBackWhenGenerationThrows() async throws {
         let note = SessionRecord.ChunkNote(
             headline: "桌布讨论",
@@ -308,6 +337,34 @@ struct SummaryEngineTests {
         #expect(parsed.isEmpty)
         #expect(summary.contains("传家宝桌子不必铺布"))
         #expect(!summary.contains("topic:"))
+    }
+
+    @Test func reducedSummaryDedupesStructuredOutputBeforeRendering() {
+        let builder = PromptBuilder()
+        let sizing = SummaryPromptSizing(maxTokens: 420, overviewCap: 6, sectionCaps: [6, 6, 6])
+        let raw = """
+        O: 预算定为 42 万
+        T: 预算定为42万
+        D: 六月发布
+        """
+        let parsed = builder.parseStructuredSummary(raw, style: .meeting, sizing: sizing)
+        let note = SessionRecord.ChunkNote(
+            headline: "fallback-only",
+            startedAt: Date(timeIntervalSince1970: 1_000_000),
+            facts: ["fallback-only"])
+
+        let summary = SummaryEngine.renderReducedSummary(
+            raw: raw,
+            parsed: parsed,
+            notes: [note],
+            style: .meeting,
+            length: .standard,
+            in: .chinese,
+            stitchDetails: false)
+
+        #expect(summary.components(separatedBy: "预算定为").count - 1 == 1)
+        #expect(summary.contains("六月发布"))
+        #expect(!summary.contains("fallback-only"))
     }
 
     @Test func reducedSummaryFallsBackWhenStructuredOutputRepeats() {
