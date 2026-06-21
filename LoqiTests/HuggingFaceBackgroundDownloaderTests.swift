@@ -54,6 +54,24 @@ struct HuggingFaceBackgroundDownloaderTests {
         #expect(!downloader.isValidSnapshot(dir, for: selected))
     }
 
+    @Test func metadataManifestValidatesOwnSnapshotWithoutRemoteList() throws {
+        let dir = URL.temporaryDirectory.appending(path: UUID().uuidString, directoryHint: .isDirectory)
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+
+        let files = [
+            HuggingFaceBackgroundDownloader.FileEntry(path: "config.json", size: 2),
+            HuggingFaceBackgroundDownloader.FileEntry(path: "weights.safetensors", size: 10),
+        ]
+        try Data(count: 2).write(to: dir.appending(path: "config.json"))
+        try Data(count: 10).write(to: dir.appending(path: "weights.safetensors"))
+        try downloader.writeManifest(files, to: dir, revision: "main", patterns: ["*.json", "*.safetensors"])
+
+        #expect(downloader.isValidSnapshot(dir, revision: "main", patterns: ["*.json", "*.safetensors"]))
+        #expect(!downloader.isValidSnapshot(dir, revision: "dev", patterns: ["*.json", "*.safetensors"]))
+        #expect(!downloader.isValidSnapshot(dir, revision: "main", patterns: ["*.safetensors"]))
+    }
+
     @Test func removeStalePartialsDeletesPartAndMetaFiles() throws {
         let dir = URL.temporaryDirectory.appending(path: UUID().uuidString, directoryHint: .isDirectory)
         try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)

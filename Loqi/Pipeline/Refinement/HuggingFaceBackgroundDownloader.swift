@@ -24,6 +24,10 @@ struct HuggingFaceBackgroundDownloader: Downloader {
         let revision = revision ?? "main"
         let destination = Self.cacheRoot.appending(path: id, directoryHint: .isDirectory)
 
+        if !useLatest, isValidSnapshot(destination, revision: revision, patterns: patterns) {
+            return destination
+        }
+
         let files = try await listFiles(id: id, revision: revision)
             .filter { matches($0.path, patterns: patterns) }
         guard files.contains(where: { $0.path.hasSuffix(".safetensors") }) else {
@@ -94,7 +98,7 @@ struct HuggingFaceBackgroundDownloader: Downloader {
         }
 
         removeStalePartials(in: destination)
-        try writeManifest(files, to: destination)
+        try writeManifest(files, to: destination, revision: revision, patterns: patterns)
         return destination
     }
 
@@ -110,15 +114,25 @@ struct HuggingFaceBackgroundDownloader: Downloader {
         try data.write(to: manifestURL(directory))
     }
 
+    func writeManifest(
+        _ files: [FileEntry],
+        to directory: URL,
+        revision: String,
+        patterns: [String]
+    ) throws {
+        let manifest = SnapshotManifest(revision: revision, patterns: patterns, files: files)
+        let data = try JSONEncoder().encode(manifest)
+        try data.write(to: manifestURL(directory))
+    }
+
     func isValidSnapshot(_ directory: URL) -> Bool {
         guard let files = try? manifestFiles(in: directory) else { return false }
         return isValidSnapshot(directory, for: files)
     }
 
     func isValidSnapshot(_ directory: URL, for files: [FileEntry]) -> Bool {
-        guard let data = try? Data(contentsOf: manifestURL(directory)),
-              let sizes = try? JSONDecoder().decode([String: Int64].self, from: data)
-        else { return false }
+        guard let manifestFiles = try? manifestFiles(in: directory) else { return false }
+        let sizes = Dictionary(uniqueKeysWithValues: manifestFiles.map { ($0.path, $0.size) })
         guard !files.isEmpty else { return false }
         for fileEntry in files {
             guard sizes[fileEntry.path] == fileEntry.size else { return false }
@@ -130,6 +144,15 @@ struct HuggingFaceBackgroundDownloader: Downloader {
             else { return false }
         }
         return true
+    }
+
+    func isValidSnapshot(_ directory: URL, revision: String, patterns: [String]) -> Bool {
+        guard let manifest = try? metadataManifest(in: directory),
+              manifest.revision == revision,
+              manifest.patterns == patterns,
+              manifest.files.contains(where: { $0.path.hasSuffix(".safetensors") })
+        else { return false }
+        return containsFiles(directory, for: manifest.files)
     }
 
     private func containsFiles(_ directory: URL, for files: [FileEntry]) -> Bool {
@@ -145,15 +168,29 @@ struct HuggingFaceBackgroundDownloader: Downloader {
 
     private func manifestFiles(in directory: URL) throws -> [FileEntry] {
         let data = try Data(contentsOf: manifestURL(directory))
+        if let manifest = try? JSONDecoder().decode(SnapshotManifest.self, from: data) {
+            return manifest.files
+        }
         let sizes = try JSONDecoder().decode([String: Int64].self, from: data)
         return sizes.map { FileEntry(path: $0.key, size: $0.value) }
     }
 
+    private func metadataManifest(in directory: URL) throws -> SnapshotManifest {
+        let data = try Data(contentsOf: manifestURL(directory))
+        return try JSONDecoder().decode(SnapshotManifest.self, from: data)
+    }
+
     // MARK: Hugging Face API
 
-    struct FileEntry: Sendable {
+    struct FileEntry: Codable, Sendable {
         var path: String
         var size: Int64
+    }
+
+    private struct SnapshotManifest: Codable {
+        var revision: String
+        var patterns: [String]
+        var files: [FileEntry]
     }
 
     private struct TreeEntry: Decodable {
