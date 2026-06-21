@@ -88,6 +88,25 @@ struct LLMServiceTests {
 
         #expect(!LLMService.backgroundHFSnapshotLooksComplete(model: model, at: snapshot))
     }
+
+    @Test func backgroundHuggingFaceSnapshotIgnoresUnmanifestedWeights() throws {
+        let model = ModelCatalog.qwen35_0_8b
+        let snapshot = URL.temporaryDirectory.appending(
+            path: UUID().uuidString, directoryHint: .isDirectory)
+        try FileManager.default.createDirectory(at: snapshot, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: snapshot) }
+
+        try Data("{}".utf8).write(to: snapshot.appending(path: "preprocessor_config.json"))
+        try Data("{}".utf8).write(to: snapshot.appending(path: "config.json"))
+        try Data(count: 10).write(to: snapshot.appending(path: "weights.safetensors"))
+        try HuggingFaceBackgroundDownloader().writeManifest(
+            [HuggingFaceBackgroundDownloader.FileEntry(
+                path: "config.json",
+                size: 2)],
+            to: snapshot)
+
+        #expect(!LLMService.backgroundHFSnapshotLooksComplete(model: model, at: snapshot))
+    }
 }
 
 /// `<think>` leakage from hybrid models is stripped, never asserted on —

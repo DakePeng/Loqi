@@ -130,29 +130,28 @@ actor LLMService {
     nonisolated static func backgroundHFSnapshotLooksComplete(
         model: ModelOption, at directory: URL
     ) -> Bool {
-        guard HuggingFaceBackgroundDownloader().isValidSnapshot(directory),
-              containsSafetensors(in: directory),
+        guard let entries = try? backgroundHFManifestEntries(in: directory),
+              entries.contains(where: { $0.path.hasSuffix(".safetensors") }),
+              HuggingFaceBackgroundDownloader().isValidSnapshot(directory),
               visionFilesPresent(model: model, in: directory)
         else { return false }
         return true
     }
 
-    private nonisolated static func containsSafetensors(in directory: URL) -> Bool {
-        guard let enumerator = FileManager.default.enumerator(
-            at: directory,
-            includingPropertiesForKeys: [.isRegularFileKey],
-            options: [.skipsHiddenFiles]
-        ) else { return false }
-
-        for case let file as URL in enumerator {
-            guard file.pathExtension == "safetensors",
-                  let isRegular = try? file.resourceValues(
-                      forKeys: [.isRegularFileKey]).isRegularFile,
-                  isRegular == true
-            else { continue }
-            return true
+    private nonisolated static func backgroundHFManifestEntries(
+        in directory: URL
+    ) throws -> [HuggingFaceBackgroundDownloader.FileEntry] {
+        let manifest = directory.appending(path: ".manifest.json")
+        let data = try Data(contentsOf: manifest)
+        if let metadata = try? JSONDecoder().decode(BackgroundHFSnapshotManifest.self, from: data) {
+            return metadata.files
         }
-        return false
+        let sizes = try JSONDecoder().decode([String: Int64].self, from: data)
+        return sizes.map { HuggingFaceBackgroundDownloader.FileEntry(path: $0.key, size: $0.value) }
+    }
+
+    private struct BackgroundHFSnapshotManifest: Decodable {
+        var files: [HuggingFaceBackgroundDownloader.FileEntry]
     }
 
     /// Vision tiers need the processor configs on disk or the VLM factory
