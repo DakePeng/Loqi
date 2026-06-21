@@ -13,4 +13,8 @@ struct ModelFileDownloaderTests {
     @Test func smallModelFilesStayOnForegroundTransfer() {
         #expect(ModelFileDownloader.mode(forExpectedBytes: 320_000) == .foregroundSegmented)
     }
+
+    @Test func thresholdSizedModelFilesStayOnForegroundTransfer() {
+        #expect(ModelFileDownloader.mode(forExpectedBytes: 8 << 20) == .foregroundSegmented)
+    }
 }

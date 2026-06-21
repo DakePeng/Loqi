@@ -10,7 +10,7 @@ enum ModelFileDownloader {
 
     static func mode(forExpectedBytes expectedBytes: Int64) -> Mode {
         #if os(iOS)
-        expectedBytes >= backgroundThresholdBytes ? .backgroundURLSession : .foregroundSegmented
+        expectedBytes > backgroundThresholdBytes ? .backgroundURLSession : .foregroundSegmented
         #else
         .foregroundSegmented
         #endif
