@@ -121,11 +121,38 @@ actor LLMService {
         }
         let backgroundHFSnapshot = HuggingFaceBackgroundDownloader.cacheRoot.appending(
             path: model.id, directoryHint: .isDirectory)
-        if HuggingFaceBackgroundDownloader().isValidSnapshot(backgroundHFSnapshot),
-           visionFilesPresent(model: model, in: backgroundHFSnapshot) {
+        if backgroundHFSnapshotLooksComplete(model: model, at: backgroundHFSnapshot) {
             return true
         }
         return hubSnapshotLooksComplete(model: model)
+    }
+
+    nonisolated static func backgroundHFSnapshotLooksComplete(
+        model: ModelOption, at directory: URL
+    ) -> Bool {
+        guard HuggingFaceBackgroundDownloader().isValidSnapshot(directory),
+              containsSafetensors(in: directory),
+              visionFilesPresent(model: model, in: directory)
+        else { return false }
+        return true
+    }
+
+    private nonisolated static func containsSafetensors(in directory: URL) -> Bool {
+        guard let enumerator = FileManager.default.enumerator(
+            at: directory,
+            includingPropertiesForKeys: [.isRegularFileKey],
+            options: [.skipsHiddenFiles]
+        ) else { return false }
+
+        for case let file as URL in enumerator {
+            guard file.pathExtension == "safetensors",
+                  let isRegular = try? file.resourceValues(
+                      forKeys: [.isRegularFileKey]).isRegularFile,
+                  isRegular == true
+            else { continue }
+            return true
+        }
+        return false
     }
 
     /// Vision tiers need the processor configs on disk or the VLM factory

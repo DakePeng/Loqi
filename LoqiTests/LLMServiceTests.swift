@@ -35,25 +35,58 @@ struct LLMServiceTests {
 
     @Test func backgroundHuggingFaceSnapshotCountsAsDownloaded() throws {
         let model = ModelCatalog.qwen35_0_8b
-        let snapshot = HuggingFaceBackgroundDownloader.cacheRoot.appending(
-            path: model.id,
-            directoryHint: .isDirectory)
-        try? FileManager.default.removeItem(at: snapshot)
+        let snapshot = URL.temporaryDirectory.appending(
+            path: UUID().uuidString, directoryHint: .isDirectory)
         try FileManager.default.createDirectory(at: snapshot, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: snapshot) }
 
         let weight = snapshot.appending(path: "weights.safetensors")
-        try Data(count: Int(Double(model.downloadBytes) * 0.81)).write(to: weight)
+        try Data(count: 10).write(to: weight)
         try HuggingFaceBackgroundDownloader().writeManifest(
             [HuggingFaceBackgroundDownloader.FileEntry(
                 path: "weights.safetensors",
-                size: Int64(Double(model.downloadBytes) * 0.81))],
+                size: 10)],
             to: snapshot)
         if model.supportsVision {
             try Data("{}".utf8).write(to: snapshot.appending(path: "preprocessor_config.json"))
         }
 
-        #expect(LLMService.isDownloaded(model: model))
+        #expect(LLMService.backgroundHFSnapshotLooksComplete(model: model, at: snapshot))
+    }
+
+    @Test func backgroundHuggingFaceSnapshotMissingVisionConfigIsNotDownloaded() throws {
+        let model = ModelCatalog.qwen35_0_8b
+        let snapshot = URL.temporaryDirectory.appending(
+            path: UUID().uuidString, directoryHint: .isDirectory)
+        try FileManager.default.createDirectory(at: snapshot, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: snapshot) }
+
+        try Data(count: 10).write(to: snapshot.appending(path: "weights.safetensors"))
+        try HuggingFaceBackgroundDownloader().writeManifest(
+            [HuggingFaceBackgroundDownloader.FileEntry(
+                path: "weights.safetensors",
+                size: 10)],
+            to: snapshot)
+
+        #expect(!LLMService.backgroundHFSnapshotLooksComplete(model: model, at: snapshot))
+    }
+
+    @Test func backgroundHuggingFaceSnapshotWithoutWeightsIsNotDownloaded() throws {
+        let model = ModelCatalog.qwen35_0_8b
+        let snapshot = URL.temporaryDirectory.appending(
+            path: UUID().uuidString, directoryHint: .isDirectory)
+        try FileManager.default.createDirectory(at: snapshot, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: snapshot) }
+
+        try Data("{}".utf8).write(to: snapshot.appending(path: "preprocessor_config.json"))
+        try Data("{}".utf8).write(to: snapshot.appending(path: "config.json"))
+        try HuggingFaceBackgroundDownloader().writeManifest(
+            [HuggingFaceBackgroundDownloader.FileEntry(
+                path: "config.json",
+                size: 2)],
+            to: snapshot)
+
+        #expect(!LLMService.backgroundHFSnapshotLooksComplete(model: model, at: snapshot))
     }
 }
 
