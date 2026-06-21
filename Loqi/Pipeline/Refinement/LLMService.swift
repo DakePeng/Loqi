@@ -119,6 +119,12 @@ actor LLMService {
            visionFilesPresent(model: model, in: scopeSnapshot) {
             return true
         }
+        let backgroundHFSnapshot = HuggingFaceBackgroundDownloader.cacheRoot.appending(
+            path: model.id, directoryHint: .isDirectory)
+        if HuggingFaceBackgroundDownloader().isValidSnapshot(backgroundHFSnapshot),
+           visionFilesPresent(model: model, in: backgroundHFSnapshot) {
+            return true
+        }
         return hubSnapshotLooksComplete(model: model)
     }
 
@@ -211,7 +217,7 @@ actor LLMService {
             ModelScopeDownloader.invalidateSnapshotIfMissingVisionFiles(model: model)
             let downloader: any Downloader =
                 switch source {
-                case .huggingFace: #hubDownloader()
+                case .huggingFace: HuggingFaceBackgroundDownloader()
                 case .modelScope: ModelScopeDownloader()
                 }
 

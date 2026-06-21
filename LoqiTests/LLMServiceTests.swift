@@ -32,6 +32,29 @@ struct LLMServiceTests {
         #expect(LLMService.admittedCacheLimit(
             free: 0, requiredHeadroom: headroom) == nil)
     }
+
+    @Test func backgroundHuggingFaceSnapshotCountsAsDownloaded() throws {
+        let model = ModelCatalog.qwen35_0_8b
+        let snapshot = HuggingFaceBackgroundDownloader.cacheRoot.appending(
+            path: model.id,
+            directoryHint: .isDirectory)
+        try? FileManager.default.removeItem(at: snapshot)
+        try FileManager.default.createDirectory(at: snapshot, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: snapshot) }
+
+        let weight = snapshot.appending(path: "weights.safetensors")
+        try Data(count: Int(Double(model.downloadBytes) * 0.81)).write(to: weight)
+        try HuggingFaceBackgroundDownloader().writeManifest(
+            [HuggingFaceBackgroundDownloader.FileEntry(
+                path: "weights.safetensors",
+                size: Int64(Double(model.downloadBytes) * 0.81))],
+            to: snapshot)
+        if model.supportsVision {
+            try Data("{}".utf8).write(to: snapshot.appending(path: "preprocessor_config.json"))
+        }
+
+        #expect(LLMService.isDownloaded(model: model))
+    }
 }
 
 /// `<think>` leakage from hybrid models is stripped, never asserted on —
