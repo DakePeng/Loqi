@@ -4,6 +4,7 @@ struct SettingsView: View {
     @Bindable var pipeline: CaptionPipeline
 
     @AppStorage("model.id") private var modelID: String = ModelCatalog.default.id
+    @AppStorage("model.bonsaiEnabled") private var bonsaiEnabled = false
     @AppStorage("model.source") private var sourceRaw: String = ModelSource.huggingFace.rawValue
     @AppStorage("llm.enabled") private var llmEnabled = true
     @AppStorage(DiarizerSource.defaultsKey) private var diarizerSourceRaw = DiarizerSource.huggingFace.rawValue
@@ -162,6 +163,16 @@ struct SettingsView: View {
                                 .disabled(downloadingModelID != nil)
                             }
                         }
+
+                        // Experimental: a stronger text-only model for the
+                        // summary tier. Needs the 1-bit-kernel mlx-swift fork
+                        // to actually load; off by default.
+                        Toggle("Experimental: Bonsai 8B summary model", isOn: $bonsaiEnabled)
+                            .onChange(of: bonsaiEnabled) {
+                                if !bonsaiEnabled, modelID == ModelCatalog.bonsai8b.id {
+                                    modelID = ModelCatalog.default.id
+                                }
+                            }
 
                         // Summary tier — user's pick, runs after recording.
                         Picker("Summary model", selection: $modelID) {

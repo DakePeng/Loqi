@@ -121,6 +121,11 @@ struct SummaryEngineTests {
         #expect(prompt.user.contains("Known terms: Loqi (product name)"))
     }
 
+    @Test func cleanMapInputCollapsesStutters() {
+        #expect(SummaryEngine.cleanMapInput("有有有没有") == "有没有")
+        #expect(SummaryEngine.cleanMapInput("预算定为42万") == "预算定为42万")
+    }
+
     @Test func reducePromptRequiresNaturalWritingConstraints() {
         let prompt = PromptBuilder().reduceSummaryPrompt(
             notes: "topic: 桌布讨论\nfact: 传家宝桌子不必铺布\nphoto: 桌面照片显示木纹完整",
@@ -338,6 +343,21 @@ struct SummaryEngineTests {
         #expect(summary.contains("马的插画设计图"))
         // No invented to-do / next-step section appears.
         #expect(!summary.contains("## 待办事项"))
+    }
+
+    @Test func fallbackStubNotesContributeNoTopicRecord() {
+        let timestamp = Date(timeIntervalSince1970: 1_000_000)
+        let stub = SessionRecord.ChunkNote(
+            headline: "应该是在的",          // raw opening words of a garbled chunk
+            startedAt: timestamp,
+            isFallback: true)
+        let real = SessionRecord.ChunkNote(
+            headline: "预算讨论",
+            startedAt: timestamp,
+            decisions: ["六月发布"])
+
+        #expect(SummaryRecordReducer.records(from: stub).isEmpty)
+        #expect(SummaryRecordReducer.records(from: real).contains { $0.kind == .topic })
     }
 
     @Test func reduceFallsBackWhenGenerationThrows() async throws {

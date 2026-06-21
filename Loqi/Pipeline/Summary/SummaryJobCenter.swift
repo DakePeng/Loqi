@@ -82,6 +82,10 @@ final class SummaryJobCenter {
     /// Retranscribe workers canceled by backgrounding. Foreground resume waits
     /// for their cleanup before reusing the same activity/task slots.
     @ObservationIgnored private var backgroundPausedRetranscribeTasks: [UUID: Task<Void, Never>] = [:]
+    /// One-at-a-time gate every heavy post-hoc job acquires before touching
+    /// the GPU/ASR. Re-summary fired during a file import used to run both
+    /// at once and the OS killed the process; now the second job queues.
+    @ObservationIgnored private let heavyGate = SerialGate()
 
     private struct RetranscribeRequest {
         enum Kind {
@@ -130,6 +134,11 @@ final class SummaryJobCenter {
         self.voiceprint = voiceprint
         self.isRecording = isRecording
     }
+
+    /// Await any in-flight heavy job unwinding. The live pipeline calls this
+    /// right after `yieldToRecording()` so live capture never shares the GPU
+    /// with a still-tearing-down import or summarize.
+    func waitForHeavyIdle() async { await heavyGate.waitUntilIdle() }
 
     func isBusy(_ sessionID: UUID) -> Bool { activities[sessionID] != nil }
     func activity(for sessionID: UUID) -> Activity? { activities[sessionID] }
@@ -326,7 +335,7 @@ final class SummaryJobCenter {
         allowDownload: Bool = false,
         suggestVocabulary: Bool = false
     ) {
-        guard !isBusy(sessionID),
+        guard !isRecording(), !isBusy(sessionID),
               archive.sessions.contains(where: { $0.id == sessionID })
         else { return }
         errors[sessionID] = nil
@@ -337,6 +346,8 @@ final class SummaryJobCenter {
         beginGrace(sessionID, name: "summarize")
         tasks[sessionID] = Task {
             defer { finishJob(sessionID) }
+            do { try await heavyGate.acquire() } catch { return }
+            defer { heavyGate.release() }
             do {
                 try await loadModel(sessionID: sessionID, allowDownload: allowDownload)
                 activities[sessionID] = .summarizing(done: 0, total: 0)
@@ -392,6 +403,8 @@ final class SummaryJobCenter {
         beginGrace(sessionID, name: "retry-diarize")
         tasks[sessionID] = Task {
             defer { finishJob(sessionID) }
+            do { try await heavyGate.acquire() } catch { return }
+            defer { heavyGate.release() }
             do {
                 let segments = try await voiceprint.diarizeFile(
                     url: url, maxSpeakers: speakerCap, source: .current
@@ -529,6 +542,8 @@ final class SummaryJobCenter {
         activities[sessionID] = .retranscribing(.transcribing(0))
         beginGrace(sessionID, name: "retranscribe")
         defer { finishJob(sessionID) }
+        do { try await heavyGate.acquire() } catch { return }
+        defer { heavyGate.release() }
         do {
             // The summarize that follows needs the model; check its
             // gates BEFORE the expensive re-transcription, not after.
@@ -602,6 +617,8 @@ final class SummaryJobCenter {
         beginGrace(sessionID, name: "import")
         tasks[sessionID] = Task {
             defer { finishJob(sessionID) }
+            do { try await heavyGate.acquire() } catch { return }
+            defer { heavyGate.release() }
             do {
                 await llm.setModel(ModelCatalog.summaryModel)
                 let importer = FileImportEngine(
@@ -904,7 +921,16 @@ final class SummaryJobCenter {
         // VLM description back-fill. The summary's model is (about to be)
         // loaded here, so this is the reliable place to describe photos — the
         // live queue only runs when the model is already warm, which a short
-        // session rarely is. Without a vision model, skip the whole loop.
+        // session rarely is. When the summary model is text-only (e.g. the
+        // experimental Bonsai tier), describe via the live VLM, then restore
+        // the summary model for reduce.
+        // ponytail: a model swap per summarize only when text-only + undescribed
+        // photos exist; the default Qwen path keeps the current model untouched.
+        let summaryModel = await llm.model
+        let needsDescribe = attachments.contains { $0.vlmDescription == nil }
+        if needsDescribe, !summaryModel.supportsVision {
+            await llm.setModel(ModelCatalog.liveModel)
+        }
         if await llm.model.supportsVision {
             let language = SummaryEngine.summaryLanguage(for: record)
             let prompts = PromptBuilder()
@@ -923,6 +949,9 @@ final class SummaryJobCenter {
                 attachments[index].summaryRecords = nil
                 changed = true
             }
+        }
+        if await llm.model.id != summaryModel.id {
+            await llm.setModel(summaryModel)
         }
         guard changed else { return (record, false) }
         var updated = record
@@ -949,5 +978,61 @@ final class SummaryJobCenter {
         let text = window.map(\.sourceText).joined(separator: " ")
             .trimmingCharacters(in: .whitespacesAndNewlines)
         return String(text.suffix(400))
+    }
+}
+
+/// One-at-a-time FIFO gate for the heavy post-hoc jobs (ASR decode, MLX
+/// generation). Each needs most of the device's spare memory; two at once —
+/// e.g. a re-summary fired during a file import — overrun the budget and the
+/// OS kills the process. A job acquires the single slot, runs, then releases
+/// it to the next in line. Main-actor confined; never touched off it.
+@MainActor
+final class SerialGate {
+    private var busy = false
+    private var waiters: [(id: UUID, continuation: CheckedContinuation<Void, Error>)] = []
+
+    /// Jobs parked behind the current holder. For tests.
+    var waiterCount: Int { waiters.count }
+
+    /// Park until the slot is free. Throws `CancellationError` if cancelled
+    /// while still queued — the caller then owns nothing and must NOT release.
+    func acquire() async throws {
+        if !busy {
+            busy = true
+            return
+        }
+        let id = UUID()
+        try await withTaskCancellationHandler {
+            try await withCheckedThrowingContinuation { continuation in
+                waiters.append((id, continuation))
+            }
+        } onCancel: {
+            Task { @MainActor in self.drop(id) }
+        }
+    }
+
+    /// Resolve once the slot is free. The live pipeline calls this after it
+    /// preempts post-hoc work, so a cancelled import/summarize fully unwinds
+    /// (releasing its GPU/ASR memory) before live capture touches the GPU.
+    /// Queues last and immediately releases — it only needs to observe the
+    /// drain, not hold the slot.
+    func waitUntilIdle() async {
+        guard busy else { return }
+        do { try await acquire() } catch { return }
+        release()
+    }
+
+    /// Hand the slot to the next waiter, or free it if none are queued.
+    func release() {
+        if waiters.isEmpty {
+            busy = false
+        } else {
+            waiters.removeFirst().continuation.resume(returning: ())
+        }
+    }
+
+    private func drop(_ id: UUID) {
+        guard let index = waiters.firstIndex(where: { $0.id == id }) else { return }
+        waiters.remove(at: index).continuation.resume(throwing: CancellationError())
     }
 }

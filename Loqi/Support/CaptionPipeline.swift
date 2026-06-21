@@ -440,6 +440,11 @@ final class CaptionPipeline {
         // on screen or in refinement history.
         store.clear()
         jobs.yieldToRecording()
+        // Recording preempts post-hoc work — but let a cancelled import/
+        // summarize fully release its GPU/ASR memory before live capture
+        // loads its own models, or both touch Metal at once and the OS kills
+        // the process. Bounded: yieldToRecording already cancelled the holder.
+        await jobs.waitForHeavyIdle()
         speakerNames.removeAll()
         sessionID = UUID()
         lastFinishedSessionID = nil

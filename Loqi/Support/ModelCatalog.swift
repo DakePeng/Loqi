@@ -97,6 +97,19 @@ enum ModelCatalog {
         downloadBytes: 652_000_000,
         supportsVision: true)
 
+    /// Experimental text-only 8B (Qwen3-8B arch), ternary weights stored in
+    /// MLX 2-bit format — which stock mlx-swift loads out of the box (the
+    /// 1-bit build needs a custom fork and aborts: upstream MLX `quantize`
+    /// only supports 2/3/4/5/6/8 bits). No vision tower, so when picked, photo
+    /// description routes to the live VLM (see SummaryJobCenter). Hidden behind
+    /// `model.bonsaiEnabled` (off by default).
+    static let bonsai8b = ModelOption(
+        id: "prism-ml/Ternary-Bonsai-8B-mlx-2bit",
+        displayName: "Bonsai 8B (ternary 2-bit) — experimental",
+        requiredHeadroom: 3_000_000_000,   // ~2.3 GB weights + cache; tune on device
+        downloadBytes: 2_300_000_000,
+        supportsVision: false)
+
     static let `default` = qwen35_2b
     /// Model that runs *during* a live recording: the fast, low-memory,
     /// low-heat tier. Always 0.8B regardless of the user's quality pick, so
@@ -109,7 +122,19 @@ enum ModelCatalog {
     /// fast tier, in which case the boundary swap is a no-op.
     static var summaryModel: ModelOption { current }
 
-    static let all = [qwen35_2b, qwen35_0_8b]
+    /// Whether the experimental Bonsai tier is offered. Off by default; it
+    /// needs the 1-bit-kernel mlx-swift fork present to actually load.
+    static func bonsaiEnabled(_ defaults: UserDefaults = .standard) -> Bool {
+        defaults.bool(forKey: "model.bonsaiEnabled")
+    }
+
+    /// Selectable summary models. Bonsai (text-only) appears only when its
+    /// flag is set; the live/vision roles never use it.
+    static func availableModels(defaults: UserDefaults = .standard) -> [ModelOption] {
+        bonsaiEnabled(defaults) ? [qwen35_2b, qwen35_0_8b, bonsai8b] : [qwen35_2b, qwen35_0_8b]
+    }
+
+    static var all: [ModelOption] { availableModels() }
 
     static func option(for id: String) -> ModelOption {
         all.first { $0.id == id } ?? `default`
@@ -126,7 +151,8 @@ enum ModelCatalog {
     /// the default anyway. Idempotent; called at launch.
     static func normalizeStoredSelection(_ defaults: UserDefaults = .standard) {
         guard let id = defaults.string(forKey: "model.id"),
-              !all.contains(where: { $0.id == id }) else { return }
+              !availableModels(defaults: defaults).contains(where: { $0.id == id })
+        else { return }
         defaults.set(`default`.id, forKey: "model.id")
     }
 }

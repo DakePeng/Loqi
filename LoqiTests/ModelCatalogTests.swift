@@ -55,6 +55,32 @@ struct ModelCatalogTests {
         #expect(defaults.string(forKey: "model.id") == ModelCatalog.qwen35_0_8b.id)
     }
 
+    @Test func bonsaiAppearsOnlyWhenFlagEnabled() {
+        let suite = "ModelCatalogTests.\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suite)!
+        defer { defaults.removePersistentDomain(forName: suite) }
+
+        // Off by default.
+        #expect(!ModelCatalog.availableModels(defaults: defaults)
+            .contains { $0.id == ModelCatalog.bonsai8b.id })
+
+        defaults.set(true, forKey: "model.bonsaiEnabled")
+        let on = ModelCatalog.availableModels(defaults: defaults)
+        #expect(on.contains { $0.id == ModelCatalog.bonsai8b.id })
+        // Bonsai is text-only; the vision route depends on this staying false.
+        #expect(ModelCatalog.bonsai8b.supportsVision == false)
+    }
+
+    @Test func normalizationDropsBonsaiWhenFlagDisabled() {
+        let suite = "ModelCatalogTests.\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suite)!
+        defer { defaults.removePersistentDomain(forName: suite) }
+
+        defaults.set(ModelCatalog.bonsai8b.id, forKey: "model.id")  // flag stays off
+        ModelCatalog.normalizeStoredSelection(defaults)
+        #expect(defaults.string(forKey: "model.id") == ModelCatalog.default.id)
+    }
+
     @Test func liveModelIsTheFastTier() {
         #expect(ModelCatalog.liveModel.id == ModelCatalog.qwen35_0_8b.id)
         // Live tier must fit beside SenseVoice — strictly lighter than 2B.

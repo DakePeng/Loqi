@@ -1,4 +1,5 @@
 import Foundation
+import os
 
 /// Map-reduce summarization sized for a small on-device model: chunk the
 /// transcript at natural boundaries, extract tagged notes per chunk (the
@@ -19,6 +20,8 @@ struct SummaryEngine {
     /// nil (reduce-only callers) maps without vocabulary context.
     var matcher: HotwordMatcher?
     private let prompts = PromptBuilder()
+    private static let logger = Logger(
+        subsystem: "com.kunzhipeng.loqi", category: "summary")
 
     /// Character budget per chunk (≈ tokens for CJK); keeps per-chunk
     /// prefill in the seconds range.
@@ -243,7 +246,7 @@ struct SummaryEngine {
             let sourceIDs = chunk.indices.map { String(format: "m%03d", $0 + 1) }
             let text = zip(sourceIDs, chunk).map { id, entry in
                 let speaker = speakerLabel(entry.speaker).map { "[\($0)] " } ?? ""
-                return "\(id)\t\(speaker)\(entry.sourceText)"
+                return "\(id)\t\(speaker)\(Self.cleanMapInput(entry.sourceText))"
             }.joined(separator: "\n")
             let chunkID = String(format: "c%03d", index + 1)
 
@@ -301,6 +304,26 @@ struct SummaryEngine {
         }
         await progress(chunks.count, chunks.count)
         return notes
+    }
+
+    /// Map-input hygiene: collapse a single character repeated 3+ times in a
+    /// row to one. ASR stutters ("有有有") hurt extraction; legit doubles
+    /// ("谢谢") are left alone. Applies to map prompt input ONLY — the stored
+    /// transcript is never altered.
+    // ponytail: 3-repeat threshold heuristic; raise/lower if it clips real text.
+    static func cleanMapInput(_ text: String) -> String {
+        var result = ""
+        var i = text.startIndex
+        while i < text.endIndex {
+            let ch = text[i]
+            var j = text.index(after: i)
+            while j < text.endIndex, text[j] == ch { j = text.index(after: j) }
+            let runLength = text.distance(from: i, to: j)
+            // 3+ repeats of one character = ASR stutter → keep one; 1-2 legit.
+            result.append(String(repeating: ch, count: runLength >= 3 ? 1 : runLength))
+            i = j
+        }
+        return result.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
     /// Normalized form for cross-note duplicate detection: lowercased,
@@ -538,6 +561,33 @@ struct SummaryEngine {
                 in: language,
                 stitchDetails: stitchDetails)
         }
+#if DEBUG
+        // Temporary diagnostic: shows why reduce branched. Remove once the
+        // map-extraction-on-garbled-input question is settled.
+        let fallbackNoteCount = notes.filter { $0.isFallback == true }.count
+        let substanceCount = records.filter {
+            $0.source != .photo && $0.kind != .topic && !$0.text.isEmpty
+        }.count
+        Self.logger.info("""
+            reduce branch: notes=\(notes.count, privacy: .public) \
+            fallback=\(fallbackNoteCount, privacy: .public) \
+            records=\(records.count, privacy: .public) \
+            substance=\(substanceCount, privacy: .public) \
+            hasSpoken=\(Self.hasSpokenSubstance(records), privacy: .public) \
+            inputEmpty=\(input.isEmpty, privacy: .public) \
+            → \(input.isEmpty || !stitchDetails || !Self.hasSpokenSubstance(records) ? "DETERMINISTIC" : "structured", privacy: .public)
+            """)
+        for (index, note) in notes.enumerated() {
+            Self.logger.info("""
+                  note[\(index, privacy: .public)] \
+                fallback=\(note.isFallback == true, privacy: .public) \
+                facts=\(note.facts.count, privacy: .public) \
+                dec=\(note.decisions.count, privacy: .public) \
+                act=\(note.actions.count, privacy: .public) \
+                head=\(note.headline, privacy: .public)
+                """)
+        }
+#endif
         // No spoken substance (photo-only or empty chatter) means the
         // structured reduce has nothing real to synthesize and pads the
         // template with invented to-dos/key-points off the photo. The
@@ -758,7 +808,11 @@ enum SummaryRecordReducer {
                 text: trimmed))
         }
 
-        append(.topic, note.headline, offset: 0)
+        // A fallback stub's headline is just the chunk's raw opening words —
+        // noise, not a topic. Emitting it seeds fake outline entries.
+        if note.isFallback != true {
+            append(.topic, note.headline, offset: 0)
+        }
         for (offset, fact) in note.facts.enumerated() {
             append(.point, fact, offset: 10 + offset)
         }
