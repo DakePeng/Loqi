@@ -376,6 +376,7 @@ struct LiveCaptionsView: View {
                         translationChip
                     }
                     .padding(.horizontal, 16)
+                    .buttonStyle(.plain)
                 }
                 .scrollIndicators(.hidden)
                 .scrollBounceBehavior(.basedOnSize, axes: [.horizontal])
