@@ -1,7 +1,25 @@
 import SwiftUI
 
+#if os(iOS)
+final class LoqiAppDelegate: NSObject, UIApplicationDelegate {
+    func application(
+        _ application: UIApplication,
+        handleEventsForBackgroundURLSession identifier: String,
+        completionHandler: @escaping @Sendable () -> Void
+    ) {
+        BackgroundModelDownloader.shared.setCompletionHandler(
+            completionHandler,
+            for: identifier)
+    }
+}
+#endif
+
 @main
 struct LoqiApp: App {
+    #if os(iOS)
+    @UIApplicationDelegateAdaptor(LoqiAppDelegate.self) private var appDelegate
+    #endif
+
     init() {
         #if DEBUG
         // UI tests re-enter onboarding by deleting the gate: an argument-
