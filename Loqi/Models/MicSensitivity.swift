@@ -9,7 +9,7 @@ enum MicSensitivity: String, CaseIterable, Identifiable {
     /// Strict and unboosted: only voices right at the phone, for noisy
     /// places where background talkers must NOT land in the transcript.
     case near
-    /// The default tuning.
+    /// Middle-ground tuning.
     case balanced
     /// Reach across a meeting room: max boost, permissive VAD.
     case far
@@ -18,11 +18,11 @@ enum MicSensitivity: String, CaseIterable, Identifiable {
 
     static let defaultsKey = "capture.sensitivity"
 
-    /// Persisted choice; absence of the key = .balanced.
+    /// Persisted choice; absence of the key = .far.
     static var current: MicSensitivity {
         MicSensitivity(
             rawValue: UserDefaults.standard.string(forKey: defaultsKey) ?? ""
-        ) ?? .balanced
+        ) ?? .far
     }
 
     var displayName: String {
