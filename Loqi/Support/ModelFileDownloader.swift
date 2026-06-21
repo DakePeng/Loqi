@@ -24,12 +24,12 @@ enum ModelFileDownloader {
         onBytes: @escaping @Sendable (Int64) -> Void
     ) async throws {
         if url.isFileURL {
-            try FileManager.default.createDirectory(
-                at: destination.deletingLastPathComponent(),
-                withIntermediateDirectories: true)
-            try? FileManager.default.removeItem(at: destination)
-            try FileManager.default.copyItem(at: url, to: destination)
-            onBytes(Int64((try? destination.resourceValues(forKeys: [.fileSizeKey]).fileSize) ?? 0))
+            try await downloadLocalFile(
+                url: url,
+                to: destination,
+                expectedBytes: expectedBytes,
+                sha256: sha256,
+                onBytes: onBytes)
             return
         }
 
@@ -58,6 +58,64 @@ enum ModelFileDownloader {
                 sha256: sha256,
                 onBytes: onBytes)
         }
+    }
+
+    private static func downloadLocalFile(
+        url: URL,
+        to destination: URL,
+        expectedBytes: Int64,
+        sha256: String?,
+        onBytes: @escaping @Sendable (Int64) -> Void
+    ) async throws {
+        if url.standardizedFileURL == destination.standardizedFileURL {
+            try await validateDownloadedFile(destination, expectedBytes: expectedBytes, sha256: sha256)
+            onBytes(fileSize(of: destination))
+            return
+        }
+
+        try FileManager.default.createDirectory(
+            at: destination.deletingLastPathComponent(),
+            withIntermediateDirectories: true)
+
+        let part = destination.appendingPathExtension("part")
+        try? FileManager.default.removeItem(at: part)
+
+        do {
+            try FileManager.default.copyItem(at: url, to: part)
+            try await validateDownloadedFile(part, expectedBytes: expectedBytes, sha256: sha256)
+
+            if FileManager.default.fileExists(atPath: destination.path) {
+                try FileManager.default.replaceItemAt(destination, withItemAt: part)
+            } else {
+                try FileManager.default.moveItem(at: part, to: destination)
+            }
+        } catch {
+            try? FileManager.default.removeItem(at: part)
+            throw error
+        }
+
+        onBytes(fileSize(of: destination))
+    }
+
+    fileprivate static func validateDownloadedFile(
+        _ file: URL,
+        expectedBytes: Int64,
+        sha256: String?
+    ) async throws {
+        if expectedBytes > 0, fileSize(of: file) != expectedBytes {
+            throw URLError(.badServerResponse)
+        }
+
+        if let sha256 {
+            let actual = try await SegmentedDownloader.sha256Hex(of: file)
+            guard actual == sha256.lowercased() else {
+                throw SegmentedDownloader.Failure.checksumMismatch
+            }
+        }
+    }
+
+    private static func fileSize(of file: URL) -> Int64 {
+        Int64((try? file.resourceValues(forKeys: [.fileSizeKey]).fileSize) ?? 0)
     }
 }
 
@@ -94,9 +152,13 @@ final class BackgroundModelDownloader: NSObject, URLSessionDownloadDelegate, @un
     private let lock = NSLock()
     private var pending: [String: PendingDownload] = BackgroundModelDownloader.loadPending()
     private var live: [String: LiveDownload] = [:]
-    private var completionHandler: (() -> Void)?
+    private var finalizing: Set<String> = []
+    private var cancelled: Set<String> = []
+    private var completionHandler: (@Sendable () -> Void)?
+    private var session: URLSession!
 
-    private lazy var session: URLSession = {
+    override init() {
+        super.init()
         let config = URLSessionConfiguration.background(withIdentifier: Self.identifier)
         config.sessionSendsLaunchEvents = true
         config.isDiscretionary = false
@@ -105,8 +167,8 @@ final class BackgroundModelDownloader: NSObject, URLSessionDownloadDelegate, @un
         config.allowsConstrainedNetworkAccess = true
         config.urlCache = nil
         config.requestCachePolicy = .reloadIgnoringLocalCacheData
-        return URLSession(configuration: config, delegate: self, delegateQueue: nil)
-    }()
+        session = URLSession(configuration: config, delegate: self, delegateQueue: nil)
+    }
 
     func download(
         url: URL,
@@ -140,6 +202,7 @@ final class BackgroundModelDownloader: NSObject, URLSessionDownloadDelegate, @un
                 lock.lock()
                 self.pending[id] = pending
                 self.live[id] = live
+                self.cancelled.remove(id)
                 persistPendingLocked()
                 lock.unlock()
 
@@ -154,7 +217,7 @@ final class BackgroundModelDownloader: NSObject, URLSessionDownloadDelegate, @un
         }
     }
 
-    func setCompletionHandler(_ handler: @escaping () -> Void, for identifier: String) {
+    func setCompletionHandler(_ handler: @escaping @Sendable () -> Void, for identifier: String) {
         guard identifier == Self.identifier else {
             handler()
             return
@@ -168,6 +231,7 @@ final class BackgroundModelDownloader: NSObject, URLSessionDownloadDelegate, @un
     private func cancel(_ id: String) {
         lock.lock()
         let liveDownload = live.removeValue(forKey: id)
+        cancelled.insert(id)
         pending[id] = nil
         persistPendingLocked()
         lock.unlock()
@@ -199,6 +263,8 @@ final class BackgroundModelDownloader: NSObject, URLSessionDownloadDelegate, @un
               let pending = pendingDownload(id)
         else { return }
 
+        beginFinalization(id)
+
         let destination = URL(fileURLWithPath: pending.destinationPath)
         let part = destination.appendingPathExtension("part")
 
@@ -210,17 +276,25 @@ final class BackgroundModelDownloader: NSObject, URLSessionDownloadDelegate, @un
             try FileManager.default.moveItem(at: location, to: part)
         } catch {
             complete(id, result: .failure(error))
+            finishFinalization(id)
             return
         }
 
         Task {
             do {
-                if let sha256 = pending.sha256 {
-                    let actual = try await SegmentedDownloader.sha256Hex(of: part)
-                    guard actual == sha256.lowercased() else {
-                        try? FileManager.default.removeItem(at: part)
-                        throw SegmentedDownloader.Failure.checksumMismatch
-                    }
+                if self.isCancelled(id) {
+                    try? FileManager.default.removeItem(at: part)
+                    throw URLError(.cancelled)
+                }
+
+                try await ModelFileDownloader.validateDownloadedFile(
+                    part,
+                    expectedBytes: pending.expectedBytes,
+                    sha256: pending.sha256)
+
+                if self.isCancelled(id) {
+                    try? FileManager.default.removeItem(at: part)
+                    throw URLError(.cancelled)
                 }
 
                 if FileManager.default.fileExists(atPath: destination.path) {
@@ -230,8 +304,10 @@ final class BackgroundModelDownloader: NSObject, URLSessionDownloadDelegate, @un
                 }
                 self.complete(id, result: .success(()))
             } catch {
+                try? FileManager.default.removeItem(at: part)
                 self.complete(id, result: .failure(error))
             }
+            self.finishFinalization(id)
         }
     }
 
@@ -246,12 +322,15 @@ final class BackgroundModelDownloader: NSObject, URLSessionDownloadDelegate, @un
 
     func urlSessionDidFinishEvents(forBackgroundURLSession session: URLSession) {
         lock.lock()
-        let handler = completionHandler
-        completionHandler = nil
-        lock.unlock()
-        DispatchQueue.main.async {
-            handler?()
+        let handler: (@Sendable () -> Void)?
+        if finalizing.isEmpty {
+            handler = completionHandler
+            completionHandler = nil
+        } else {
+            handler = nil
         }
+        lock.unlock()
+        callCompletionHandler(handler)
     }
 
     private func pendingDownload(_ id: String) -> PendingDownload? {
@@ -261,10 +340,38 @@ final class BackgroundModelDownloader: NSObject, URLSessionDownloadDelegate, @un
         return value
     }
 
+    private func beginFinalization(_ id: String) {
+        lock.lock()
+        finalizing.insert(id)
+        lock.unlock()
+    }
+
+    private func finishFinalization(_ id: String) {
+        lock.lock()
+        finalizing.remove(id)
+        let handler: (@Sendable () -> Void)?
+        if finalizing.isEmpty {
+            handler = completionHandler
+            completionHandler = nil
+        } else {
+            handler = nil
+        }
+        lock.unlock()
+        callCompletionHandler(handler)
+    }
+
+    private func isCancelled(_ id: String) -> Bool {
+        lock.lock()
+        let value = cancelled.contains(id)
+        lock.unlock()
+        return value
+    }
+
     private func complete(_ id: String, result: Result<Void, Error>) {
         lock.lock()
         let liveDownload = live.removeValue(forKey: id)
         pending[id] = nil
+        cancelled.remove(id)
         persistPendingLocked()
         lock.unlock()
 
@@ -287,6 +394,13 @@ final class BackgroundModelDownloader: NSObject, URLSessionDownloadDelegate, @un
     private func persistPendingLocked() {
         let data = try? JSONEncoder().encode(pending)
         UserDefaults.standard.set(data, forKey: Self.defaultsKey)
+    }
+
+    private func callCompletionHandler(_ handler: (@Sendable () -> Void)?) {
+        guard let handler else { return }
+        DispatchQueue.main.async {
+            handler()
+        }
     }
 }
 #endif
