@@ -151,6 +151,11 @@ final class BackgroundModelDownloader: NSObject, URLSessionDownloadDelegate, @un
         }
     }
 
+    private struct ExistingDownloadTask {
+        let id: String
+        let task: URLSessionDownloadTask
+    }
+
     private static let defaultsKey = "backgroundModelDownloads.pending"
 
     private let lock = NSLock()
@@ -194,22 +199,20 @@ final class BackgroundModelDownloader: NSObject, URLSessionDownloadDelegate, @un
             at: destination.deletingLastPathComponent(),
             withIntermediateDirectories: true)
 
-        let id = Self.transferID(url: url, destination: destination)
+        let stableID = Self.transferID(url: url, destination: destination)
         let listenerID = UUID().uuidString
-        let existingTask = await downloadTask(with: id)
+        let existingTask = await downloadTask(
+            matching: stableID,
+            url: url,
+            destination: destination)
+        let id = existingTask?.id ?? stableID
         try await withTaskCancellationHandler {
             try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
-                let pending = PendingDownload(
-                    id: id,
-                    destinationPath: destination.path,
-                    expectedBytes: expectedBytes,
-                    sha256: sha256)
-
                 lock.lock()
                 let task: URLSessionDownloadTask
                 let shouldResume: Bool
                 if let existingTask {
-                    task = existingTask
+                    task = existingTask.task
                     shouldResume = false
                 } else if let activeTask = self.live[id]?.first?.task {
                     task = activeTask
@@ -221,6 +224,11 @@ final class BackgroundModelDownloader: NSObject, URLSessionDownloadDelegate, @un
                     task.taskDescription = id
                     shouldResume = true
                 }
+                let pending = PendingDownload(
+                    id: id,
+                    destinationPath: destination.path,
+                    expectedBytes: expectedBytes,
+                    sha256: sha256)
                 let live = LiveDownload(
                     listenerID: listenerID,
                     task: task,
@@ -418,14 +426,61 @@ final class BackgroundModelDownloader: NSObject, URLSessionDownloadDelegate, @un
         return value
     }
 
-    private func downloadTask(with id: String) async -> URLSessionDownloadTask? {
-        await withCheckedContinuation { continuation in
+    static func legacyTransferID(
+        url: URL,
+        destination: URL,
+        pendingDestinations: [String: String],
+        taskURLs: [(id: String, url: URL?)]
+    ) -> String? {
+        let destinationPath = destination.standardizedFileURL.path
+        return taskURLs.first { task in
+            guard let taskURL = task.url,
+                  taskURL.absoluteString == url.absoluteString,
+                  let pendingDestination = pendingDestinations[task.id]
+            else { return false }
+
+            return URL(fileURLWithPath: pendingDestination).standardizedFileURL.path == destinationPath
+        }?.id
+    }
+
+    private func downloadTask(
+        matching id: String,
+        url: URL,
+        destination: URL
+    ) async -> ExistingDownloadTask? {
+        let pendingDestinations = pendingDestinationsSnapshot()
+        return await withCheckedContinuation { (continuation: CheckedContinuation<ExistingDownloadTask?, Never>) in
             session.getAllTasks { tasks in
-                let downloadTask = tasks.compactMap { $0 as? URLSessionDownloadTask }
-                    .first { $0.taskDescription == id }
-                continuation.resume(returning: downloadTask)
+                let downloadTasks = tasks.compactMap { $0 as? URLSessionDownloadTask }
+                if let exactTask = downloadTasks.first(where: { $0.taskDescription == id }) {
+                    continuation.resume(returning: ExistingDownloadTask(id: id, task: exactTask))
+                    return
+                }
+
+                let taskURLs = downloadTasks.compactMap { task -> (id: String, url: URL?)? in
+                    guard let taskID = task.taskDescription else { return nil }
+                    return (taskID, task.originalRequest?.url ?? task.currentRequest?.url)
+                }
+                guard let legacyID = Self.legacyTransferID(
+                    url: url,
+                    destination: destination,
+                    pendingDestinations: pendingDestinations,
+                    taskURLs: taskURLs),
+                    let legacyTask = downloadTasks.first(where: { $0.taskDescription == legacyID })
+                else {
+                    continuation.resume(returning: nil)
+                    return
+                }
+
+                continuation.resume(returning: ExistingDownloadTask(id: legacyID, task: legacyTask))
             }
         }
+    }
+
+    private func pendingDestinationsSnapshot() -> [String: String] {
+        lock.lock()
+        defer { lock.unlock() }
+        return pending.mapValues(\.destinationPath)
     }
 
     private func complete(_ id: String, result: Result<Void, Error>) {

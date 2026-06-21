@@ -29,6 +29,34 @@ struct ModelFileDownloaderTests {
         #endif
     }
 
+    @Test func backgroundTransferCanAdoptLegacyPendingTaskID() {
+        #if os(iOS)
+        let url = URL(string: "https://huggingface.co/org/model/resolve/main/weights.safetensors")!
+        let destination = URL(fileURLWithPath: "/tmp/Loqi/../Loqi/model/weights.safetensors")
+        let legacyID = UUID().uuidString
+        let otherID = UUID().uuidString
+        let pending = [
+            legacyID: destination.path,
+            otherID: destination.deletingLastPathComponent().appending(path: "other.safetensors").path,
+        ]
+        let tasks: [(id: String, url: URL?)] = [
+            (otherID, url),
+            (legacyID, url),
+        ]
+
+        #expect(BackgroundModelDownloader.legacyTransferID(
+            url: url,
+            destination: destination.standardizedFileURL,
+            pendingDestinations: pending,
+            taskURLs: tasks) == legacyID)
+        #expect(BackgroundModelDownloader.legacyTransferID(
+            url: url.appending(queryItems: [URLQueryItem(name: "v", value: "2")]),
+            destination: destination.standardizedFileURL,
+            pendingDestinations: pending,
+            taskURLs: tasks) == nil)
+        #endif
+    }
+
     @Test func foregroundModeRemainsAvailableForTinyFiles() async throws {
         let dir = URL.temporaryDirectory.appending(path: UUID().uuidString, directoryHint: .isDirectory)
         try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
