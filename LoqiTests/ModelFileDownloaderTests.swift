@@ -19,6 +19,16 @@ struct ModelFileDownloaderTests {
         #expect(ModelFileDownloader.mode(forExpectedBytes: 8 << 20) == .foregroundSegmented)
     }
 
+    @Test func backgroundTransferIDIsStableForURLAndDestination() {
+        #if os(iOS)
+        let url = URL(string: "https://huggingface.co/org/model/resolve/main/weights.safetensors")!
+        let destination = URL(fileURLWithPath: "/tmp/Loqi/../Loqi/model/weights.safetensors")
+
+        #expect(BackgroundModelDownloader.transferID(url: url, destination: destination) == BackgroundModelDownloader.transferID(url: url, destination: destination.standardizedFileURL))
+        #expect(BackgroundModelDownloader.transferID(url: url, destination: destination) != BackgroundModelDownloader.transferID(url: url, destination: destination.deletingLastPathComponent().appending(path: "other.safetensors")))
+        #endif
+    }
+
     @Test func foregroundModeRemainsAvailableForTinyFiles() async throws {
         let dir = URL.temporaryDirectory.appending(path: UUID().uuidString, directoryHint: .isDirectory)
         try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)

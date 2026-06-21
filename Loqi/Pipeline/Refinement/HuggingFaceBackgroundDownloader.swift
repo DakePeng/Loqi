@@ -18,17 +18,20 @@ struct HuggingFaceBackgroundDownloader: Downloader {
         useLatest: Bool,
         progressHandler: @Sendable @escaping (Progress) -> Void
     ) async throws -> URL {
-        guard let repo = Repo.ID(rawValue: id) else {
+        guard isSafeRepoID(id), let repo = Repo.ID(rawValue: id) else {
             throw HuggingFaceBackgroundError.invalidID(id)
         }
         let revision = revision ?? "main"
-        let destination = Self.cacheRoot.appending(path: id, directoryHint: .isDirectory)
+        guard isSafeRevision(revision) else {
+            throw HuggingFaceBackgroundError.unexpectedResponse("Unsafe revision.")
+        }
+        let destination = snapshotDirectory(for: repo)
 
         if !useLatest, isValidSnapshot(destination, revision: revision, patterns: patterns) {
             return destination
         }
 
-        let files = try await listFiles(id: id, revision: revision)
+        let files = try await listFiles(repo: repo, revision: revision)
             .filter { matches($0.path, patterns: patterns) }
         guard files.contains(where: { $0.path.hasSuffix(".safetensors") }) else {
             throw HuggingFaceBackgroundError.modelNotFound(id)
@@ -59,7 +62,9 @@ struct HuggingFaceBackgroundDownloader: Downloader {
 
         var completedBytes: Int64 = 0
         for file in files {
-            let target = destination.appending(path: file.path)
+            guard let target = appendSafeRelativePath(file.path, to: destination) else {
+                throw HuggingFaceBackgroundError.downloadFailed("Unsafe path in model tree.")
+            }
             if let existing = try? target.resourceValues(forKeys: [.fileSizeKey]).fileSize,
                Int64(existing) == file.size, !useLatest {
                 completedBytes += file.size
@@ -71,7 +76,7 @@ struct HuggingFaceBackgroundDownloader: Downloader {
             try FileManager.default.createDirectory(
                 at: target.deletingLastPathComponent(), withIntermediateDirectories: true)
 
-            let downloadURL = endpoint.appending(path: "\(id)/resolve/\(revision)/\(file.path)")
+            let downloadURL = resolveURL(repo: repo, revision: revision, path: file.path)
             let base = completedBytes
             try await ModelFileDownloader.download(
                 url: downloadURL,
@@ -132,13 +137,17 @@ struct HuggingFaceBackgroundDownloader: Downloader {
 
     func isValidSnapshot(_ directory: URL, for files: [FileEntry]) -> Bool {
         guard let manifestFiles = try? manifestFiles(in: directory) else { return false }
+        guard manifestFiles.allSatisfy({ isSafeRelativePath($0.path) }),
+              files.allSatisfy({ isSafeRelativePath($0.path) })
+        else { return false }
         let sizes = Dictionary(uniqueKeysWithValues: manifestFiles.map { ($0.path, $0.size) })
         guard !files.isEmpty else { return false }
         for fileEntry in files {
             guard sizes[fileEntry.path] == fileEntry.size else { return false }
-            let path = fileEntry.path
             let size = fileEntry.size
-            let file = directory.appending(path: path)
+            guard let file = appendSafeRelativePath(fileEntry.path, to: directory) else {
+                return false
+            }
             guard let onDisk = try? file.resourceValues(forKeys: [.fileSizeKey]).fileSize,
                   size == 0 || Int64(onDisk) == size
             else { return false }
@@ -150,6 +159,7 @@ struct HuggingFaceBackgroundDownloader: Downloader {
         guard let manifest = try? metadataManifest(in: directory),
               manifest.revision == revision,
               manifest.patterns == patterns,
+              manifest.files.allSatisfy({ isSafeRelativePath($0.path) }),
               manifest.files.contains(where: { $0.path.hasSuffix(".safetensors") })
         else { return false }
         return containsFiles(directory, for: manifest.files)
@@ -157,8 +167,11 @@ struct HuggingFaceBackgroundDownloader: Downloader {
 
     private func containsFiles(_ directory: URL, for files: [FileEntry]) -> Bool {
         guard !files.isEmpty else { return false }
+        guard files.allSatisfy({ isSafeRelativePath($0.path) }) else { return false }
         for fileEntry in files {
-            let file = directory.appending(path: fileEntry.path)
+            guard let file = appendSafeRelativePath(fileEntry.path, to: directory) else {
+                return false
+            }
             guard let onDisk = try? file.resourceValues(forKeys: [.fileSizeKey]).fileSize,
                   fileEntry.size == 0 || Int64(onDisk) == fileEntry.size
             else { return false }
@@ -199,9 +212,9 @@ struct HuggingFaceBackgroundDownloader: Downloader {
         var size: Int64?
     }
 
-    private func listFiles(id: String, revision: String) async throws -> [FileEntry] {
+    private func listFiles(repo: Repo.ID, revision: String) async throws -> [FileEntry] {
         var components = URLComponents(
-            url: endpoint.appending(path: "api/models/\(id)/tree/\(revision)"),
+            url: treeURL(repo: repo, revision: revision),
             resolvingAgainstBaseURL: false)!
         components.queryItems = [
             URLQueryItem(name: "recursive", value: "1"),
@@ -209,7 +222,7 @@ struct HuggingFaceBackgroundDownloader: Downloader {
 
         let (data, response) = try await URLSession.shared.data(from: components.url!)
         guard let http = response as? HTTPURLResponse, http.statusCode == 200 else {
-            throw HuggingFaceBackgroundError.modelNotFound(id)
+            throw HuggingFaceBackgroundError.modelNotFound(repo.rawValue)
         }
 
         let entries: [TreeEntry]
@@ -255,7 +268,60 @@ struct HuggingFaceBackgroundDownloader: Downloader {
               !path.contains("\0")
         else { return false }
         let components = path.split(separator: "/", omittingEmptySubsequences: false)
-        return components.allSatisfy { !$0.isEmpty && $0 != ".." }
+        return components.allSatisfy { !$0.isEmpty && $0 != "." && $0 != ".." }
+    }
+
+    func isSafeRepoID(_ id: String) -> Bool {
+        let components = id.split(separator: "/", omittingEmptySubsequences: false)
+        return components.count == 2 && components.allSatisfy { isSafePathComponent(String($0)) }
+    }
+
+    func isSafeRevision(_ revision: String) -> Bool {
+        isSafeRelativePath(revision)
+    }
+
+    private func isSafePathComponent(_ component: String) -> Bool {
+        guard !component.isEmpty,
+              component != ".",
+              component != "..",
+              !component.contains("/"),
+              !component.contains("\\"),
+              !component.contains("\0")
+        else { return false }
+        return true
+    }
+
+    private func snapshotDirectory(for repo: Repo.ID) -> URL {
+        Self.cacheRoot
+            .appending(component: repo.namespace, directoryHint: .isDirectory)
+            .appending(component: repo.name, directoryHint: .isDirectory)
+    }
+
+    private func treeURL(repo: Repo.ID, revision: String) -> URL {
+        hubURL(["api", "models", repo.namespace, repo.name, "tree", revision])
+    }
+
+    private func resolveURL(repo: Repo.ID, revision: String, path: String) -> URL {
+        hubURL(
+            [repo.namespace, repo.name, "resolve", revision]
+                + pathComponents(path))
+    }
+
+    private func hubURL(_ components: [String]) -> URL {
+        components.reduce(endpoint) { url, component in
+            url.appending(component: component)
+        }
+    }
+
+    private func pathComponents(_ path: String) -> [String] {
+        path.split(separator: "/", omittingEmptySubsequences: false).map(String.init)
+    }
+
+    private func appendSafeRelativePath(_ path: String, to directory: URL) -> URL? {
+        guard isSafeRelativePath(path) else { return nil }
+        return pathComponents(path).reduce(directory) { url, component in
+            url.appending(component: component)
+        }
     }
 }
 

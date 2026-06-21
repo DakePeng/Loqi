@@ -24,6 +24,23 @@ struct HuggingFaceBackgroundDownloaderTests {
         #expect(!downloader.isValidSnapshot(dir))
     }
 
+    @Test func manifestValidationRejectsUnsafeFilePathBeforeDiskRead() throws {
+        let dir = URL.temporaryDirectory.appending(path: UUID().uuidString, directoryHint: .isDirectory)
+        let outside = dir.deletingLastPathComponent().appending(path: "outside.safetensors")
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer {
+            try? FileManager.default.removeItem(at: dir)
+            try? FileManager.default.removeItem(at: outside)
+        }
+
+        try Data(count: 10).write(to: outside)
+        try downloader.writeManifest(
+            [HuggingFaceBackgroundDownloader.FileEntry(path: "../outside.safetensors", size: 10)],
+            to: dir)
+
+        #expect(!downloader.isValidSnapshot(dir))
+    }
+
     @Test func manifestValidationAcceptsMatchingSizes() throws {
         let dir = URL.temporaryDirectory.appending(path: UUID().uuidString, directoryHint: .isDirectory)
         try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
@@ -96,11 +113,34 @@ struct HuggingFaceBackgroundDownloaderTests {
     @Test func rejectsUnsafeRelativePaths() {
         #expect(downloader.isSafeRelativePath("weights.safetensors"))
         #expect(downloader.isSafeRelativePath("tokenizer/tokenizer.json"))
+        #expect(downloader.isSafeRelativePath("tokenizer/my config.json"))
         #expect(!downloader.isSafeRelativePath(""))
         #expect(!downloader.isSafeRelativePath("/weights.safetensors"))
+        #expect(!downloader.isSafeRelativePath("."))
         #expect(!downloader.isSafeRelativePath("tokenizer/../config.json"))
         #expect(!downloader.isSafeRelativePath("tokenizer//config.json"))
         #expect(!downloader.isSafeRelativePath("tokenizer\\config.json"))
         #expect(!downloader.isSafeRelativePath("tokenizer/\u{0}/config.json"))
+    }
+
+    @Test func rejectsUnsafeRepoIDs() {
+        #expect(downloader.isSafeRepoID("namespace/name"))
+        #expect(!downloader.isSafeRepoID(""))
+        #expect(!downloader.isSafeRepoID("namespace"))
+        #expect(!downloader.isSafeRepoID("namespace/name/extra"))
+        #expect(!downloader.isSafeRepoID("./name"))
+        #expect(!downloader.isSafeRepoID("namespace/.."))
+        #expect(!downloader.isSafeRepoID("namespace\\name"))
+        #expect(!downloader.isSafeRepoID("namespace/\u{0}"))
+    }
+
+    @Test func rejectsUnsafeRevisions() {
+        #expect(downloader.isSafeRevision("main"))
+        #expect(downloader.isSafeRevision("refs/pr/1"))
+        #expect(!downloader.isSafeRevision(""))
+        #expect(!downloader.isSafeRevision("../main"))
+        #expect(!downloader.isSafeRevision("feature//test"))
+        #expect(!downloader.isSafeRevision("feature\\test"))
+        #expect(!downloader.isSafeRevision("feature/\u{0}/test"))
     }
 }

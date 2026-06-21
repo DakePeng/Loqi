@@ -1,3 +1,4 @@
+import CryptoKit
 import Foundation
 
 enum ModelFileDownloader {
@@ -132,15 +133,18 @@ final class BackgroundModelDownloader: NSObject, URLSessionDownloadDelegate, @un
     }
 
     private final class LiveDownload {
+        let listenerID: String
         let task: URLSessionDownloadTask
         let continuation: CheckedContinuation<Void, Error>
         let onBytes: @Sendable (Int64) -> Void
 
         init(
+            listenerID: String,
             task: URLSessionDownloadTask,
             continuation: CheckedContinuation<Void, Error>,
             onBytes: @escaping @Sendable (Int64) -> Void
         ) {
+            self.listenerID = listenerID
             self.task = task
             self.continuation = continuation
             self.onBytes = onBytes
@@ -151,7 +155,7 @@ final class BackgroundModelDownloader: NSObject, URLSessionDownloadDelegate, @un
 
     private let lock = NSLock()
     private var pending: [String: PendingDownload] = BackgroundModelDownloader.loadPending()
-    private var live: [String: LiveDownload] = [:]
+    private var live: [String: [LiveDownload]] = [:]
     private var finalizing: Set<String> = []
     private var installing: Set<String> = []
     private var cancelled: Set<String> = []
@@ -172,6 +176,12 @@ final class BackgroundModelDownloader: NSObject, URLSessionDownloadDelegate, @un
         session = URLSession(configuration: config, delegate: self, delegateQueue: nil)
     }
 
+    static func transferID(url: URL, destination: URL) -> String {
+        let input = "\(url.absoluteString)\n\(destination.standardizedFileURL.path)"
+        let digest = SHA256.hash(data: Data(input.utf8))
+        return digest.map { String(format: "%02x", $0) }.joined()
+    }
+
     func download(
         url: URL,
         to destination: URL,
@@ -179,44 +189,61 @@ final class BackgroundModelDownloader: NSObject, URLSessionDownloadDelegate, @un
         sha256: String? = nil,
         onBytes: @escaping @Sendable (Int64) -> Void
     ) async throws {
+        let destination = destination.standardizedFileURL
         try FileManager.default.createDirectory(
             at: destination.deletingLastPathComponent(),
             withIntermediateDirectories: true)
 
-        let id = UUID().uuidString
+        let id = Self.transferID(url: url, destination: destination)
+        let listenerID = UUID().uuidString
+        let existingTask = await downloadTask(with: id)
         try await withTaskCancellationHandler {
             try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
-                var request = URLRequest(url: url)
-                request.cachePolicy = .reloadIgnoringLocalCacheData
-                let task = session.downloadTask(with: request)
-                task.taskDescription = id
-
                 let pending = PendingDownload(
                     id: id,
                     destinationPath: destination.path,
                     expectedBytes: expectedBytes,
                     sha256: sha256)
+
+                lock.lock()
+                let task: URLSessionDownloadTask
+                let shouldResume: Bool
+                if let existingTask {
+                    task = existingTask
+                    shouldResume = false
+                } else if let activeTask = self.live[id]?.first?.task {
+                    task = activeTask
+                    shouldResume = false
+                } else {
+                    var request = URLRequest(url: url)
+                    request.cachePolicy = .reloadIgnoringLocalCacheData
+                    task = session.downloadTask(with: request)
+                    task.taskDescription = id
+                    shouldResume = true
+                }
                 let live = LiveDownload(
+                    listenerID: listenerID,
                     task: task,
                     continuation: continuation,
                     onBytes: onBytes)
 
-                lock.lock()
-                self.pending[id] = pending
-                self.live[id] = live
+                self.pending[id] = self.pending[id] ?? pending
+                self.live[id, default: []].append(live)
                 self.installing.remove(id)
                 self.cancelled.remove(id)
                 persistPendingLocked()
                 lock.unlock()
 
                 if Task.isCancelled {
-                    self.cancel(id)
-                } else {
+                    self.cancel(id, listenerID: listenerID)
+                } else if shouldResume {
                     task.resume()
+                } else if task.countOfBytesReceived > 0 {
+                    onBytes(task.countOfBytesReceived)
                 }
             }
         } onCancel: {
-            self.cancel(id)
+            self.cancel(id, listenerID: listenerID)
         }
     }
 
@@ -233,20 +260,33 @@ final class BackgroundModelDownloader: NSObject, URLSessionDownloadDelegate, @un
         callCompletionHandler(readyHandler)
     }
 
-    private func cancel(_ id: String) {
+    private func cancel(_ id: String, listenerID: String) {
         lock.lock()
         guard !installing.contains(id) else {
             lock.unlock()
             return
         }
-        let liveDownload = live.removeValue(forKey: id)
-        cancelled.insert(id)
-        pending[id] = nil
-        persistPendingLocked()
+        var liveDownloads = live[id] ?? []
+        guard let index = liveDownloads.firstIndex(where: { $0.listenerID == listenerID }) else {
+            lock.unlock()
+            return
+        }
+        let cancelledDownload = liveDownloads.remove(at: index)
+        if liveDownloads.isEmpty {
+            live[id] = nil
+            cancelled.insert(id)
+            pending[id] = nil
+            persistPendingLocked()
+        } else {
+            live[id] = liveDownloads
+        }
+        let shouldCancelTask = liveDownloads.isEmpty
         lock.unlock()
 
-        liveDownload?.task.cancel()
-        liveDownload?.continuation.resume(throwing: URLError(.cancelled))
+        if shouldCancelTask {
+            cancelledDownload.task.cancel()
+        }
+        cancelledDownload.continuation.resume(throwing: URLError(.cancelled))
     }
 
     func urlSession(
@@ -258,9 +298,9 @@ final class BackgroundModelDownloader: NSObject, URLSessionDownloadDelegate, @un
     ) {
         guard let id = downloadTask.taskDescription else { return }
         lock.lock()
-        let callback = live[id]?.onBytes
+        let callbacks = live[id]?.map(\.onBytes) ?? []
         lock.unlock()
-        callback?(totalBytesWritten)
+        callbacks.forEach { $0(totalBytesWritten) }
     }
 
     func urlSession(
@@ -275,7 +315,7 @@ final class BackgroundModelDownloader: NSObject, URLSessionDownloadDelegate, @un
         beginFinalization(id)
 
         let destination = URL(fileURLWithPath: pending.destinationPath)
-        let part = destination.appendingPathExtension("part")
+        let part = destination.appendingPathExtension("\(id).part")
 
         do {
             try FileManager.default.createDirectory(
@@ -378,21 +418,30 @@ final class BackgroundModelDownloader: NSObject, URLSessionDownloadDelegate, @un
         return value
     }
 
+    private func downloadTask(with id: String) async -> URLSessionDownloadTask? {
+        await withCheckedContinuation { continuation in
+            session.getAllTasks { tasks in
+                let downloadTask = tasks.compactMap { $0 as? URLSessionDownloadTask }
+                    .first { $0.taskDescription == id }
+                continuation.resume(returning: downloadTask)
+            }
+        }
+    }
+
     private func complete(_ id: String, result: Result<Void, Error>) {
         lock.lock()
-        let liveDownload = live.removeValue(forKey: id)
+        let liveDownloads = live.removeValue(forKey: id) ?? []
         pending[id] = nil
         installing.remove(id)
         cancelled.remove(id)
         persistPendingLocked()
         lock.unlock()
 
-        guard let liveDownload else { return }
         switch result {
         case .success:
-            liveDownload.continuation.resume()
+            liveDownloads.forEach { $0.continuation.resume() }
         case .failure(let error):
-            liveDownload.continuation.resume(throwing: error)
+            liveDownloads.forEach { $0.continuation.resume(throwing: error) }
         }
     }
 
