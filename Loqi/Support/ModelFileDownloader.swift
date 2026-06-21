@@ -153,7 +153,9 @@ final class BackgroundModelDownloader: NSObject, URLSessionDownloadDelegate, @un
     private var pending: [String: PendingDownload] = BackgroundModelDownloader.loadPending()
     private var live: [String: LiveDownload] = [:]
     private var finalizing: Set<String> = []
+    private var installing: Set<String> = []
     private var cancelled: Set<String> = []
+    private var finishEventsReceived = false
     private var completionHandler: (@Sendable () -> Void)?
     private var session: URLSession!
 
@@ -202,6 +204,7 @@ final class BackgroundModelDownloader: NSObject, URLSessionDownloadDelegate, @un
                 lock.lock()
                 self.pending[id] = pending
                 self.live[id] = live
+                self.installing.remove(id)
                 self.cancelled.remove(id)
                 persistPendingLocked()
                 lock.unlock()
@@ -224,12 +227,18 @@ final class BackgroundModelDownloader: NSObject, URLSessionDownloadDelegate, @un
         }
         lock.lock()
         completionHandler = handler
+        let readyHandler = drainCompletionHandlerLocked()
         lock.unlock()
         _ = session
+        callCompletionHandler(readyHandler)
     }
 
     private func cancel(_ id: String) {
         lock.lock()
+        guard !installing.contains(id) else {
+            lock.unlock()
+            return
+        }
         let liveDownload = live.removeValue(forKey: id)
         cancelled.insert(id)
         pending[id] = nil
@@ -297,6 +306,11 @@ final class BackgroundModelDownloader: NSObject, URLSessionDownloadDelegate, @un
                     throw URLError(.cancelled)
                 }
 
+                guard self.beginInstallIfNotCancelled(id) else {
+                    try? FileManager.default.removeItem(at: part)
+                    throw URLError(.cancelled)
+                }
+
                 if FileManager.default.fileExists(atPath: destination.path) {
                     try FileManager.default.replaceItemAt(destination, withItemAt: part)
                 } else {
@@ -322,13 +336,8 @@ final class BackgroundModelDownloader: NSObject, URLSessionDownloadDelegate, @un
 
     func urlSessionDidFinishEvents(forBackgroundURLSession session: URLSession) {
         lock.lock()
-        let handler: (@Sendable () -> Void)?
-        if finalizing.isEmpty {
-            handler = completionHandler
-            completionHandler = nil
-        } else {
-            handler = nil
-        }
+        finishEventsReceived = true
+        let handler = drainCompletionHandlerLocked()
         lock.unlock()
         callCompletionHandler(handler)
     }
@@ -349,15 +358,17 @@ final class BackgroundModelDownloader: NSObject, URLSessionDownloadDelegate, @un
     private func finishFinalization(_ id: String) {
         lock.lock()
         finalizing.remove(id)
-        let handler: (@Sendable () -> Void)?
-        if finalizing.isEmpty {
-            handler = completionHandler
-            completionHandler = nil
-        } else {
-            handler = nil
-        }
+        let handler = drainCompletionHandlerLocked()
         lock.unlock()
         callCompletionHandler(handler)
+    }
+
+    private func beginInstallIfNotCancelled(_ id: String) -> Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        guard !cancelled.contains(id) else { return false }
+        installing.insert(id)
+        return true
     }
 
     private func isCancelled(_ id: String) -> Bool {
@@ -371,6 +382,7 @@ final class BackgroundModelDownloader: NSObject, URLSessionDownloadDelegate, @un
         lock.lock()
         let liveDownload = live.removeValue(forKey: id)
         pending[id] = nil
+        installing.remove(id)
         cancelled.remove(id)
         persistPendingLocked()
         lock.unlock()
@@ -382,6 +394,15 @@ final class BackgroundModelDownloader: NSObject, URLSessionDownloadDelegate, @un
         case .failure(let error):
             liveDownload.continuation.resume(throwing: error)
         }
+    }
+
+    private func drainCompletionHandlerLocked() -> (@Sendable () -> Void)? {
+        guard finishEventsReceived, finalizing.isEmpty, let handler = completionHandler else {
+            return nil
+        }
+        completionHandler = nil
+        finishEventsReceived = false
+        return handler
     }
 
     private static func loadPending() -> [String: PendingDownload] {
