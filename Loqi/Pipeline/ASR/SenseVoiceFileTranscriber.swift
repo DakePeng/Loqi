@@ -21,6 +21,7 @@ actor SenseVoiceFileTranscriber {
     /// `onProgress` reports 0…1 by samples consumed.
     func transcribe(
         samples16k samples: [Float],
+        sensitivity: MicSensitivity = .balanced,
         onProgress: @MainActor @Sendable (Double) -> Void
     ) async throws -> [Utterance] {
         guard SenseVoiceModelStore.isInstalled else {
@@ -47,6 +48,7 @@ actor SenseVoiceFileTranscriber {
         let utterances = try await VADSegmentedTranscriber.transcribe(
             samples16k: samples,
             vadModelPath: SenseVoiceModelStore.fileURL("silero_vad.onnx").path,
+            sensitivity: sensitivity,
             // Force a split mid-monologue so long speech still yields
             // periodic finals (matches the live engine's cap).
             maxSpeechDuration: 12,
@@ -64,6 +66,7 @@ actor SenseVoiceFileTranscriber {
 
     func transcribe(
         samples16k samples: [Float],
+        sensitivity: MicSensitivity = .balanced,
         onProgress: @MainActor @Sendable (Double) -> Void
     ) async throws -> [Utterance] {
         throw SenseVoiceError.unavailableOnMac

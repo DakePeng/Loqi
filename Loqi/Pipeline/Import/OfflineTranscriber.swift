@@ -80,16 +80,19 @@ enum OfflineTranscriber {
         _ audioFile: AVAudioFile,
         language: AppLanguage,
         backend: Backend,
+        sensitivity: MicSensitivity = .balanced,
         hotwords: [String] = [],
         onProgress: @escaping (Double) -> Void
     ) async throws -> [Utterance] {
         switch backend {
         case .qwen3ASR:
             return try await transcribeWithQwen3ASR(
-                audioFile, hotwords: hotwords, onProgress: onProgress)
+                audioFile, sensitivity: sensitivity, hotwords: hotwords,
+                onProgress: onProgress)
         case .senseVoice:
             return try await transcribeWithSenseVoice(
-                audioFile, language: language, onProgress: onProgress)
+                audioFile, language: language, sensitivity: sensitivity,
+                onProgress: onProgress)
         case .apple:
             let duration = Double(audioFile.length) / audioFile.fileFormat.sampleRate
             return try await transcribeWithApple(
@@ -138,12 +141,14 @@ enum OfflineTranscriber {
     /// hotword-primed. Same decode-to-16k + VAD flow as SenseVoice.
     private static func transcribeWithQwen3ASR(
         _ audioFile: AVAudioFile,
+        sensitivity: MicSensitivity,
         hotwords: [String],
         onProgress: @escaping (Double) -> Void
     ) async throws -> [Utterance] {
         let samples = try decodeMono16k(audioFile)
         let transcriber = Qwen3ASRFileTranscriber(hotwords: hotwords)
-        let utterances = try await transcriber.transcribe(samples16k: samples) { fraction in
+        let utterances = try await transcriber.transcribe(
+            samples16k: samples, sensitivity: sensitivity) { fraction in
             onProgress(fraction)
         }
         return utterances.map { ($0.text, $0.start, $0.end) }
@@ -154,11 +159,13 @@ enum OfflineTranscriber {
     private static func transcribeWithSenseVoice(
         _ audioFile: AVAudioFile,
         language: AppLanguage,
+        sensitivity: MicSensitivity,
         onProgress: @escaping (Double) -> Void
     ) async throws -> [Utterance] {
         let samples = try decodeMono16k(audioFile)
         let transcriber = SenseVoiceFileTranscriber(language: language)
-        let utterances = try await transcriber.transcribe(samples16k: samples) { fraction in
+        let utterances = try await transcriber.transcribe(
+            samples16k: samples, sensitivity: sensitivity) { fraction in
             onProgress(fraction)
         }
         return utterances.map { ($0.text, $0.start, $0.end) }

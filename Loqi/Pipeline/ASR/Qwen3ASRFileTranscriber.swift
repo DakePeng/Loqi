@@ -23,6 +23,7 @@ actor Qwen3ASRFileTranscriber {
     /// `onProgress` reports 0…1 by samples consumed.
     func transcribe(
         samples16k samples: [Float],
+        sensitivity: MicSensitivity = .balanced,
         onProgress: @MainActor @Sendable (Double) -> Void
     ) async throws -> [VADSegmentedTranscriber.Utterance] {
         guard Qwen3ASRModelStore.isInstalled else {
@@ -32,6 +33,7 @@ actor Qwen3ASRFileTranscriber {
         let utterances = try await VADSegmentedTranscriber.transcribe(
             samples16k: samples,
             vadModelPath: Qwen3ASRModelStore.fileURL("silero_vad.onnx").path,
+            sensitivity: sensitivity,
             // Shorter cap than SenseVoice's 12s: a segment's audio tokens
             // plus the transcription must fit the decoder's 512-token
             // budget (official default).
@@ -104,6 +106,7 @@ actor Qwen3ASRFileTranscriber {
 
     func transcribe(
         samples16k samples: [Float],
+        sensitivity: MicSensitivity = .balanced,
         onProgress: @MainActor @Sendable (Double) -> Void
     ) async throws -> [VADSegmentedTranscriber.Utterance] {
         throw Qwen3ASRError.unavailableOnMac

@@ -5,7 +5,7 @@ import Foundation
 /// capture-side boost ceiling, silero threshold/hangover (SenseVoice),
 /// and SpeechDetector sensitivity (Apple) — and is switchable mid-session
 /// from the Record chips (the pipeline restarts its turn to rebind).
-enum MicSensitivity: String, CaseIterable, Identifiable {
+enum MicSensitivity: String, CaseIterable, Identifiable, Sendable {
     /// Strict and unboosted: only voices right at the phone, for noisy
     /// places where background talkers must NOT land in the transcript.
     case near

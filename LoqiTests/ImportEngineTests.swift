@@ -108,6 +108,12 @@ struct ImportAudioSheetTests {
         #expect(ImportAudioSheet.importLanguageRaw(nil) == AppLanguage.english.rawValue)
         #expect(ImportAudioSheet.importLanguageRaw("chinese") == AppLanguage.chinese.rawValue)
     }
+
+    @Test func importSensitivityDefaultsToBalancedAndKeepsValidChoices() {
+        #expect(ImportAudioSheet.importSensitivityRaw(nil) == MicSensitivity.balanced.rawValue)
+        #expect(ImportAudioSheet.importSensitivityRaw("loud") == MicSensitivity.balanced.rawValue)
+        #expect(ImportAudioSheet.importSensitivityRaw("far") == MicSensitivity.far.rawValue)
+    }
 }
 
 struct SpeakerDefaultTests {

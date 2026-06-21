@@ -603,7 +603,8 @@ final class SummaryJobCenter {
         url: URL,
         direction: LanguagePair,
         speakerCount: Int,
-        engine: String
+        engine: String,
+        sensitivity: MicSensitivity
     ) {
         guard !isRecording() else { return }
         let sessionID = UUID()
@@ -629,7 +630,8 @@ final class SummaryJobCenter {
                     sessionID: sessionID,
                     direction: direction,
                     speakerCount: speakerCount,
-                    engine: engine
+                    engine: engine,
+                    sensitivity: sensitivity
                 ) { [weak self] phase in
                     self?.importProgress(sessionID: sessionID, phase: phase)
                 }

@@ -45,6 +45,7 @@ final class FileImportEngine {
         direction: LanguagePair,
         speakerCount: Int,
         engine: String = "apple",
+        sensitivity: MicSensitivity = .balanced,
         onPhase: @escaping @MainActor @Sendable (Phase) -> Void
     ) async throws -> SessionRecord {
         // Files-picker URLs are security-scoped; copy into our container so
@@ -81,6 +82,7 @@ final class FileImportEngine {
             audioFile,
             language: direction.source,
             backend: backend,
+            sensitivity: sensitivity,
             hotwords: hotwords?.biasStrings(for: direction.source) ?? []
         ) { fraction in
             onPhase(.transcribing(fraction))

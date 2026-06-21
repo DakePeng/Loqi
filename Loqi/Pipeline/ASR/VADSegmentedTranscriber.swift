@@ -95,6 +95,7 @@ enum VADSegmentedTranscriber {
     static func transcribe(
         samples16k samples: [Float],
         vadModelPath: String,
+        sensitivity: MicSensitivity = .balanced,
         maxSpeechDuration: Float,
         decoders: [@Sendable ([Float]) async -> String],
         onProgress: @MainActor @Sendable (Double) -> Void
@@ -103,12 +104,8 @@ enum VADSegmentedTranscriber {
         var vadConfig = sherpaOnnxVadModelConfig(
             sileroVad: sherpaOnnxSileroVadModelConfig(
                 model: vadModelPath,
-                // 0.3 to match SenseVoiceEngine's balanced preset: imported
-                // recordings (often meetings captured far-field, without our
-                // live boost) are exactly where stricter gates drop faint
-                // talkers.
-                threshold: 0.3,
-                minSilenceDuration: 0.5,
+                threshold: sensitivity.sileroThreshold,
+                minSilenceDuration: sensitivity.sileroMinSilence,
                 minSpeechDuration: 0.25,
                 windowSize: 512,
                 maxSpeechDuration: maxSpeechDuration),
