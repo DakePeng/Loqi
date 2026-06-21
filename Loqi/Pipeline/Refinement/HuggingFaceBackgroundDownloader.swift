@@ -24,6 +24,15 @@ struct HuggingFaceBackgroundDownloader: Downloader {
         let revision = revision ?? "main"
         let destination = Self.cacheRoot.appending(path: id, directoryHint: .isDirectory)
 
+        let files = try await listFiles(id: id, revision: revision)
+            .filter { matches($0.path, patterns: patterns) }
+        guard files.contains(where: { $0.path.hasSuffix(".safetensors") }) else {
+            throw HuggingFaceBackgroundError.modelNotFound(id)
+        }
+        guard files.allSatisfy({ isSafeRelativePath($0.path) }) else {
+            throw HuggingFaceBackgroundError.downloadFailed("Unsafe path in model tree.")
+        }
+
         if !useLatest {
             if let cached = try? await HubClient(host: endpoint).downloadSnapshot(
                 of: repo,
@@ -31,18 +40,12 @@ struct HuggingFaceBackgroundDownloader: Downloader {
                 revision: revision,
                 matching: patterns,
                 localFilesOnly: true
-            ) {
+            ), containsFiles(cached, for: files) {
                 return cached
             }
-            if isValidSnapshot(destination) {
+            if isValidSnapshot(destination, for: files) {
                 return destination
             }
-        }
-
-        let files = try await listFiles(id: id, revision: revision)
-            .filter { matches($0.path, patterns: patterns) }
-        guard files.contains(where: { $0.path.hasSuffix(".safetensors") }) else {
-            throw HuggingFaceBackgroundError.modelNotFound(id)
         }
 
         try FileManager.default.createDirectory(at: destination, withIntermediateDirectories: true)
@@ -52,10 +55,6 @@ struct HuggingFaceBackgroundDownloader: Downloader {
 
         var completedBytes: Int64 = 0
         for file in files {
-            guard isSafeRelativePath(file.path) else {
-                throw HuggingFaceBackgroundError.downloadFailed(file.path)
-            }
-
             let target = destination.appending(path: file.path)
             if let existing = try? target.resourceValues(forKeys: [.fileSizeKey]).fileSize,
                Int64(existing) == file.size, !useLatest {
@@ -94,6 +93,7 @@ struct HuggingFaceBackgroundDownloader: Downloader {
             progressHandler(progress)
         }
 
+        removeStalePartials(in: destination)
         try writeManifest(files, to: destination)
         return destination
     }
@@ -111,16 +111,42 @@ struct HuggingFaceBackgroundDownloader: Downloader {
     }
 
     func isValidSnapshot(_ directory: URL) -> Bool {
+        guard let files = try? manifestFiles(in: directory) else { return false }
+        return isValidSnapshot(directory, for: files)
+    }
+
+    func isValidSnapshot(_ directory: URL, for files: [FileEntry]) -> Bool {
         guard let data = try? Data(contentsOf: manifestURL(directory)),
               let sizes = try? JSONDecoder().decode([String: Int64].self, from: data)
         else { return false }
-        for (path, size) in sizes {
+        guard !files.isEmpty else { return false }
+        for fileEntry in files {
+            guard sizes[fileEntry.path] == fileEntry.size else { return false }
+            let path = fileEntry.path
+            let size = fileEntry.size
             let file = directory.appending(path: path)
             guard let onDisk = try? file.resourceValues(forKeys: [.fileSizeKey]).fileSize,
                   size == 0 || Int64(onDisk) == size
             else { return false }
         }
-        return !sizes.isEmpty
+        return true
+    }
+
+    private func containsFiles(_ directory: URL, for files: [FileEntry]) -> Bool {
+        guard !files.isEmpty else { return false }
+        for fileEntry in files {
+            let file = directory.appending(path: fileEntry.path)
+            guard let onDisk = try? file.resourceValues(forKeys: [.fileSizeKey]).fileSize,
+                  fileEntry.size == 0 || Int64(onDisk) == fileEntry.size
+            else { return false }
+        }
+        return true
+    }
+
+    private func manifestFiles(in directory: URL) throws -> [FileEntry] {
+        let data = try Data(contentsOf: manifestURL(directory))
+        let sizes = try JSONDecoder().decode([String: Int64].self, from: data)
+        return sizes.map { FileEntry(path: $0.key, size: $0.value) }
     }
 
     // MARK: Hugging Face API
@@ -149,14 +175,20 @@ struct HuggingFaceBackgroundDownloader: Downloader {
             throw HuggingFaceBackgroundError.modelNotFound(id)
         }
 
+        let entries: [TreeEntry]
         do {
-            return try JSONDecoder().decode([TreeEntry].self, from: data)
-                .compactMap { entry in
-                    guard entry.type != "directory" else { return nil }
-                    return FileEntry(path: entry.path, size: entry.size ?? 0)
-                }
+            entries = try JSONDecoder().decode([TreeEntry].self, from: data)
         } catch {
             throw HuggingFaceBackgroundError.downloadFailed(error.localizedDescription)
+        }
+
+        return try entries.compactMap { entry in
+            guard entry.type != "directory" else { return nil }
+            guard let size = entry.size else {
+                throw HuggingFaceBackgroundError.unexpectedResponse(
+                    "\(entry.path) is missing size")
+                }
+            return FileEntry(path: entry.path, size: size)
         }
     }
 
@@ -170,14 +202,30 @@ struct HuggingFaceBackgroundDownloader: Downloader {
         }
     }
 
-    private func isSafeRelativePath(_ path: String) -> Bool {
-        !path.hasPrefix("/") && !path.split(separator: "/").contains("..")
+    func removeStalePartials(in directory: URL) {
+        guard let enumerator = FileManager.default.enumerator(
+            at: directory, includingPropertiesForKeys: nil) else { return }
+        for case let file as URL in enumerator
+        where ["part", "meta"].contains(file.pathExtension) {
+            try? FileManager.default.removeItem(at: file)
+        }
+    }
+
+    func isSafeRelativePath(_ path: String) -> Bool {
+        guard !path.isEmpty,
+              !path.hasPrefix("/"),
+              !path.contains("\\"),
+              !path.contains("\0")
+        else { return false }
+        let components = path.split(separator: "/", omittingEmptySubsequences: false)
+        return components.allSatisfy { !$0.isEmpty && $0 != ".." }
     }
 }
 
 enum HuggingFaceBackgroundError: LocalizedError {
     case invalidID(String)
     case modelNotFound(String)
+    case unexpectedResponse(String)
     case downloadFailed(String)
 
     var errorDescription: String? {
@@ -186,6 +234,8 @@ enum HuggingFaceBackgroundError: LocalizedError {
             "Invalid Hugging Face model id: \(id)"
         case .modelNotFound(let id):
             "Model \"\(id)\" was not found on Hugging Face."
+        case .unexpectedResponse(let detail):
+            "Hugging Face returned an unexpected response: \(detail)"
         case .downloadFailed(let detail):
             "Download failed: \(detail)"
         }
