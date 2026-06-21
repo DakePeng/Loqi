@@ -169,7 +169,7 @@ final class SenseVoiceModelStore {
         }
 
         let url = URL(string: "https://\(source.host)/\(file.path(for: source))")!
-        try await SegmentedDownloader().download(
+        try await ModelFileDownloader.download(
             url: url, to: final, expectedBytes: file.expectedBytes
         ) { bytes in
             let fraction = min(1, Double(bytes) / Double(file.expectedBytes))

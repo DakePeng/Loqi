@@ -62,4 +62,20 @@ struct ModelFileDownloaderTests {
 
         Issue.record("Expected checksum mismatch")
     }
+
+    @Test func modelStoresNoLongerCallSegmentedDownloaderDirectly() throws {
+        let root = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+        let files = [
+            root.appending(path: "Loqi/Pipeline/ASR/SenseVoiceModelStore.swift"),
+            root.appending(path: "Loqi/Pipeline/ASR/Qwen3ASRModelStore.swift"),
+            root.appending(path: "Loqi/Pipeline/Refinement/ModelScopeDownloader.swift"),
+        ]
+
+        for file in files {
+            let text = try String(contentsOf: file, encoding: .utf8)
+            #expect(!text.contains("SegmentedDownloader().download("), "\(file.lastPathComponent) still bypasses ModelFileDownloader")
+        }
+    }
 }
