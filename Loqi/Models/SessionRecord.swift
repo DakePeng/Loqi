@@ -94,6 +94,29 @@ struct SessionRecord: Identifiable, Codable, Sendable {
         }
     }
 
+    /// Resumable state for an in-flight file import. Present only while
+    /// `importing == true`; cleared once the transcript is complete. Lets a
+    /// killed-and-relaunched import skip audio it already decoded instead
+    /// of starting the file over from zero.
+    struct ImportCheckpoint: Codable, Sendable {
+        /// One transcribed SenseVoice/Qwen3-ASR segment, keyed by its exact
+        /// time range — VAD segmentation is deterministic for the same
+        /// audio, so replaying the file reproduces the same ranges.
+        struct Segment: Codable, Sendable {
+            var start: TimeInterval
+            var end: TimeInterval
+            var text: String
+        }
+
+        var direction: LanguagePair
+        var speakerCount: Int
+        var engine: String
+        var sensitivityRaw: String
+        var recordedAt: Date
+        var duration: TimeInterval
+        var segments: [Segment] = []
+    }
+
     /// A photo attached during (or after) the session: slides, whiteboards,
     /// documents. The image file lives in SessionArchive.attachmentsDirectory;
     /// extracted text flows into summary, chat, and search as derived
@@ -162,10 +185,14 @@ struct SessionRecord: Identifiable, Codable, Sendable {
     /// dot for fresh arrivals (saved live sessions, finished imports).
     /// Optional: legacy records decode as seen.
     var unseen: Bool?
-    /// True while an import job is still filling this record. Survives a
-    /// crash only as a tombstone: the archive sweeps importing records at
-    /// load (a partial import has no transcript worth keeping).
+    /// True while an import job is still filling this record. A crash or
+    /// background kill survives via `importCheckpoint` when one exists —
+    /// the archive only sweeps importing records that never got that far.
     var importing: Bool?
+    /// Resumable progress for the active import, when one exists. Cleared
+    /// once the transcript is complete (`importing` flips to false/nil in
+    /// the same write).
+    var importCheckpoint: ImportCheckpoint?
     /// True when speaker separation was requested for this session but the
     /// diarizer failed (model download or analysis) — the transcript is
     /// intact, it just has no speaker labels. Optional: legacy records and

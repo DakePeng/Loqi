@@ -301,4 +301,38 @@ struct SessionRecordTests {
         #expect(decoded.chatHistory?[1].isUser == false)
         #expect(decoded.chatHistory?[2].role == "tool")   // raw String: never fails decode
     }
+
+    @Test func decodesRecordWithoutImportCheckpoint() throws {
+        // Files written before resumable imports existed must keep loading.
+        let encoder = JSONEncoder()
+        encoder.dateEncodingStrategy = .iso8601
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        let decoded = try decoder.decode(
+            SessionRecord.self, from: encoder.encode(makeRecord()))
+        #expect(decoded.importCheckpoint == nil)
+    }
+
+    @Test func importCheckpointRoundTripsSegments() throws {
+        var record = makeRecord()
+        record.importing = true
+        record.importCheckpoint = SessionRecord.ImportCheckpoint(
+            direction: LanguagePair(source: .chinese, target: .english),
+            speakerCount: 2,
+            engine: "sensevoice",
+            sensitivityRaw: MicSensitivity.far.rawValue,
+            recordedAt: Date(timeIntervalSince1970: 1_000_000),
+            duration: 120,
+            segments: [.init(start: 0, end: 4.5, text: "大家好")])
+        let encoder = JSONEncoder()
+        encoder.dateEncodingStrategy = .iso8601
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        let decoded = try decoder.decode(
+            SessionRecord.self, from: encoder.encode(record))
+        #expect(decoded.importCheckpoint?.segments.count == 1)
+        #expect(decoded.importCheckpoint?.segments.first?.text == "大家好")
+        #expect(decoded.importCheckpoint?.speakerCount == 2)
+        #expect(decoded.importCheckpoint?.sensitivityRaw == MicSensitivity.far.rawValue)
+    }
 }
