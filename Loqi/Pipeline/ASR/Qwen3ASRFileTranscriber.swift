@@ -24,6 +24,8 @@ actor Qwen3ASRFileTranscriber {
     func transcribe(
         samples16k samples: [Float],
         sensitivity: MicSensitivity = .balanced,
+        alreadyDecoded: [SessionRecord.ImportCheckpoint.Segment] = [],
+        onSegmentComplete: (@MainActor @Sendable (SessionRecord.ImportCheckpoint.Segment) -> Void)? = nil,
         onProgress: @MainActor @Sendable (Double) -> Void
     ) async throws -> [VADSegmentedTranscriber.Utterance] {
         guard Qwen3ASRModelStore.isInstalled else {
@@ -41,6 +43,8 @@ actor Qwen3ASRFileTranscriber {
             // Single-element pool: Qwen3-ASR is autoregressive and ~940 MB,
             // so a second instance is memory-prohibitive — this stays serial.
             decoders: [{ await decoder.decode($0) }],
+            alreadyDecoded: alreadyDecoded,
+            onSegmentComplete: onSegmentComplete,
             onProgress: onProgress)
         logger.info("post-pass: Qwen3-ASR produced \(utterances.count) utterances")
         return utterances
@@ -107,6 +111,8 @@ actor Qwen3ASRFileTranscriber {
     func transcribe(
         samples16k samples: [Float],
         sensitivity: MicSensitivity = .balanced,
+        alreadyDecoded: [SessionRecord.ImportCheckpoint.Segment] = [],
+        onSegmentComplete: (@MainActor @Sendable (SessionRecord.ImportCheckpoint.Segment) -> Void)? = nil,
         onProgress: @MainActor @Sendable (Double) -> Void
     ) async throws -> [VADSegmentedTranscriber.Utterance] {
         throw Qwen3ASRError.unavailableOnMac

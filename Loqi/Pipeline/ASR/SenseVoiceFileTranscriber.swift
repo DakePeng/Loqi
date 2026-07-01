@@ -22,6 +22,8 @@ actor SenseVoiceFileTranscriber {
     func transcribe(
         samples16k samples: [Float],
         sensitivity: MicSensitivity = .balanced,
+        alreadyDecoded: [SessionRecord.ImportCheckpoint.Segment] = [],
+        onSegmentComplete: (@MainActor @Sendable (SessionRecord.ImportCheckpoint.Segment) -> Void)? = nil,
         onProgress: @MainActor @Sendable (Double) -> Void
     ) async throws -> [Utterance] {
         guard SenseVoiceModelStore.isInstalled else {
@@ -53,6 +55,8 @@ actor SenseVoiceFileTranscriber {
             // periodic finals (matches the live engine's cap).
             maxSpeechDuration: 12,
             decoders: decoders,
+            alreadyDecoded: alreadyDecoded,
+            onSegmentComplete: onSegmentComplete,
             onProgress: onProgress)
         logger.info("import: SenseVoice produced \(utterances.count) utterances from a \(poolSize)-decoder pool")
         return utterances
@@ -67,6 +71,8 @@ actor SenseVoiceFileTranscriber {
     func transcribe(
         samples16k samples: [Float],
         sensitivity: MicSensitivity = .balanced,
+        alreadyDecoded: [SessionRecord.ImportCheckpoint.Segment] = [],
+        onSegmentComplete: (@MainActor @Sendable (SessionRecord.ImportCheckpoint.Segment) -> Void)? = nil,
         onProgress: @MainActor @Sendable (Double) -> Void
     ) async throws -> [Utterance] {
         throw SenseVoiceError.unavailableOnMac

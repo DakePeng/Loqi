@@ -138,6 +138,23 @@ struct ImportEngineTests {
             freeBytes: 0, perInstanceBytes: 900_000_000,
             coreCount: 6, hardCap: 3) == 1)
     }
+
+    @Test func cachedTextMatchesOnlyExactRange() {
+        let checkpoint = [
+            SessionRecord.ImportCheckpoint.Segment(start: 0, end: 4.5, text: "大家好"),
+            SessionRecord.ImportCheckpoint.Segment(start: 4.5, end: 9, text: "今天讲翻译"),
+        ]
+        #expect(VADSegmentedTranscriber.cachedText(
+            start: 0, end: 4.5, in: checkpoint) == "大家好")
+        #expect(VADSegmentedTranscriber.cachedText(
+            start: 4.5, end: 9, in: checkpoint) == "今天讲翻译")
+        // A resumed decode reproducing a different boundary (VAD drift,
+        // or the retry-halves sub-ranges) is a clean miss, not a mismatch.
+        #expect(VADSegmentedTranscriber.cachedText(
+            start: 0, end: 5, in: checkpoint) == nil)
+        #expect(VADSegmentedTranscriber.cachedText(
+            start: 10, end: 12, in: []) == nil)
+    }
 }
 
 struct ImportAudioSheetTests {
