@@ -377,6 +377,7 @@ struct LiveCaptionsView: View {
                     }
                     .padding(.horizontal, 16)
                     .buttonStyle(.plain)
+                    .transaction { $0.animation = nil }
                 }
                 .scrollIndicators(.hidden)
                 .scrollBounceBehavior(.basedOnSize, axes: [.horizontal])

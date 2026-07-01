@@ -156,6 +156,7 @@ struct RecordCopyTests {
 
         #expect(contents.contains(
             ".padding(.horizontal, 16)\n                    .buttonStyle(.plain)"))
+        #expect(contents.contains(".transaction { $0.animation = nil }"))
     }
 
     @Test func recordNotesDoNotReferToTappingTheMic() throws {
