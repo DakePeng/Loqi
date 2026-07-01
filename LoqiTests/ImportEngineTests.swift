@@ -1,3 +1,4 @@
+import AVFoundation
 import Foundation
 import Testing
 @testable import Loqi
@@ -62,6 +63,43 @@ struct ImportEngineTests {
             senseVoiceInstalled: true, qwen3Installed: false) == .senseVoice)
         #expect(OfflineTranscriber.postProcessBackend(
             senseVoiceInstalled: false, qwen3Installed: false) == nil)
+    }
+
+    @MainActor
+    @Test func cancelledOfflineDecodeStopsBeforeModelCheck() async throws {
+        let url = URL.temporaryDirectory
+            .appending(path: UUID().uuidString)
+            .appendingPathExtension("caf")
+        defer { try? FileManager.default.removeItem(at: url) }
+
+        let format = try #require(AVAudioFormat(
+            standardFormatWithSampleRate: 16_000,
+            channels: 1))
+        let writer = try AVAudioFile(forWriting: url, settings: format.settings)
+        let buffer = try #require(AVAudioPCMBuffer(
+            pcmFormat: format,
+            frameCapacity: 16_000))
+        buffer.frameLength = 16_000
+        try writer.write(from: buffer)
+
+        let reader = try AVAudioFile(forReading: url)
+        let task = Task { @MainActor in
+            try await OfflineTranscriber.transcribe(
+                reader,
+                language: .english,
+                backend: .senseVoice
+            ) { _ in }
+        }
+        task.cancel()
+
+        do {
+            _ = try await task.value
+            Issue.record("expected CancellationError")
+        } catch is CancellationError {
+            // Expected.
+        } catch {
+            Issue.record("expected CancellationError, got \(error)")
+        }
     }
 
     @Test func segmentTimeRangeMapsSamplesToSeconds() {

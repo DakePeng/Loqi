@@ -145,7 +145,7 @@ enum OfflineTranscriber {
         hotwords: [String],
         onProgress: @escaping (Double) -> Void
     ) async throws -> [Utterance] {
-        let samples = try decodeMono16k(audioFile)
+        let samples = try await decodeMono16k(audioFile)
         let transcriber = Qwen3ASRFileTranscriber(hotwords: hotwords)
         let utterances = try await transcriber.transcribe(
             samples16k: samples, sensitivity: sensitivity) { fraction in
@@ -162,7 +162,7 @@ enum OfflineTranscriber {
         sensitivity: MicSensitivity,
         onProgress: @escaping (Double) -> Void
     ) async throws -> [Utterance] {
-        let samples = try decodeMono16k(audioFile)
+        let samples = try await decodeMono16k(audioFile)
         let transcriber = SenseVoiceFileTranscriber(language: language)
         let utterances = try await transcriber.transcribe(
             samples16k: samples, sensitivity: sensitivity) { fraction in
@@ -172,7 +172,7 @@ enum OfflineTranscriber {
     }
 
     /// Decode an audio file to a flat 16 kHz mono float buffer for SenseVoice.
-    private static func decodeMono16k(_ file: AVAudioFile) throws -> [Float] {
+    private static func decodeMono16k(_ file: AVAudioFile) async throws -> [Float] {
         guard let target = AVAudioFormat(
             commonFormat: .pcmFormatFloat32,
             sampleRate: 16_000, channels: 1, interleaved: false),
@@ -184,6 +184,7 @@ enum OfflineTranscriber {
         var finished = false
 
         while !finished {
+            try Task.checkCancellation()
             guard let outBuffer = AVAudioPCMBuffer(
                 pcmFormat: target, frameCapacity: readSize) else { break }
             var conversionError: NSError?
@@ -215,6 +216,7 @@ enum OfflineTranscriber {
                 finished = true
             }
         }
+        try Task.checkCancellation()
         return output
     }
 }

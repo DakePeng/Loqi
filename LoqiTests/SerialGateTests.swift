@@ -54,6 +54,26 @@ struct SerialGateTests {
         #expect(ran == false)
     }
 
+    @Test func cancelThenImmediateReleaseDoesNotRunCancelledWaiter() async {
+        let gate = SerialGate()
+        try? await gate.acquire()
+
+        var ran = false
+        let queued = Task { @MainActor in
+            do { try await gate.acquire(); ran = true; gate.release() }
+            catch { /* cancelled before owning the slot */ }
+        }
+        await waitUntil { gate.waiterCount == 1 }
+
+        queued.cancel()
+        gate.release()
+
+        await queued.value
+        #expect(ran == false)
+        try? await gate.acquire()
+        gate.release()
+    }
+
     @Test func waitUntilIdleResolvesAfterDrain() async {
         let gate = SerialGate()
         try? await gate.acquire() // busy

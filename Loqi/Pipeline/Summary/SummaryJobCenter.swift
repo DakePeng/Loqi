@@ -999,6 +999,7 @@ final class SerialGate {
     /// Park until the slot is free. Throws `CancellationError` if cancelled
     /// while still queued — the caller then owns nothing and must NOT release.
     func acquire() async throws {
+        try Task.checkCancellation()
         if !busy {
             busy = true
             return
@@ -1010,6 +1011,12 @@ final class SerialGate {
             }
         } onCancel: {
             Task { @MainActor in self.drop(id) }
+        }
+        do {
+            try Task.checkCancellation()
+        } catch {
+            release()
+            throw error
         }
     }
 
