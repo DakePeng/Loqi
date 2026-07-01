@@ -1,5 +1,4 @@
 import Foundation
-import os
 
 /// Map-reduce summarization sized for a small on-device model: chunk the
 /// transcript at natural boundaries, extract tagged notes per chunk (the
@@ -20,8 +19,6 @@ struct SummaryEngine {
     /// nil (reduce-only callers) maps without vocabulary context.
     var matcher: HotwordMatcher?
     private let prompts = PromptBuilder()
-    private static let logger = Logger(
-        subsystem: "com.kunzhipeng.loqi", category: "summary")
 
     /// Character budget per chunk (≈ tokens for CJK); keeps per-chunk
     /// prefill in the seconds range.
@@ -366,7 +363,7 @@ struct SummaryEngine {
         return String(format: "%02d:%02d", total / 60, total % 60)
     }
 
-    /// Summaries are for the reader: the device language wins, with the
+    /// Summaries are for the reader: the app/device language wins, with the
     /// session's target language as fallback.
     static func summaryLanguage(for record: SessionRecord) -> AppLanguage {
         AppLanguage.devicePreferred
@@ -561,33 +558,6 @@ struct SummaryEngine {
                 in: language,
                 stitchDetails: stitchDetails)
         }
-#if DEBUG
-        // Temporary diagnostic: shows why reduce branched. Remove once the
-        // map-extraction-on-garbled-input question is settled.
-        let fallbackNoteCount = notes.filter { $0.isFallback == true }.count
-        let substanceCount = records.filter {
-            $0.source != .photo && $0.kind != .topic && !$0.text.isEmpty
-        }.count
-        Self.logger.info("""
-            reduce branch: notes=\(notes.count, privacy: .public) \
-            fallback=\(fallbackNoteCount, privacy: .public) \
-            records=\(records.count, privacy: .public) \
-            substance=\(substanceCount, privacy: .public) \
-            hasSpoken=\(Self.hasSpokenSubstance(records), privacy: .public) \
-            inputEmpty=\(input.isEmpty, privacy: .public) \
-            → \(input.isEmpty || !stitchDetails || !Self.hasSpokenSubstance(records) ? "DETERMINISTIC" : "structured", privacy: .public)
-            """)
-        for (index, note) in notes.enumerated() {
-            Self.logger.info("""
-                  note[\(index, privacy: .public)] \
-                fallback=\(note.isFallback == true, privacy: .public) \
-                facts=\(note.facts.count, privacy: .public) \
-                dec=\(note.decisions.count, privacy: .public) \
-                act=\(note.actions.count, privacy: .public) \
-                head=\(note.headline, privacy: .public)
-                """)
-        }
-#endif
         // No spoken substance (photo-only or empty chatter) means the
         // structured reduce has nothing real to synthesize and pads the
         // template with invented to-dos/key-points off the photo. The

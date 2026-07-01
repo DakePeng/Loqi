@@ -126,6 +126,18 @@ struct SummaryEngineTests {
         #expect(SummaryEngine.cleanMapInput("预算定为42万") == "预算定为42万")
     }
 
+    @Test func debugLogsDoNotExposeTranscriptText() throws {
+        let root = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+        let text = try String(
+            contentsOf: root.appending(path: "Loqi/Pipeline/Summary/SummaryEngine.swift"),
+            encoding: .utf8)
+
+        #expect(!text.contains("Temporary diagnostic"))
+        #expect(!text.contains("note.headline, privacy: .public"))
+    }
+
     @Test func reducePromptRequiresNaturalWritingConstraints() {
         let prompt = PromptBuilder().reduceSummaryPrompt(
             notes: "topic: 桌布讨论\nfact: 传家宝桌子不必铺布\nphoto: 桌面照片显示木纹完整",
