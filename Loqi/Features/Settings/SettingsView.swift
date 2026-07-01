@@ -3,6 +3,7 @@ import SwiftUI
 struct SettingsView: View {
     @Bindable var pipeline: CaptionPipeline
 
+    @AppStorage(AppUILanguage.defaultsKey) private var appLanguageRaw = AppUILanguage.system.rawValue
     @AppStorage("model.id") private var modelID: String = ModelCatalog.default.id
     @AppStorage("model.bonsaiEnabled") private var bonsaiEnabled = false
     @AppStorage("model.source") private var sourceRaw: String = ModelSource.huggingFace.rawValue
@@ -46,6 +47,16 @@ struct SettingsView: View {
         NavigationStack {
             Form {
                 Section {
+                    Picker("App language", selection: $appLanguageRaw) {
+                        Text("Follow iPhone").tag(AppUILanguage.system.rawValue)
+                        Text("English").tag(AppUILanguage.english.rawValue)
+                        Text("Simplified Chinese").tag(AppUILanguage.chinese.rawValue)
+                    }
+                } header: {
+                    Text("Language")
+                }
+
+                Section {
                     Picker("Engine", selection: $asrEngine) {
                         Text("Apple (instant)").tag("apple")
                         Text("SenseVoice (accurate)").tag("sensevoice")
@@ -55,8 +66,8 @@ struct SettingsView: View {
                         LabeledContent(
                             "Recognition model",
                             value: senseVoiceInstalled
-                                ? String(localized: "Downloaded")
-                                : String(localized: "Not downloaded"))
+                                ? localized("Downloaded")
+                                : localized("Not downloaded"))
 
                         if !senseVoiceInstalled {
                             Picker("Download from", selection: $asrSourceRaw) {
@@ -101,8 +112,8 @@ struct SettingsView: View {
                     LabeledContent(
                         "Qwen3-ASR model",
                         value: qwen3Installed
-                            ? String(localized: "Downloaded")
-                            : String(localized: "Not downloaded"))
+                            ? localized("Downloaded")
+                            : localized("Not downloaded"))
 
                     if !qwen3Installed {
                         Picker("Download from", selection: $asrSourceRaw) {
@@ -150,8 +161,8 @@ struct SettingsView: View {
                         LabeledContent(
                             "Live model files",
                             value: liveDownloaded
-                                ? String(localized: "Downloaded")
-                                : String(localized: "Not downloaded"))
+                                ? localized("Downloaded")
+                                : localized("Not downloaded"))
                         if !liveDownloaded {
                             if downloadingModelID == ModelCatalog.liveModel.id {
                                 DownloadProgressRow(
@@ -177,7 +188,7 @@ struct SettingsView: View {
                         // Summary tier — user's pick, runs after recording.
                         Picker("Summary model", selection: $modelID) {
                             ForEach(ModelCatalog.all) { option in
-                                Text(option.displayName).tag(option.id)
+                                Text(modelDisplayName(option)).tag(option.id)
                             }
                         }
                         .onChange(of: modelID) {
@@ -189,8 +200,8 @@ struct SettingsView: View {
                         LabeledContent(
                             "Summary model files",
                             value: summaryDownloaded
-                                ? String(localized: "Downloaded")
-                                : String(localized: "Not downloaded"))
+                                ? localized("Downloaded")
+                                : localized("Not downloaded"))
                         if !summaryDownloaded {
                             let summary = ModelCatalog.option(for: modelID)
                             if downloadingModelID == summary.id {
@@ -283,10 +294,23 @@ struct SettingsView: View {
                     if let tokensPerSecond {
                         LabeledContent(
                             "Last generation",
-                            value: String(format: "%.1f tok/s", tokensPerSecond))
+                            value: String(
+                                format: localized("%.1f tok/s"),
+                                locale: appUILanguage.locale,
+                                tokensPerSecond))
                     }
-                    LabeledContent("LLM active", value: String(format: "%.1fs", llmActiveSeconds))
-                    LabeledContent("ASR active", value: String(format: "%.1fs", asrActiveSeconds))
+                    LabeledContent(
+                        "LLM active",
+                        value: String(
+                            format: localized("%.1f s"),
+                            locale: appUILanguage.locale,
+                            llmActiveSeconds))
+                    LabeledContent(
+                        "ASR active",
+                        value: String(
+                            format: localized("%.1f s"),
+                            locale: appUILanguage.locale,
+                            asrActiveSeconds))
                     LabeledContent(
                         "Heat driver",
                         value: SessionHeatStats.dominant(
@@ -319,16 +343,40 @@ struct SettingsView: View {
             .onChange(of: qwen3Store.progress) { _, p in
                 qwen3Speedometer.update(p)
             }
+            .onChange(of: appLanguageRaw) {
+                Task { await refreshStats() }
+            }
         }
     }
 
     private var thermalLabel: String {
         switch pipeline.thermal.thermalState {
-        case .nominal: "Nominal"
-        case .fair: "Fair"
-        case .serious: "Serious — AI work paused"
-        case .critical: "Critical — AI model off"
-        @unknown default: "Unknown"
+        case .nominal: localized("Nominal")
+        case .fair: localized("Fair")
+        case .serious: localized("Serious — AI work paused")
+        case .critical: localized("Critical — AI model off")
+        @unknown default: localized("Unknown")
+        }
+    }
+
+    private var appUILanguage: AppUILanguage {
+        AppUILanguage(rawValue: appLanguageRaw) ?? .system
+    }
+
+    private func localized(_ value: String.LocalizationValue) -> String {
+        String(localized: value, locale: appUILanguage.locale)
+    }
+
+    private func modelDisplayName(_ option: ModelOption) -> String {
+        switch option.id {
+        case ModelCatalog.qwen35_2b.id:
+            localized("Qwen3.5 2B — recommended")
+        case ModelCatalog.qwen35_0_8b.id:
+            localized("Qwen3.5 0.8B — fastest")
+        case ModelCatalog.bonsai8b.id:
+            localized("Bonsai 8B (ternary 2-bit) — experimental")
+        default:
+            option.displayName
         }
     }
 
@@ -378,11 +426,11 @@ struct SettingsView: View {
 
     private func refreshStats() async {
         switch await pipeline.llm.loadState {
-        case .unloaded: llmState = String(localized: "Not loaded")
-        case .downloading(let p): llmState = String(localized: "Downloading \(Int(p * 100))%")
-        case .loading: llmState = String(localized: "Loading")
-        case .ready: llmState = String(localized: "Ready")
-        case .failed(let reason): llmState = String(localized: "Failed: \(reason)")
+        case .unloaded: llmState = localized("Not loaded")
+        case .downloading(let p): llmState = localized("Downloading \(Int(p * 100))%")
+        case .loading: llmState = localized("Loading")
+        case .ready: llmState = localized("Ready")
+        case .failed(let reason): llmState = localized("Failed: \(reason)")
         }
         liveDownloaded = LLMService.isDownloaded(model: ModelCatalog.liveModel)
         summaryDownloaded = LLMService.isDownloaded(
@@ -402,12 +450,12 @@ struct SettingsView: View {
         switch await pipeline.streamingDiarizer.state {
         case .unloaded:
             diarizerState = diarizerInstalled
-                ? String(localized: "Downloaded (not loaded)")
-                : String(localized: "Not downloaded")
-        case .downloading(let p): diarizerState = String(localized: "Downloading \(Int(p * 100))%")
-        case .loading: diarizerState = String(localized: "Loading")
-        case .ready: diarizerState = String(localized: "Ready")
-        case .failed(let reason): diarizerState = String(localized: "Failed: \(reason)")
+                ? localized("Downloaded (not loaded)")
+                : localized("Not downloaded")
+        case .downloading(let p): diarizerState = localized("Downloading \(Int(p * 100))%")
+        case .loading: diarizerState = localized("Loading")
+        case .ready: diarizerState = localized("Ready")
+        case .failed(let reason): diarizerState = localized("Failed: \(reason)")
         }
     }
 }

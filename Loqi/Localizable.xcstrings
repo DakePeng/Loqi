@@ -4,6 +4,38 @@
     "· %@" : {
 
     },
+    "%.1f s" : {
+      "localizations" : {
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%.1f 秒"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%.1f 秒"
+          }
+        }
+      }
+    },
+    "%.1f tok/s" : {
+      "localizations" : {
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%.1f トークン/秒"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%.1f 词元/秒"
+          }
+        }
+      }
+    },
     "%@" : {
 
     },
@@ -407,6 +439,22 @@
         }
       }
     },
+    "App language" : {
+      "localizations" : {
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "アプリの言語"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "应用语言"
+          }
+        }
+      }
+    },
     "Apple (instant)" : {
       "localizations" : {
         "ja" : {
@@ -474,6 +522,22 @@
         }
       }
     },
+    "ASR active" : {
+      "localizations" : {
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "ASR稼働"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "ASR 活跃"
+          }
+        }
+      }
+    },
     "Auto" : {
       "localizations" : {
         "ja" : {
@@ -486,6 +550,22 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "自动"
+          }
+        }
+      }
+    },
+    "Auto post-process new recordings" : {
+      "localizations" : {
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "新しい録音を自動で後処理"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "自动后处理新录音"
           }
         }
       }
@@ -587,6 +667,22 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "均衡"
+          }
+        }
+      }
+    },
+    "Bonsai 8B (ternary 2-bit) — experimental" : {
+      "localizations" : {
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Bonsai 8B（3値2ビット）— 実験的"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Bonsai 8B（三值 2-bit）— 实验性"
           }
         }
       }
@@ -1724,6 +1820,22 @@
         }
       }
     },
+    "English" : {
+      "localizations" : {
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "英語"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "英语"
+          }
+        }
+      }
+    },
     "Everything is transcribed privately on this iPhone." : {
       "localizations" : {
         "ja" : {
@@ -1808,6 +1920,22 @@
         }
       }
     },
+    "Experimental: Bonsai 8B summary model" : {
+      "localizations" : {
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "実験的: Bonsai 8B要約モデル"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "实验性：Bonsai 8B 总结模型"
+          }
+        }
+      }
+    },
     "Export (%lld)" : {
       "extractionState" : "stale",
       "localizations" : {
@@ -1859,6 +1987,22 @@
         }
       }
     },
+    "Fair" : {
+      "localizations" : {
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "やや高温"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "偏热"
+          }
+        }
+      }
+    },
     "Fast on-device model for live translation and notes" : {
       "extractionState" : "manual",
       "localizations" : {
@@ -1905,6 +2049,22 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "结束的会话会自动保存在这里。"
+          }
+        }
+      }
+    },
+    "Follow iPhone" : {
+      "localizations" : {
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "iPhone に合わせる"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "跟随 iPhone"
           }
         }
       }
@@ -1973,6 +2133,22 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "有摘要"
+          }
+        }
+      }
+    },
+    "Heat driver" : {
+      "localizations" : {
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "発熱要因"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "发热来源"
           }
         }
       }
@@ -2196,7 +2372,20 @@
       }
     },
     "Keep each session's audio alongside its transcript. Recordings are stored only on this iPhone and are deleted with their session. Turning off “Keep screen on” lets the display sleep during long recordings — captions keep running and it runs noticeably cooler." : {
-
+      "localizations" : {
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "各セッションの音声を文字起こしと一緒に保存します。録音はこの iPhone のみに保存され、セッションと一緒に削除されます。「画面をオンに保つ」をオフにすると、長時間録音中に画面をスリープできます。字幕は動き続け、本体もかなり涼しくなります。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "将每次会话的音频与文字稿一起保留。录音仅存储在此 iPhone 上，并随会话一起删除。关闭“保持屏幕常亮”后，长时间录音时屏幕可以休眠——字幕会继续运行，设备也会明显更凉。"
+          }
+        }
+      }
     },
     "Keep Loqi open while models download." : {
       "localizations" : {
@@ -2210,6 +2399,22 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "下载模型时请保持 Loqi 打开。"
+          }
+        }
+      }
+    },
+    "Keep screen on while recording" : {
+      "localizations" : {
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "録音中は画面をオンに保つ"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "录音时保持屏幕常亮"
           }
         }
       }
@@ -2235,7 +2440,6 @@
       }
     },
     "Language" : {
-      "extractionState" : "stale",
       "localizations" : {
         "ja" : {
           "stringUnit" : {
@@ -2386,6 +2590,22 @@
         }
       }
     },
+    "LLM active" : {
+      "localizations" : {
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "LLM稼働"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "LLM 活跃"
+          }
+        }
+      }
+    },
     "Loading" : {
       "extractionState" : "stale",
       "localizations" : {
@@ -2460,7 +2680,20 @@
       }
     },
     "Lowers sustained heat during long recordings: slower live-caption updates, fewer speech recognition threads, and refinement only on longer sentences. Takes effect on the next recording." : {
-
+      "localizations" : {
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "長時間録音中の発熱を抑えます。ライブ字幕の更新を少し遅くし、音声認識スレッドを減らし、長めの文だけを補正します。次の録音から有効になります。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "降低长时间录音时的持续发热：实时字幕更新会变慢，语音识别线程会减少，并且只润色较长句子。下次录音生效。"
+          }
+        }
+      }
     },
     "Markdown" : {
       "extractionState" : "stale",
@@ -2637,13 +2870,13 @@
         "ja" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "中文・English・日本語・한국어のより正確なリアルタイム字幕"
+            "value" : "中国語・英語・日本語・韓国語のより正確なリアルタイム字幕"
           }
         },
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "更准确的实时字幕，支持中文、English、日本語、한국어"
+            "value" : "更准确的实时字幕，支持中文、英语、日语和韩语"
           }
         }
       }
@@ -2813,6 +3046,22 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "未在该录音中识别到语音。"
+          }
+        }
+      }
+    },
+    "Nominal" : {
+      "localizations" : {
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "通常"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "正常"
           }
         }
       }
@@ -2991,13 +3240,13 @@
         "ja" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "ダウンロード後、「再文字起こしと要約」とインポートは自動的にQwen3-ASRを使用します。1つのモデルで中文・English・日本語・한국어に対応し、あなたの語彙で精度を高めます。リアルタイム認識より遅い分、精度は格段に上です。すべてこのiPhone上で動作します。"
+            "value" : "ダウンロード後、「再文字起こしと要約」とインポートは自動的にQwen3-ASRを使用します。1つのモデルで中国語・英語・日本語・韓国語に対応し、あなたの語彙で精度を高めます。リアルタイム認識より遅い分、精度は格段に上です。すべてこのiPhone上で動作します。"
           }
         },
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "下载后，“重新转写并总结”和导入会自动使用 Qwen3-ASR：一个模型覆盖中文、English、日本語和한국어，并以你的词汇表加持——比实时识别慢，但准确率明显更高。完全在这台 iPhone 上运行。"
+            "value" : "下载后，“重新转写并总结”和导入会自动使用 Qwen3-ASR：一个模型覆盖中文、英语、日语和韩语，并以你的词汇表加持——比实时识别慢，但准确率明显更高。完全在这台 iPhone 上运行。"
           }
         }
       }
@@ -3008,19 +3257,32 @@
         "ja" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "ダウンロード後、「再文字起こしと要約」は自動的にQwen3-ASRを使用し、インポートでも選択できます。1つのモデルで中文・English・日本語・한국어に対応し、あなたの語彙で精度を高めます。リアルタイム認識より遅い分、精度は格段に上です。すべてこのiPhone上で動作します。"
+            "value" : "ダウンロード後、「再文字起こしと要約」は自動的にQwen3-ASRを使用し、インポートでも選択できます。1つのモデルで中国語・英語・日本語・韓国語に対応し、あなたの語彙で精度を高めます。リアルタイム認識より遅い分、精度は格段に上です。すべてこのiPhone上で動作します。"
           }
         },
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "下载后，“重新转写并总结”会自动使用 Qwen3-ASR，导入时也可选用：一个模型覆盖中文、English、日本語和한국어，并以你的词汇表加持——比实时识别慢，但准确率明显更高。完全在这台 iPhone 上运行。"
+            "value" : "下载后，“重新转写并总结”会自动使用 Qwen3-ASR，导入时也可选用：一个模型覆盖中文、英语、日语和韩语，并以你的词汇表加持——比实时识别慢，但准确率明显更高。完全在这台 iPhone 上运行。"
           }
         }
       }
     },
     "Once downloaded, Re-transcribe & summarize uses Qwen3-ASR automatically, and imports can select it. Auto post-process re-transcribes and identifies speakers before the first summary for new recordings, using downloaded models only. Live captions stay on the fast engines." : {
-
+      "localizations" : {
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "ダウンロード後、「再文字起こしと要約」は自動的にQwen3-ASRを使用し、インポートでも選択できます。自動後処理は、ダウンロード済みモデルだけを使って、新しい録音の最初の要約前に再文字起こしと話者識別を行います。ライブ字幕は高速エンジンのままです。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "下载后，“重新转写并总结”会自动使用 Qwen3-ASR，导入时也可选用。自动后处理会在新录音第一次总结前重新转写并识别说话人，且只使用已下载的模型。实时字幕仍使用快速引擎。"
+          }
+        }
+      }
     },
     "One local model powers better translations, summaries, titles, chat and vocabulary suggestions. Turning AI features off disables all of them. The model downloads only when you ask — here, or when a feature offers it." : {
       "extractionState" : "stale",
@@ -3173,7 +3435,20 @@
       }
     },
     "Performance" : {
-
+      "localizations" : {
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "パフォーマンス"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "性能"
+          }
+        }
+      }
     },
     "Photo library" : {
       "extractionState" : "stale",
@@ -3370,6 +3645,38 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Qwen3-ASR 重新转写"
+          }
+        }
+      }
+    },
+    "Qwen3.5 0.8B — fastest" : {
+      "localizations" : {
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Qwen3.5 0.8B — 最速"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Qwen3.5 0.8B — 速度最快"
+          }
+        }
+      }
+    },
+    "Qwen3.5 2B — recommended" : {
+      "localizations" : {
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Qwen3.5 2B — おすすめ"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Qwen3.5 2B — 推荐"
           }
         }
       }
@@ -3654,6 +3961,22 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "录音被中断"
+          }
+        }
+      }
+    },
+    "Reduce heat" : {
+      "localizations" : {
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "発熱を抑える"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "降低发热"
           }
         }
       }
@@ -3983,13 +4306,13 @@
         "ja" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "SenseVoice は中文・English・日本語・한국어をはるかに高い精度で認識します。字幕は単語ごとではなく約 1 秒ごとに更新されます。すべてこの iPhone 上で実行されます。"
+            "value" : "SenseVoice は中国語・英語・日本語・韓国語をはるかに高い精度で認識します。字幕は単語ごとではなく約 1 秒ごとに更新されます。すべてこの iPhone 上で実行されます。"
           }
         },
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "SenseVoice 识别中文、English、日本語、한국어，精度大幅提升——字幕约每 1 秒成段更新，而非逐词出现。完全在这台 iPhone 上运行。"
+            "value" : "SenseVoice 识别中文、英语、日语和韩语，精度大幅提升——字幕约每 1 秒成段更新，而非逐词出现。完全在这台 iPhone 上运行。"
           }
         }
       }
@@ -4107,6 +4430,22 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "设置"
+          }
+        }
+      }
+    },
+    "Simplified Chinese" : {
+      "localizations" : {
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "簡体字中国語"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "简体中文"
           }
         }
       }
@@ -4997,6 +5336,22 @@
         }
       }
     },
+    "Thermal changes" : {
+      "localizations" : {
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "温度変化"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "温度变化"
+          }
+        }
+      }
+    },
     "Thermal state" : {
       "extractionState" : "stale",
       "localizations" : {
@@ -5296,6 +5651,22 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "翻译、摘要、标题与对话"
+          }
+        }
+      }
+    },
+    "Unknown" : {
+      "localizations" : {
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "不明"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "未知"
           }
         }
       }
