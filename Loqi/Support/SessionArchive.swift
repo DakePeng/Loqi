@@ -267,13 +267,23 @@ final class SessionArchive {
             .compactMap { try? decoder.decode(SessionRecord.self, from: Data(contentsOf: $0)) }
     }
 
+    /// A killed-mid-import record survives relaunch only if it has both a
+    /// durable audio file and checkpointed progress to resume from —
+    /// anything less is a tombstone (no transcript worth keeping).
+    nonisolated static func isResumableImport(_ record: SessionRecord) -> Bool {
+        record.importing == true && record.importCheckpoint != nil
+            && record.audioFileName != nil
+    }
+
     nonisolated static func mergedLoadedSessions(
         decoded: [SessionRecord],
         current: [SessionRecord],
         deletedIDs: Set<UUID>
     ) -> [SessionRecord] {
         var byID: [UUID: SessionRecord] = [:]
-        for record in decoded where record.importing != true && !deletedIDs.contains(record.id) {
+        for record in decoded
+        where (record.importing != true || isResumableImport(record))
+            && !deletedIDs.contains(record.id) {
             byID[record.id] = record
         }
         for record in current where !deletedIDs.contains(record.id) {
@@ -288,11 +298,13 @@ final class SessionArchive {
         let decoded = await Task.detached {
             Self.decodeAll(in: directory)
         }.value
-        // Records still marked importing are tombstones of a kill
-        // mid-import: no transcript was ever written, so sweep them.
+        // Records still marked importing are either resumable (checkpointed
+        // progress + durable audio survive) or tombstones of a kill before
+        // either existed — only the latter gets swept.
         let fm = FileManager.default
         let currentIDs = Set(sessions.map(\.id))
         for abandoned in decoded where abandoned.importing == true
+            && !Self.isResumableImport(abandoned)
             && !currentIDs.contains(abandoned.id) {
             try? fm.removeItem(
                 at: directory.appending(path: "\(abandoned.id.uuidString).json"))
