@@ -168,9 +168,10 @@ final class SummaryJobCenter {
 
     /// Cancel heavy background work so a live recording gets full resources.
     /// Re-transcription requests are re-enqueued (restart from scratch after
-    /// recording); imports cancel permanently (temp-file state is
-    /// indeterminate). Synchronously re-enqueues BEFORE cancelling tasks so
-    /// a very short recording can't race the propagation.
+    /// recording); imports checkpoint their progress as they go, so they
+    /// just pause and pick back up via `resumeUnfinishedImports()`.
+    /// Synchronously re-enqueues BEFORE cancelling tasks so a very short
+    /// recording can't race the propagation.
     func yieldToRecording() {
         pausedForRecording = true
         for (sessionID, activity) in activities {
@@ -190,6 +191,11 @@ final class SummaryJobCenter {
                 activities[sessionID] = .pausedForRecording
                 tasks[sessionID]?.cancel()
             case .importing:
+                // Marking pausedForRecording BEFORE cancelling tells the
+                // import task's CancellationError handler this was a yield,
+                // not a user cancel — it keeps the placeholder + checkpoint
+                // instead of deleting them.
+                activities[sessionID] = .pausedForRecording
                 tasks[sessionID]?.cancel()
             case .queuedRetranscribe:
                 activities[sessionID] = .pausedForRecording
@@ -207,9 +213,12 @@ final class SummaryJobCenter {
         pausedForRecording = false
         for (sessionID, activity) in activities {
             if case .pausedForRecording = activity {
-                // Retranscribes re-queue; summaries restart via resumeLLMJobs,
-                // which clears their held activity before re-running.
-                if suspendedSummaries[sessionID] != nil {
+                // Imports resume fresh via resumeUnfinishedImports() below;
+                // retranscribes re-queue; summaries restart via
+                // resumeLLMJobs, which clears their held activity first.
+                if archive.sessions.first(where: { $0.id == sessionID })?.importing == true {
+                    activities[sessionID] = nil
+                } else if suspendedSummaries[sessionID] != nil {
                     activities[sessionID] = .pausedForBackground
                 } else {
                     activities[sessionID] = .queuedRetranscribe
@@ -220,6 +229,7 @@ final class SummaryJobCenter {
             resumeLLMJobs()
         }
         drainRetranscribeQueue()
+        resumeUnfinishedImports()
     }
 
     /// Scene moved to/from the background. Metal-backed work can't run there:
@@ -614,40 +624,141 @@ final class SummaryJobCenter {
         placeholder.titleText = url.deletingPathExtension().lastPathComponent
         placeholder.importing = true
         archive.add(placeholder)
+        runImportJob(sessionID: sessionID) { [weak self] onPhase in
+            guard let self else { throw CancellationError() }
+            await self.llm.setModel(ModelCatalog.summaryModel)
+            let importer = FileImportEngine(
+                translator: self.translator, voiceprint: self.voiceprint,
+                llm: self.llm, hotwords: self.hotwords)
+            return try await importer.importAudio(
+                url: url,
+                sessionID: sessionID,
+                direction: direction,
+                speakerCount: speakerCount,
+                engine: engine,
+                sensitivity: sensitivity,
+                onAudioReady: { [weak self] recordingName, duration, recordedAt in
+                    self?.recordImportAudioReady(
+                        sessionID: sessionID, recordingName: recordingName,
+                        duration: duration, recordedAt: recordedAt,
+                        direction: direction, speakerCount: speakerCount,
+                        engine: engine, sensitivity: sensitivity)
+                },
+                onSegmentComplete: { [weak self] segment in
+                    self?.recordImportSegment(sessionID: sessionID, segment: segment)
+                },
+                onPhase: onPhase)
+        }
+    }
+
+    /// Resume a previously-checkpointed import — a killed/relaunched
+    /// process, a background kill, or one just paused by
+    /// `yieldToRecording()`. Only called for sessions with a checkpoint and
+    /// no already-running task; see `resumeUnfinishedImports()`.
+    private func resumeImport(
+        sessionID: UUID, checkpoint: SessionRecord.ImportCheckpoint, audioFileName: String
+    ) {
+        runImportJob(sessionID: sessionID) { [weak self] onPhase in
+            guard let self else { throw CancellationError() }
+            await self.llm.setModel(ModelCatalog.summaryModel)
+            let importer = FileImportEngine(
+                translator: self.translator, voiceprint: self.voiceprint,
+                llm: self.llm, hotwords: self.hotwords)
+            return try await importer.resumeImport(
+                checkpoint: checkpoint,
+                sessionID: sessionID,
+                audioFileName: audioFileName,
+                onSegmentComplete: { [weak self] segment in
+                    self?.recordImportSegment(sessionID: sessionID, segment: segment)
+                },
+                onPhase: onPhase)
+        }
+    }
+
+    /// Scans for imports interrupted mid-flight and restarts each from its
+    /// checkpoint. Safe to call opportunistically — already-running imports
+    /// are skipped via the `tasks` check. Called after a cold launch
+    /// (`SessionArchive.loadIfNeeded()` keeps resumable records instead of
+    /// sweeping them) and after a recording that yielded one ends.
+    func resumeUnfinishedImports() {
+        guard !isRecording() else { return }
+        for session in archive.sessions
+        where session.importing == true && tasks[session.id] == nil {
+            guard let checkpoint = session.importCheckpoint,
+                  let audioFileName = session.audioFileName
+            else { continue }
+            resumeImport(sessionID: session.id, checkpoint: checkpoint, audioFileName: audioFileName)
+        }
+    }
+
+    /// Shared task-lifecycle plumbing for a fresh import and a resumed one:
+    /// the gate, the background grace, progress wiring, and what happens on
+    /// success/cancel/failure. `engine` does the actual transcribe/diarize/
+    /// translate work and returns the finished record.
+    private func runImportJob(
+        sessionID: UUID,
+        engine: @escaping (
+            @escaping @MainActor @Sendable (FileImportEngine.Phase) -> Void
+        ) async throws -> SessionRecord
+    ) {
         activities[sessionID] = .importing(.transcribing(0))
         beginGrace(sessionID, name: "import")
-        tasks[sessionID] = Task {
-            defer { finishJob(sessionID) }
-            do { try await heavyGate.acquire() } catch { return }
-            defer { heavyGate.release() }
+        tasks[sessionID] = Task { [weak self] in
+            guard let self else { return }
+            defer { self.finishJob(sessionID) }
+            do { try await self.heavyGate.acquire() } catch { return }
+            defer { self.heavyGate.release() }
             do {
-                await llm.setModel(ModelCatalog.summaryModel)
-                let importer = FileImportEngine(
-                    translator: translator, voiceprint: voiceprint,
-                    llm: llm, hotwords: hotwords)
-                var record = try await importer.importAudio(
-                    url: url,
-                    sessionID: sessionID,
-                    direction: direction,
-                    speakerCount: speakerCount,
-                    engine: engine,
-                    sensitivity: sensitivity
-                ) { [weak self] phase in
+                var record = try await engine { [weak self] phase in
                     self?.importProgress(sessionID: sessionID, phase: phase)
                 }
                 record.unseen = true
-                archive.update(record)
-                lastCompleted = Completion(id: sessionID, at: .now)
+                self.archive.update(record)
+                self.lastCompleted = Completion(id: sessionID, at: .now)
                 // Imports have no post-stop scenario card, so summarize them
                 // automatically once transcription lands.
-                autoSummarizeAfterImport(sessionID: sessionID)
+                self.autoSummarizeAfterImport(sessionID: sessionID)
             } catch is CancellationError {
-                hotwords.discardSuggestions(forSession: sessionID)
-                archive.delete(id: sessionID)
+                if self.activities[sessionID] == .pausedForRecording {
+                    // Recording preempted this import — checkpoint (if any)
+                    // stays; resumeAfterRecording() re-enqueues it.
+                } else {
+                    self.hotwords.discardSuggestions(forSession: sessionID)
+                    self.archive.delete(id: sessionID)
+                }
             } catch {
-                errors[sessionID] = error.localizedDescription
+                self.errors[sessionID] = error.localizedDescription
             }
         }
+    }
+
+    /// Persists the durable audio + a fresh checkpoint as soon as the
+    /// import engine has copied the file — before transcription even
+    /// starts, so a kill in the first second still leaves something to
+    /// resume from.
+    private func recordImportAudioReady(
+        sessionID: UUID, recordingName: String, duration: TimeInterval, recordedAt: Date,
+        direction: LanguagePair, speakerCount: Int, engine: String, sensitivity: MicSensitivity
+    ) {
+        guard var record = archive.sessions.first(where: { $0.id == sessionID }) else { return }
+        record.audioFileName = recordingName
+        record.importCheckpoint = SessionRecord.ImportCheckpoint(
+            direction: direction, speakerCount: speakerCount, engine: engine,
+            sensitivityRaw: sensitivity.rawValue, recordedAt: recordedAt, duration: duration)
+        archive.update(record)
+    }
+
+    /// Appends one freshly-decoded segment to the checkpoint and persists
+    /// it — same per-checkpoint write frequency already proven safe by the
+    /// live summary map phase.
+    private func recordImportSegment(
+        sessionID: UUID, segment: SessionRecord.ImportCheckpoint.Segment
+    ) {
+        guard var record = archive.sessions.first(where: { $0.id == sessionID }),
+              record.importCheckpoint != nil
+        else { return }
+        record.importCheckpoint?.segments.append(segment)
+        archive.update(record)
     }
 
     /// Summarize a freshly imported session with the user's default style.

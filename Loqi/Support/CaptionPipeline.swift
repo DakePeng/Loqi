@@ -294,6 +294,7 @@ final class CaptionPipeline {
             await self.archive.loadIfNeeded()
             self.recoverInterruptedSession()
             self.archive.sweepOrphans()
+            self.jobs.resumeUnfinishedImports()
         }
 
         // UIKit's memory warning only arrives in the foreground; a

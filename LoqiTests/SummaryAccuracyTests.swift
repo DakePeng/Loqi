@@ -297,3 +297,76 @@ struct SummaryJobCenterCacheTests {
         #expect(jobs.error(for: record.id) == SummaryJobCenter.JobError.aiDisabled.localizedDescription)
     }
 }
+
+@MainActor
+struct ImportResumeTests {
+    private func makeTempDirectory() -> URL {
+        let url = FileManager.default.temporaryDirectory
+            .appending(path: UUID().uuidString)
+        try? FileManager.default.createDirectory(
+            at: url, withIntermediateDirectories: true)
+        return url
+    }
+
+    private func importingRecord(resumable: Bool) -> SessionRecord {
+        var record = SessionRecord(
+            mode: .captions, startedAt: .now, endedAt: .now, entries: [])
+        record.importing = true
+        if resumable {
+            record.audioFileName = "\(record.id.uuidString).m4a"
+            record.importCheckpoint = SessionRecord.ImportCheckpoint(
+                direction: LanguagePair(source: .english, target: .english),
+                speakerCount: 1, engine: "apple", sensitivityRaw: "balanced",
+                recordedAt: .now, duration: 10)
+        }
+        return record
+    }
+
+    @Test func onlyResumesImportsWithACheckpointAndDurableAudio() {
+        let hotwordDirectory = makeTempDirectory()
+        defer { try? FileManager.default.removeItem(at: hotwordDirectory) }
+        let archive = SessionArchive()
+        let jobs = SummaryJobCenter(
+            llm: LLMService(), archive: archive,
+            hotwords: HotwordStore(directory: hotwordDirectory),
+            translator: TranslationCoordinator(), voiceprint: VoiceprintService(),
+            isRecording: { false })
+
+        let finished = SessionRecord(
+            mode: .captions, startedAt: .now, endedAt: .now, entries: [])
+        let abandoned = importingRecord(resumable: false)
+        let resumable = importingRecord(resumable: true)
+        for record in [finished, abandoned, resumable] { archive.add(record) }
+        defer {
+            for record in [finished, abandoned, resumable] { archive.delete(id: record.id) }
+        }
+
+        jobs.resumeUnfinishedImports()
+
+        // activities[sessionID] is set synchronously before any await, so
+        // this is deterministic without waiting on the (doomed — there's no
+        // real audio file on disk) resumed task to actually run.
+        #expect(!jobs.isBusy(finished.id))
+        #expect(!jobs.isBusy(abandoned.id))
+        #expect(jobs.isBusy(resumable.id))
+    }
+
+    @Test func neverResumesWhileRecording() {
+        let hotwordDirectory = makeTempDirectory()
+        defer { try? FileManager.default.removeItem(at: hotwordDirectory) }
+        let archive = SessionArchive()
+        let jobs = SummaryJobCenter(
+            llm: LLMService(), archive: archive,
+            hotwords: HotwordStore(directory: hotwordDirectory),
+            translator: TranslationCoordinator(), voiceprint: VoiceprintService(),
+            isRecording: { true })
+
+        let resumable = importingRecord(resumable: true)
+        archive.add(resumable)
+        defer { archive.delete(id: resumable.id) }
+
+        jobs.resumeUnfinishedImports()
+
+        #expect(!jobs.isBusy(resumable.id))
+    }
+}
