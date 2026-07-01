@@ -89,6 +89,19 @@ struct HuggingFaceBackgroundDownloaderTests {
         #expect(!downloader.isValidSnapshot(dir, revision: "main", patterns: ["*.safetensors"]))
     }
 
+    @Test func snapshotDownloadsWriteManifestBeforeConcurrentTransfers() throws {
+        let root = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+        let text = try String(
+            contentsOf: root.appending(path: "Loqi/Pipeline/Refinement/HuggingFaceBackgroundDownloader.swift"),
+            encoding: .utf8)
+        let manifest = try #require(text.range(of: "try writeManifest(files, to: destination, revision: revision, patterns: patterns)"))
+        let concurrent = try #require(text.range(of: "withThrowingTaskGroup"))
+
+        #expect(manifest.lowerBound < concurrent.lowerBound)
+    }
+
     @Test func removeStalePartialsDeletesPartAndMetaFiles() throws {
         let dir = URL.temporaryDirectory.appending(path: UUID().uuidString, directoryHint: .isDirectory)
         try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
@@ -142,5 +155,16 @@ struct HuggingFaceBackgroundDownloaderTests {
         #expect(!downloader.isSafeRevision("feature//test"))
         #expect(!downloader.isSafeRevision("feature\\test"))
         #expect(!downloader.isSafeRevision("feature/\u{0}/test"))
+    }
+
+    @Test func slashRevisionsAreSplitIntoURLPathComponents() throws {
+        let root = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+        let text = try String(
+            contentsOf: root.appending(path: "Loqi/Pipeline/Refinement/HuggingFaceBackgroundDownloader.swift"),
+            encoding: .utf8)
+
+        #expect(text.contains("+ pathComponents(revision)"))
     }
 }

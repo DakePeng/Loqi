@@ -57,6 +57,35 @@ struct ModelFileDownloaderTests {
         #endif
     }
 
+    @Test func backgroundCancellationKeepsResumeData() throws {
+        #if os(iOS)
+        let root = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+        let text = try String(
+            contentsOf: root.appending(path: "Loqi/Support/ModelFileDownloader.swift"),
+            encoding: .utf8)
+
+        #expect(text.contains("cancel(byProducingResumeData:"))
+        #expect(text.contains("writeResumeData"))
+        #expect(text.contains("let wasCancelled = cancelled.contains(id)"))
+        #endif
+    }
+
+    @Test func failedBackgroundTransfersKeepResumeData() throws {
+        #if os(iOS)
+        let root = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+        let text = try String(
+            contentsOf: root.appending(path: "Loqi/Support/ModelFileDownloader.swift"),
+            encoding: .utf8)
+
+        #expect(text.contains("NSURLSessionDownloadTaskResumeData"))
+        #expect(text.contains("preserveResumeData"))
+        #endif
+    }
+
     @Test func foregroundModeRemainsAvailableForTinyFiles() async throws {
         let dir = URL.temporaryDirectory.appending(path: UUID().uuidString, directoryHint: .isDirectory)
         try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)

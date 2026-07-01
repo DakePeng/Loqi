@@ -57,54 +57,103 @@ struct HuggingFaceBackgroundDownloader: Downloader {
 
         try FileManager.default.createDirectory(at: destination, withIntermediateDirectories: true)
 
-        let progress = Progress(totalUnitCount: files.reduce(0) { $0 + $1.size })
-        progressHandler(progress)
+        let tracker = DownloadProgressTracker(files: files)
+        tracker.publish(progressHandler)
+        try writeManifest(files, to: destination, revision: revision, patterns: patterns)
 
-        var completedBytes: Int64 = 0
+        var downloads: [DownloadWork] = []
         for file in files {
             guard let target = appendSafeRelativePath(file.path, to: destination) else {
                 throw HuggingFaceBackgroundError.downloadFailed("Unsafe path in model tree.")
             }
             if let existing = try? target.resourceValues(forKeys: [.fileSizeKey]).fileSize,
                Int64(existing) == file.size, !useLatest {
-                completedBytes += file.size
-                progress.completedUnitCount = completedBytes
-                progressHandler(progress)
+                tracker.set(path: file.path, bytes: file.size, total: file.size, progressHandler)
                 continue
             }
 
             try FileManager.default.createDirectory(
                 at: target.deletingLastPathComponent(), withIntermediateDirectories: true)
 
-            let downloadURL = resolveURL(repo: repo, revision: revision, path: file.path)
-            let base = completedBytes
-            try await ModelFileDownloader.download(
-                url: downloadURL,
-                to: target,
-                expectedBytes: file.size
-            ) { bytes in
-                progress.completedUnitCount = base + min(bytes, file.size)
-                progressHandler(progress)
-            }
+            downloads.append(DownloadWork(
+                path: file.path,
+                size: file.size,
+                url: resolveURL(repo: repo, revision: revision, path: file.path),
+                target: target))
+        }
 
-            if file.size > 0 {
-                let size = Int64(
-                    (try? target.resourceValues(forKeys: [.fileSizeKey]).fileSize) ?? 0)
-                guard size == file.size else {
-                    try? FileManager.default.removeItem(at: target)
-                    throw HuggingFaceBackgroundError.downloadFailed(
-                        "\(file.path) (size \(size) != \(file.size))")
+        try await withThrowingTaskGroup(of: Void.self) { group in
+            for download in downloads {
+                group.addTask {
+                    try await ModelFileDownloader.download(
+                        url: download.url,
+                        to: download.target,
+                        expectedBytes: download.size
+                    ) { bytes in
+                        tracker.set(
+                            path: download.path,
+                            bytes: bytes,
+                            total: download.size,
+                            progressHandler)
+                    }
+
+                    if download.size > 0 {
+                        let size = Int64(
+                            (try? download.target.resourceValues(forKeys: [.fileSizeKey]).fileSize) ?? 0)
+                        guard size == download.size else {
+                            try? FileManager.default.removeItem(at: download.target)
+                            throw HuggingFaceBackgroundError.downloadFailed(
+                                "\(download.path) (size \(size) != \(download.size))")
+                        }
+                    }
+                    tracker.set(
+                        path: download.path,
+                        bytes: download.size,
+                        total: download.size,
+                        progressHandler)
                 }
             }
-
-            completedBytes += file.size
-            progress.completedUnitCount = completedBytes
-            progressHandler(progress)
+            try await group.waitForAll()
         }
 
         removeStalePartials(in: destination)
         try writeManifest(files, to: destination, revision: revision, patterns: patterns)
         return destination
+    }
+
+    private struct DownloadWork: Sendable {
+        var path: String
+        var size: Int64
+        var url: URL
+        var target: URL
+    }
+
+    private final class DownloadProgressTracker: @unchecked Sendable {
+        private let lock = NSLock()
+        private let progress: Progress
+        private var completed: [String: Int64] = [:]
+
+        init(files: [FileEntry]) {
+            progress = Progress(totalUnitCount: files.reduce(0) { $0 + $1.size })
+        }
+
+        func publish(_ progressHandler: @Sendable (Progress) -> Void) {
+            progressHandler(progress)
+        }
+
+        func set(
+            path: String,
+            bytes: Int64,
+            total: Int64,
+            _ progressHandler: @Sendable (Progress) -> Void
+        ) {
+            lock.lock()
+            completed[path] = min(bytes, total)
+            progress.completedUnitCount = completed.values.reduce(0, +)
+            let current = progress
+            lock.unlock()
+            progressHandler(current)
+        }
     }
 
     // MARK: Snapshot validation
@@ -298,12 +347,14 @@ struct HuggingFaceBackgroundDownloader: Downloader {
     }
 
     private func treeURL(repo: Repo.ID, revision: String) -> URL {
-        hubURL(["api", "models", repo.namespace, repo.name, "tree", revision])
+        hubURL(["api", "models", repo.namespace, repo.name, "tree"]
+            + pathComponents(revision))
     }
 
     private func resolveURL(repo: Repo.ID, revision: String, path: String) -> URL {
         hubURL(
-            [repo.namespace, repo.name, "resolve", revision]
+            [repo.namespace, repo.name, "resolve"]
+                + pathComponents(revision)
                 + pathComponents(path))
     }
 
@@ -325,7 +376,7 @@ struct HuggingFaceBackgroundDownloader: Downloader {
     }
 }
 
-enum HuggingFaceBackgroundError: LocalizedError {
+enum HuggingFaceBackgroundError: LocalizedError, Sendable {
     case invalidID(String)
     case modelNotFound(String)
     case unexpectedResponse(String)

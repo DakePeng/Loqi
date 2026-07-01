@@ -217,6 +217,10 @@ final class BackgroundModelDownloader: NSObject, URLSessionDownloadDelegate, @un
                 } else if let activeTask = self.live[id]?.first?.task {
                     task = activeTask
                     shouldResume = false
+                } else if let resumeData = Self.takeResumeData(for: id) {
+                    task = session.downloadTask(withResumeData: resumeData)
+                    task.taskDescription = id
+                    shouldResume = true
                 } else {
                     var request = URLRequest(url: url)
                     request.cachePolicy = .reloadIgnoringLocalCacheData
@@ -292,9 +296,15 @@ final class BackgroundModelDownloader: NSObject, URLSessionDownloadDelegate, @un
         lock.unlock()
 
         if shouldCancelTask {
-            cancelledDownload.task.cancel()
+            cancelledDownload.task.cancel(byProducingResumeData: { resumeData in
+                if let resumeData, !resumeData.isEmpty {
+                    Self.writeResumeData(resumeData, for: id)
+                }
+                cancelledDownload.continuation.resume(throwing: URLError(.cancelled))
+            })
+        } else {
+            cancelledDownload.continuation.resume(throwing: URLError(.cancelled))
         }
-        cancelledDownload.continuation.resume(throwing: URLError(.cancelled))
     }
 
     func urlSession(
@@ -379,7 +389,11 @@ final class BackgroundModelDownloader: NSObject, URLSessionDownloadDelegate, @un
         didCompleteWithError error: Error?
     ) {
         guard let error, let id = task.taskDescription else { return }
-        complete(id, result: .failure(error))
+        let resumeData = Self.resumeData(from: error)
+        if let resumeData {
+            Self.writeResumeData(resumeData, for: id)
+        }
+        complete(id, result: .failure(error), preserveResumeData: resumeData != nil)
     }
 
     func urlSessionDidFinishEvents(forBackgroundURLSession session: URLSession) {
@@ -483,12 +497,20 @@ final class BackgroundModelDownloader: NSObject, URLSessionDownloadDelegate, @un
         return pending.mapValues(\.destinationPath)
     }
 
-    private func complete(_ id: String, result: Result<Void, Error>) {
+    private func complete(
+        _ id: String,
+        result: Result<Void, Error>,
+        preserveResumeData: Bool = false
+    ) {
         lock.lock()
         let liveDownloads = live.removeValue(forKey: id) ?? []
+        let wasCancelled = cancelled.contains(id)
         pending[id] = nil
         installing.remove(id)
         cancelled.remove(id)
+        if !wasCancelled, !preserveResumeData {
+            Self.removeResumeData(for: id)
+        }
         persistPendingLocked()
         lock.unlock()
 
@@ -514,6 +536,37 @@ final class BackgroundModelDownloader: NSObject, URLSessionDownloadDelegate, @un
               let pending = try? JSONDecoder().decode([String: PendingDownload].self, from: data)
         else { return [:] }
         return pending
+    }
+
+    private static var resumeDataDirectory: URL {
+        URL.applicationSupportDirectory.appending(
+            path: "BackgroundModelDownloads", directoryHint: .isDirectory)
+    }
+
+    private static func resumeDataURL(for id: String) -> URL {
+        resumeDataDirectory.appending(path: id).appendingPathExtension("resume")
+    }
+
+    private static func writeResumeData(_ data: Data, for id: String) {
+        try? FileManager.default.createDirectory(
+            at: resumeDataDirectory, withIntermediateDirectories: true)
+        try? data.write(to: resumeDataURL(for: id), options: .atomic)
+    }
+
+    private static func takeResumeData(for id: String) -> Data? {
+        let url = resumeDataURL(for: id)
+        guard let data = try? Data(contentsOf: url) else { return nil }
+        try? FileManager.default.removeItem(at: url)
+        return data
+    }
+
+    private static func resumeData(from error: Error) -> Data? {
+        let data = (error as NSError).userInfo[NSURLSessionDownloadTaskResumeData] as? Data
+        return data?.isEmpty == false ? data : nil
+    }
+
+    private static func removeResumeData(for id: String) {
+        try? FileManager.default.removeItem(at: resumeDataURL(for: id))
     }
 
     private func persistPendingLocked() {
