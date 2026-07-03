@@ -1052,6 +1052,7 @@
 				E9C36079467A409333904AF2 /* XCRemoteSwiftPackageReference "swift-huggingface" */,
 				4C58B5B0631047FDC82CC11D /* XCRemoteSwiftPackageReference "mlx-swift-lm" */,
 				F3ECCE7CDC6FD4608DC17374 /* XCRemoteSwiftPackageReference "swift-transformers" */,
+				B71C0FF5EEA7DECADE000001 /* XCRemoteSwiftPackageReference "mlx-swift" */,
 			);
 			preferredProjectObjectVersion = 77;
 			productRefGroup = BE398FD914C1588F983EA2A7 /* Products */;
@@ -1795,6 +1796,14 @@
 			requirement = {
 				kind = exactVersion;
 				version = 3.31.3;
+			};
+		};
+		B71C0FF5EEA7DECADE000001 /* XCRemoteSwiftPackageReference "mlx-swift" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/DakePeng/mlx-swift";
+			requirement = {
+				branch = "loqi/0.31.4-poison-events";
+				kind = branch;
 			};
 		};
 		E74AA41DD45B411B56E3D345 /* XCRemoteSwiftPackageReference "FluidAudio" */ = {
