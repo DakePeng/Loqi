@@ -1,4 +1,6 @@
 import Foundation
+import MLX
+import os
 
 /// Map-reduce summarization sized for a small on-device model: chunk the
 /// transcript at natural boundaries, extract tagged notes per chunk (the
@@ -19,6 +21,8 @@ struct SummaryEngine {
     /// nil (reduce-only callers) maps without vocabulary context.
     var matcher: HotwordMatcher?
     private let prompts = PromptBuilder()
+    private let logger = Logger(
+        subsystem: "com.kunzhipeng.loqi", category: "summaryEngine")
 
     /// Character budget per chunk (≈ tokens for CJK); keeps per-chunk
     /// prefill in the seconds range.
@@ -225,12 +229,18 @@ struct SummaryEngine {
 
     /// Map phase over one batch of entries. `progress` reports
     /// (completedChunks, totalChunks).
+    /// `onChunk` fires after each chunk's note is appended, carrying every
+    /// note mapped so far and the id of the last entry they cover — the
+    /// caller checkpoints these so an interrupted map phase (backgrounded, or
+    /// a hard Metal crash) resumes from the last completed chunk instead of
+    /// remapping the whole transcript.
     func makeNotes(
         for entries: [SessionRecord.Entry],
         speakerLabel: (Int?) -> String?,
         fallbackDate: Date,
         in language: AppLanguage,
-        progress: @MainActor @Sendable (Int, Int) -> Void
+        progress: @MainActor @Sendable (Int, Int) -> Void,
+        onChunk: (@MainActor @Sendable (_ mappedSoFar: [SessionRecord.ChunkNote], _ coveredThroughID: UUID?) -> Void)? = nil
     ) async throws -> [SessionRecord.ChunkNote] {
         let chunks = Self.chunkEntries(entries)
         var notes: [SessionRecord.ChunkNote] = []
@@ -261,28 +271,56 @@ struct SummaryEngine {
                 in: language)
             var parsed = PromptBuilder.ParsedChunkNote()
             // One retry: a single failed or off-format generation would
-            // otherwise degrade this chunk to a headline-only stub.
-            for _ in 0..<2 {
+            // otherwise degrade this chunk to a headline-only stub. The
+            // retry runs hotter — 0.1 is near-deterministic, so re-rolling
+            // at the same temperature would repeat a content-driven format
+            // miss almost verbatim.
+            for attempt in 0..<2 {
                 do {
                     let raw = try await llm.generate(
                         system: prompt.system, user: prompt.user,
-                        maxTokens: Self.chunkNoteMaxTokens, temperature: 0.1)
+                        maxTokens: Self.chunkNoteMaxTokens,
+                        temperature: attempt == 0 ? 0.1 : 0.4,
+                        // Anchor the first record line: the 2B otherwise
+                        // drifts into a compressed schema of its own from
+                        // the very first token (device logs: T:4/P:3/A:4).
+                        responsePrefix: "T\t\(chunkID)\t")
+                    var diagnostics = PromptBuilder.ParseDiagnostics()
                     let records = prompts.parseSummaryRecords(
                         raw,
                         chunkID: chunkID,
                         validSourceIDs: sourceIDs,
                         source: .transcript,
-                        timestamp: chunk.first?.timestamp ?? fallbackDate)
+                        timestamp: chunk.first?.timestamp ?? fallbackDate,
+                        diagnostics: &diagnostics)
                     parsed = prompts.parsedChunkNote(records: records)
+                    if parsed.isEmpty {
+                        // Counts only — transcript/model text never logs.
+                        logger.warning("chunk \(chunkID, privacy: .public) parse empty (attempt \(attempt)): \(diagnostics.logDescription, privacy: .public)")
+                    } else if diagnostics.salvaged > 0 {
+                        logger.info("chunk \(chunkID, privacy: .public) salvaged (attempt \(attempt)): \(diagnostics.logDescription, privacy: .public)")
+                    }
                 } catch is CancellationError {
                     throw CancellationError()
+                } catch let error as MLXError {
+                    // Infrastructure failure (e.g. a GPU abort), not a
+                    // format miss: retrying on a poisoned stream just
+                    // launders the abort into a fallback stub that gets
+                    // checkpointed as real coverage. Let the job's
+                    // suspend/error handling take it.
+                    throw error
+                } catch let error as LLMServiceError {
+                    // A missing/unloadable model (e.g. a failed self-heal
+                    // reload under memory pressure) is a job failure, not
+                    // a format miss — stubbing it hides real breakage.
+                    throw error
                 } catch {
                     parsed = PromptBuilder.ParsedChunkNote()
                 }
                 if !parsed.isEmpty { break }
             }
 
-            notes.append(SessionRecord.ChunkNote(
+            let note = SessionRecord.ChunkNote(
                 // A chunk whose extraction failed still gets an outline
                 // entry: fall back to its opening words.
                 headline: parsed.headline
@@ -294,7 +332,9 @@ struct SummaryEngine {
                 actions: parsed.actions,
                 terms: parsed.terms,
                 summaryRecords: parsed.summaryRecords.isEmpty ? nil : parsed.summaryRecords,
-                isFallback: parsed.isEmpty ? true : nil))
+                isFallback: parsed.isEmpty ? true : nil)
+            notes.append(note)
+            await onChunk?(notes, chunk.last?.id)
             // Carry the last real topic forward; a failed chunk keeps the
             // prior one rather than seeding context with fallback text.
             if let headline = parsed.headline { previousTopic = headline }
@@ -447,8 +487,12 @@ struct SummaryEngine {
         }
 
         for record in records {
-            guard let (label, text) = labelAndText(record),
-                  keep(label: label, text: text) else { continue }
+            guard let (label, rawText) = labelAndText(record) else { continue }
+            // Scrub leaked m-id citations here too so notes persisted
+            // before the parse-time scrub reduce cleanly (an id-only
+            // record scrubs to empty and drops out via keep()).
+            let text = PromptBuilder.strippedSourceIDTokens(rawText)
+            guard keep(label: label, text: text) else { continue }
             lines.append("\(label): \(text)")
         }
         if let maxCharacters {
@@ -699,21 +743,32 @@ struct SummaryEngine {
         style: SummaryStyle = .meeting,
         length: SummaryLength = .standard,
         in language: AppLanguage,
-        progress: @escaping @MainActor @Sendable (Int, Int) -> Void
+        progress: @escaping @MainActor @Sendable (Int, Int) -> Void,
+        checkpoint: (@MainActor @Sendable (_ notes: [SessionRecord.ChunkNote], _ coveredThroughID: UUID?) -> Void)? = nil
     ) async throws -> (summary: String, notes: [SessionRecord.ChunkNote]) {
         let (uncovered, cached) = Self.uncoveredEntries(of: record)
         if !uncovered.isEmpty {
             try await llm.load(policy: .requireDownloaded)
         }
         let mapChunks = Self.chunkEntries(uncovered).count
-        let totalSteps = mapChunks + 1
+        // Cached chunks count as completed steps: a resume (or a session
+        // with live notes) then reports progress on the same scale as the
+        // original run instead of restarting at 0/remaining — which reads
+        // as "all progress lost" even though the mapped chunks are kept.
+        let cachedSteps = cached.count
+        let totalSteps = cachedSteps + mapChunks + 1
         let fresh = try await makeNotes(
             for: uncovered,
             speakerLabel: { record.speakerLabel($0) },
             fallbackDate: record.startedAt,
             in: language,
             progress: { done, _ in
-                progress(done, totalSteps)
+                progress(cachedSteps + done, totalSteps)
+            },
+            onChunk: { mappedSoFar, coveredThroughID in
+                // Persist cached + everything mapped so far, advancing the
+                // coverage boundary to this chunk's last entry.
+                checkpoint?(cached + mappedSoFar, coveredThroughID)
             })
         let notes = cached + fresh
         let mappedCount = fresh.count
@@ -727,7 +782,7 @@ struct SummaryEngine {
             },
             in: language,
             progress: { done, _ in
-                progress(mappedCount + done, totalSteps)
+                progress(cachedSteps + mappedCount + done, totalSteps)
             })
         return (summary, notes)
     }
@@ -1027,7 +1082,10 @@ enum SummaryRecordReducer {
     }
 
     private static func displayText(_ record: Record, includeSource: Bool) -> String {
-        let body = record.kind == .action ? actionText(record) : record.text
+        // Scrubbed at render time too — covers notes persisted before the
+        // parse-time m-id scrub existed.
+        let body = PromptBuilder.strippedSourceIDTokens(
+            record.kind == .action ? actionText(record) : record.text)
         guard includeSource, record.source == .photo else { return body }
         let label = record.sourceLabel?.trimmingCharacters(in: .whitespacesAndNewlines)
         return "[\(label?.isEmpty == false ? label! : "Photo")] \(body)"
