@@ -193,6 +193,17 @@ struct SessionRecord: Identifiable, Codable, Sendable {
     /// once the transcript is complete (`importing` flips to false/nil in
     /// the same write).
     var importCheckpoint: ImportCheckpoint?
+    /// A summary that was requested but hasn't completed. Persisted so a
+    /// summary killed mid-run (jetsam, or the uncatchable background-GPU
+    /// abort) restarts at next launch instead of silently vanishing — the
+    /// chunk-note checkpoint makes the re-run resume where it stopped.
+    /// Cleared on completion, failure, or explicit cancel.
+    var pendingSummary: PendingSummary?
+
+    struct PendingSummary: Codable, Sendable {
+        var styleRaw: String
+        var lengthRaw: String
+    }
     /// True when speaker separation was requested for this session but the
     /// diarizer failed (model download or analysis) — the transcript is
     /// intact, it just has no speaker labels. Optional: legacy records and

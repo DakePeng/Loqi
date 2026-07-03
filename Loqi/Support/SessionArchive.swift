@@ -1,5 +1,6 @@
 import Foundation
 import Observation
+import os
 
 /// Saved-session storage: one JSON file per session in Application Support.
 /// Everything stays on-device.
@@ -23,8 +24,13 @@ final class SessionArchive {
     private(set) var sessions: [SessionRecord] = []
     private var didLoad = false
     @ObservationIgnored private var deletedSessionIDs: Set<UUID> = []
+    /// Encode + disk I/O for record JSON, off the main actor.
+    @ObservationIgnored private let persister = RecordPersister(
+        directory: SessionArchive.directory)
+    /// Tail of the ordered persist handoff chain; see `enqueuePersist`.
+    @ObservationIgnored private var persistHandoff: Task<Void, Never>?
 
-    private static var directory: URL {
+    nonisolated private static var directory: URL {
         URL.applicationSupportDirectory.appending(path: "Sessions", directoryHint: .isDirectory)
     }
 
@@ -171,8 +177,9 @@ final class SessionArchive {
         for index in offsets {
             let record = sessions[index]
             deletedSessionIDs.insert(record.id)
-            try? FileManager.default.removeItem(
-                at: Self.directory.appending(path: "\(record.id.uuidString).json"))
+            // Through the persister so a queued snapshot can't land after
+            // (and undo) the deletion.
+            removePersisted(id: record.id)
             if let fileName = record.audioFileName {
                 try? FileManager.default.removeItem(
                     at: Self.recordingURL(fileName: fileName))
@@ -316,15 +323,120 @@ final class SessionArchive {
         didLoad = true
     }
 
+    /// Await all queued record writes hitting disk. Called when the scene
+    /// backgrounds (a jetsam must not lose the last coalesced checkpoint)
+    /// and by tests that read the directory right after a mutation.
+    func flushPersistence() async {
+        await persistHandoff?.value
+        await persister.flush()
+    }
+
+    /// Hand one operation to the persister, chained behind the previous
+    /// handoff: independent fire-and-forget tasks could reach the actor out
+    /// of order, letting an update overtake a delete and resurrect the
+    /// record's file.
+    private func enqueuePersist(
+        _ operation: @escaping @Sendable (RecordPersister) async -> Void
+    ) {
+        let persister = persister
+        persistHandoff = Task { [previous = persistHandoff] in
+            await previous?.value
+            await operation(persister)
+        }
+    }
+
     private func persist(_ record: SessionRecord) {
-        let fm = FileManager.default
-        try? fm.createDirectory(at: Self.directory, withIntermediateDirectories: true)
-        let encoder = JSONEncoder()
-        encoder.dateEncodingStrategy = .iso8601
-        if let data = try? encoder.encode(record) {
-            try? data.write(
-                to: Self.directory.appending(path: "\(record.id.uuidString).json"),
-                options: .atomic)
+        enqueuePersist { await $0.write(record) }
+    }
+
+    private func removePersisted(id: UUID) {
+        enqueuePersist { await $0.remove(id: id) }
+    }
+}
+
+/// Serializes record JSON writes off the main actor, coalescing bursts per
+/// record — during an import checkpoint or a summary map phase the same
+/// record is re-persisted once per segment/chunk, and a synchronous encode
+/// of a large transcript on the main actor freezes the UI (and delays the
+/// scenePhase delivery the GPU gates depend on). The latest snapshot per
+/// record wins; a `remove` supersedes any queued write so a deleted record
+/// can't be resurrected by an in-flight one. Mirrors `JournalWriter`.
+actor RecordPersister {
+    private enum Operation {
+        case write(SessionRecord)
+        case remove
+    }
+
+    private let directory: URL
+    private var pending: [UUID: Operation] = [:]
+    private var draining = false
+    private let logger = Logger(
+        subsystem: "com.kunzhipeng.loqi", category: "archive")
+
+    init(directory: URL) {
+        self.directory = directory
+    }
+
+    /// Queue the latest snapshot. Returns immediately; encode + disk write
+    /// happen on this actor's executor.
+    func write(_ record: SessionRecord) {
+        pending[record.id] = .write(record)
+        startDraining()
+    }
+
+    /// Queue the record file's deletion, dropping any queued snapshot.
+    func remove(id: UUID) {
+        pending[id] = .remove
+        startDraining()
+    }
+
+    /// Process everything queued right now — lets tests (and shutdown
+    /// paths) await durability. The background drain then finds nothing.
+    func flush() {
+        drainOnce()
+    }
+
+    private func startDraining() {
+        guard !draining else { return }
+        draining = true
+        Task { await self.drain() }
+    }
+
+    private func drain() {
+        // No `await` inside drainOnce, so each pass runs atomically on the
+        // actor: an operation arriving meanwhile lands in the next pass.
+        while !pending.isEmpty {
+            drainOnce()
+        }
+        draining = false
+    }
+
+    private func drainOnce() {
+        let batch = pending
+        pending = [:]
+        for (id, operation) in batch {
+            let started = ContinuousClock.now
+            perform(operation, id: id)
+            let elapsed = started.duration(to: .now)
+            if elapsed > .milliseconds(250) {
+                logger.warning("slow record persist: \(String(describing: elapsed)) for \(id)")
+            }
+        }
+    }
+
+    private func perform(_ operation: Operation, id: UUID) {
+        let url = directory.appending(path: "\(id.uuidString).json")
+        switch operation {
+        case .write(let record):
+            try? FileManager.default.createDirectory(
+                at: directory, withIntermediateDirectories: true)
+            let encoder = JSONEncoder()
+            encoder.dateEncodingStrategy = .iso8601
+            if let data = try? encoder.encode(record) {
+                try? data.write(to: url, options: .atomic)
+            }
+        case .remove:
+            try? FileManager.default.removeItem(at: url)
         }
     }
 }

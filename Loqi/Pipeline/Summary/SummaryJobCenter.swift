@@ -1,5 +1,6 @@
 import Foundation
 import Observation
+import os
 #if os(iOS)
 import UIKit
 #endif
@@ -110,6 +111,9 @@ final class SummaryJobCenter {
         let suggestVocabulary: Bool
     }
 
+    private let logger = Logger(
+        subsystem: "com.kunzhipeng.loqi", category: "summaryJobs")
+
     private let llm: LLMService
     private let archive: SessionArchive
     private let hotwords: HotwordStore
@@ -154,6 +158,8 @@ final class SummaryJobCenter {
         errors[sessionID] = nil
         suspendedSummaries[sessionID] = nil
         backgroundPausedRetranscribeTasks[sessionID] = nil
+        // An explicit cancel must not resurrect the summary at next launch.
+        clearPendingSummary(sessionID)
         if let index = retranscribeQueue.firstIndex(where: { $0.sessionID == sessionID }) {
             retranscribeQueue.remove(at: index)
             activities[sessionID] = nil
@@ -233,8 +239,9 @@ final class SummaryJobCenter {
     }
 
     /// Scene moved to/from the background. Metal-backed work can't run there:
-    /// iOS aborts the process instead of throwing an error. Summary generation
-    /// and second-pass re-transcribe restart on foreground.
+    /// iOS aborts the process instead of throwing an error. Summary
+    /// generation, second-pass re-transcribe, and file import all restart on
+    /// foreground; imports resume from their checkpoint instead of scratch.
     func setBackgrounded(_ value: Bool) {
         guard value != isBackgrounded else { return }
         isBackgrounded = value
@@ -243,15 +250,58 @@ final class SummaryJobCenter {
 
     nonisolated static func shouldSuspendForBackground(_ activity: Activity) -> Bool {
         switch activity {
-        case .downloadingModel, .summarizing, .retranscribing:
+        case .downloadingModel, .summarizing, .retranscribing, .importing:
             true
         default:
             false
         }
     }
 
+    /// A job is actively working right now (not queued or held). While one
+    /// runs in the foreground, a memory warning sheds the MLX cache instead
+    /// of unloading the weights — a full unload mid-job just forces an
+    /// immediate self-heal reload, which costs more memory churn (and GPU
+    /// time) than it frees. Same case set as the background suspend.
+    var hasRunningLLMJob: Bool {
+        activities.values.contains(where: Self.shouldSuspendForBackground)
+    }
+
     nonisolated static func shouldResumeLLMJobsAfterRecording(isBackgrounded: Bool) -> Bool {
         !isBackgrounded
+    }
+
+    /// A manual summarize whose style AND length match the existing
+    /// summary is the user asking to REDO it — cached notes must not
+    /// short-circuit the map. (A style/length change stays reduce-only;
+    /// first-time summaries have no summary to match.)
+    nonisolated static func isRedoRequest(
+        _ record: SessionRecord?, style: SummaryStyle, length: SummaryLength
+    ) -> Bool {
+        guard let record, record.summary?.isEmpty == false else { return false }
+        return record.summaryStyle == style.rawValue
+            && record.summaryLength == length.rawValue
+    }
+
+    /// Drop the map coverage so the next summarize regenerates every
+    /// chunk note instead of reducing over the cached ones.
+    private func clearMapCoverage(_ sessionID: UUID) {
+        guard var record = archive.sessions.first(where: { $0.id == sessionID })
+        else { return }
+        record.chunkNotes = nil
+        record.liveNotesEndEntryID = nil
+        archive.update(record)
+    }
+
+    /// Notes covering a resolvable prefix of the transcript — what
+    /// `SummaryEngine.uncoveredEntries` can actually resume from. Live
+    /// notes from a recording have the same shape; a resume can't tell
+    /// them apart, so it skips hygiene for those too (a quality trade,
+    /// not a correctness one).
+    nonisolated static func hasUsableMapCheckpoint(_ record: SessionRecord) -> Bool {
+        guard let notes = record.chunkNotes, !notes.isEmpty,
+              let endID = record.liveNotesEndEntryID
+        else { return false }
+        return record.entries.contains { $0.id == endID }
     }
 
     private static func isHeldActivity(_ activity: Activity?) -> Bool {
@@ -261,6 +311,7 @@ final class SummaryJobCenter {
     private func suspendBackgroundUnsafeJobs() {
         for (sessionID, activity) in activities {
             guard Self.shouldSuspendForBackground(activity) else { continue }
+            logger.info("bg suspend: \(sessionID, privacy: .public) activity=\(String(describing: activity), privacy: .public)")
             if case .summarizing = activity,
                let req = activeSummarizeRequest[sessionID] {
                 suspendedSummaries[sessionID] = req
@@ -301,6 +352,19 @@ final class SummaryJobCenter {
                 self.drainRetranscribeQueue()
             }
         }
+        // Imports resume fresh via resumeUnfinishedImports() below (same
+        // as the recording-preemption path); clear the held badge first so
+        // a checkpoint-less one (killed before onAudioReady) doesn't show
+        // "paused" forever instead of getting swept on next launch.
+        for (sessionID, activity) in activities
+        where activity == .pausedForBackground
+            && archive.sessions.first(where: { $0.id == sessionID })?.importing == true {
+            activities[sessionID] = nil
+        }
+        resumeUnfinishedImports()
+        // Catch-all sweep for summaries whose job died without a held
+        // activity (e.g. cancelled by a memory-warning unload).
+        resumeUnfinishedSummaries()
     }
 
     private func resumeLLMJobs() {
@@ -314,16 +378,18 @@ final class SummaryJobCenter {
             Task { [weak self] in
                 await oldTask?.value
                 guard let self, !self.isBackgrounded else { return }
-                // Clear the held activity so the restart's isBusy guard passes,
-                // then re-run from scratch (the partial summary was never saved).
+                // Clear the held activity so the restart's isBusy guard passes;
+                // the restart resumes from the chunk-note checkpoint.
                 if self.activities[sessionID] == .pausedForBackground {
                     self.activities[sessionID] = nil
                 }
                 guard !self.isBusy(sessionID) else { return }
+                self.logger.info("fg resume: restarting summarize \(sessionID, privacy: .public)")
                 self.summarize(
                     sessionID: sessionID, style: req.style, length: req.length,
                     allowDownload: req.allowDownload,
-                    suggestVocabulary: req.suggestVocabulary)
+                    suggestVocabulary: req.suggestVocabulary,
+                    isResume: true)
             }
         }
     }
@@ -343,12 +409,14 @@ final class SummaryJobCenter {
         style: SummaryStyle,
         length: SummaryLength,
         allowDownload: Bool = false,
-        suggestVocabulary: Bool = false
+        suggestVocabulary: Bool = false,
+        isResume: Bool = false
     ) {
         guard !isRecording(), !isBusy(sessionID),
               archive.sessions.contains(where: { $0.id == sessionID })
         else { return }
         errors[sessionID] = nil
+        markPendingSummary(sessionID: sessionID, style: style, length: length)
         activeSummarizeRequest[sessionID] = SummarizeRequest(
             style: style, length: length, allowDownload: allowDownload,
             suggestVocabulary: suggestVocabulary)
@@ -361,20 +429,56 @@ final class SummaryJobCenter {
             do {
                 try await loadModel(sessionID: sessionID, allowDownload: allowDownload)
                 activities[sessionID] = .summarizing(done: 0, total: 0)
-                if !suggestVocabulary,
+                // An explicit re-run with the SAME style and length is a
+                // redo request: the user wants a better summary, not the
+                // cached one re-rendered. Clear coverage so the map phase
+                // regenerates the notes. A style/length change keeps the
+                // cheap reduce-only path below.
+                if !isResume, !suggestVocabulary,
+                   Self.isRedoRequest(
+                       archive.sessions.first(where: { $0.id == sessionID }),
+                       style: style, length: length) {
+                    logger.info("redo request: clearing map coverage for \(sessionID, privacy: .public)")
+                    clearMapCoverage(sessionID)
+                } else if !suggestVocabulary,
                    try await renderCachedSummaryIfPossible(
                     sessionID: sessionID, style: style, length: length) {
+                    logger.info("summary rendered from cached notes (reduce-only)")
+                    clearPendingSummary(sessionID)
                     return
                 }
                 try await runSummarize(
                     sessionID: sessionID, style: style, length: length,
-                    suggestVocabulary: suggestVocabulary)
+                    suggestVocabulary: suggestVocabulary, isResume: isResume)
+                clearPendingSummary(sessionID)
             } catch is CancellationError {
-                // User cancelled: no error row.
+                // Suspended (recording/background) or user-cancelled; a
+                // suspend resumes in-memory and an explicit cancel clears
+                // the pending marker itself — keeping it here is what lets
+                // a crashed/killed summary restart at next launch.
+                requeueIfSilentlyCancelled(sessionID)
             } catch {
                 errors[sessionID] = error.localizedDescription
+                // A failed summary must not auto-retry every launch.
+                clearPendingSummary(sessionID)
             }
         }
+    }
+
+    /// A `CancellationError` with the activity neither held for a
+    /// recording/background resume nor explicitly cancelled (which clears
+    /// the pending marker first) came from elsewhere — e.g. a
+    /// memory-warning `unload()` cancelling the model load under the job.
+    /// Without this the job dies silently: no error row, no retry until
+    /// the next cold launch. Re-issue once teardown finishes.
+    private func requeueIfSilentlyCancelled(_ sessionID: UUID) {
+        guard !Self.isHeldActivity(activities[sessionID]),
+              archive.sessions.first(where: { $0.id == sessionID })?.pendingSummary != nil
+        else { return }
+        // Scheduled, not called: the job's deferred finishJob must clear
+        // the activity first or summarize()'s isBusy guard rejects the
+        // restart. resumeUnfinishedSummaries re-checks everything anyway.
+        Task { self.resumeUnfinishedSummaries() }
     }
 
     /// Second-pass accuracy path: offline re-transcription of the saved
@@ -500,11 +604,18 @@ final class SummaryJobCenter {
         length: SummaryLength,
         allowDownload: Bool = false
     ) {
-        guard !isRecording() else { return }
+        guard !isRecording() else {
+            logger.info("retranscribe rejected: recording in progress")
+            return
+        }
         for id in ids {
-            guard !isBusy(id),
-                  archive.sessions.contains(where: { $0.id == id })
-            else { continue }
+            guard archive.sessions.contains(where: { $0.id == id }) else { continue }
+            guard !isBusy(id) else {
+                // Silent before — "the button does nothing" reports were
+                // undiagnosable without knowing what holds the session.
+                logger.info("retranscribe rejected: \(id, privacy: .public) busy with \(String(describing: self.activities[id]), privacy: .public)")
+                continue
+            }
             errors[id] = nil
             activities[id] = .queuedRetranscribe
             retranscribeQueue.append(RetranscribeRequest(
@@ -515,8 +626,15 @@ final class SummaryJobCenter {
     }
 
     private func drainRetranscribeQueue() {
-        guard retranscribeWorker == nil, !retranscribeQueue.isEmpty,
-              !pausedForRecording, !isBackgrounded else { return }
+        guard !retranscribeQueue.isEmpty else { return }
+        guard retranscribeWorker == nil else {
+            logger.info("retranscribe drain: worker already running")
+            return
+        }
+        guard !pausedForRecording, !isBackgrounded else {
+            logger.info("retranscribe drain held: pausedForRecording=\(self.pausedForRecording) backgrounded=\(self.isBackgrounded)")
+            return
+        }
         retranscribeWorker = Task {
             defer { retranscribeWorker = nil }
             while !retranscribeQueue.isEmpty, !Task.isCancelled, !isBackgrounded {
@@ -587,7 +705,10 @@ final class SummaryJobCenter {
             try Task.checkCancellation()
             archive.update(updated)
             // The transcript is archived; from here it's an LLM summarize that
-            // backgrounding can cancel and restart on its own.
+            // backgrounding can cancel and restart on its own — persist that
+            // intent so even a process kill restarts it at next launch.
+            markPendingSummary(
+                sessionID: sessionID, style: request.style, length: request.length)
             activeSummarizeRequest[sessionID] = SummarizeRequest(
                 style: request.style, length: request.length,
                 allowDownload: request.allowDownload,
@@ -597,10 +718,13 @@ final class SummaryJobCenter {
             try await runSummarize(
                 sessionID: sessionID, style: request.style, length: request.length,
                 suggestVocabulary: suggestVocabulary)
+            clearPendingSummary(sessionID)
         } catch is CancellationError {
-            // User cancelled: no error row.
+            // Suspended or user-cancelled; see summarize()'s handling.
+            requeueIfSilentlyCancelled(sessionID)
         } catch {
             errors[sessionID] = error.localizedDescription
+            clearPendingSummary(sessionID)
         }
     }
 
@@ -691,6 +815,48 @@ final class SummaryJobCenter {
         }
     }
 
+    /// Re-issues summaries that were requested but never finished — a
+    /// process kill mid-summary (jetsam, or the uncatchable background-GPU
+    /// abort) leaves the persisted intent behind. Cheap to redo: the map
+    /// phase resumes from the chunk-note checkpoint. Called on cold launch
+    /// after `resumeUnfinishedImports` (an importing placeholder re-arms
+    /// its auto-summary through the import resume itself).
+    func resumeUnfinishedSummaries() {
+        guard !isRecording() else { return }
+        for session in archive.sessions
+        where session.pendingSummary != nil && session.importing != true
+            && !isBusy(session.id) {
+            guard let pending = session.pendingSummary,
+                  let style = SummaryStyle(rawValue: pending.styleRaw),
+                  let length = SummaryLength(rawValue: pending.lengthRaw)
+            else {
+                // Unparseable marker (style/length from a future build):
+                // drop it rather than rescan every launch.
+                clearPendingSummary(session.id)
+                continue
+            }
+            logger.info("pending-summary sweep: restarting \(session.id, privacy: .public) notes=\(session.chunkNotes?.count ?? 0)")
+            summarize(sessionID: session.id, style: style, length: length, isResume: true)
+        }
+    }
+
+    private func markPendingSummary(
+        sessionID: UUID, style: SummaryStyle, length: SummaryLength
+    ) {
+        guard var record = archive.sessions.first(where: { $0.id == sessionID }) else { return }
+        record.pendingSummary = SessionRecord.PendingSummary(
+            styleRaw: style.rawValue, lengthRaw: length.rawValue)
+        archive.update(record)
+    }
+
+    private func clearPendingSummary(_ sessionID: UUID) {
+        guard var record = archive.sessions.first(where: { $0.id == sessionID }),
+              record.pendingSummary != nil
+        else { return }
+        record.pendingSummary = nil
+        archive.update(record)
+    }
+
     /// Shared task-lifecycle plumbing for a fresh import and a resumed one:
     /// the gate, the background grace, progress wiring, and what happens on
     /// success/cancel/failure. `engine` does the actual transcribe/diarize/
@@ -719,9 +885,11 @@ final class SummaryJobCenter {
                 // automatically once transcription lands.
                 self.autoSummarizeAfterImport(sessionID: sessionID)
             } catch is CancellationError {
-                if self.activities[sessionID] == .pausedForRecording {
-                    // Recording preempted this import — checkpoint (if any)
-                    // stays; resumeAfterRecording() re-enqueues it.
+                if self.activities[sessionID] == .pausedForRecording
+                    || self.activities[sessionID] == .pausedForBackground {
+                    // Preempted by a recording or the scene backgrounding —
+                    // checkpoint (if any) stays; resumeAfterRecording()/
+                    // resumeBackgroundJobs() re-enqueues it.
                 } else {
                     self.hotwords.discardSuggestions(forSession: sessionID)
                     self.archive.delete(id: sessionID)
@@ -891,7 +1059,8 @@ final class SummaryJobCenter {
         sessionID: UUID,
         style: SummaryStyle,
         length: SummaryLength,
-        suggestVocabulary: Bool
+        suggestVocabulary: Bool,
+        isResume: Bool = false
     ) async throws {
         // Re-fetch after the (possibly minutes-long) model download: edits
         // made meanwhile must not be clobbered by a stale snapshot, and a
@@ -899,21 +1068,50 @@ final class SummaryJobCenter {
         guard let session = archive.sessions.first(where: { $0.id == sessionID })
         else { return }
         let engine = SummaryEngine(llm: llm, matcher: hotwords.matcher)
+        logger.info("runSummarize: isResume=\(isResume) notes=\(session.chunkNotes?.count ?? 0) usableCheckpoint=\(Self.hasUsableMapCheckpoint(session))")
         let refreshed = await refreshAttachmentText(in: session)
         if refreshed.changed { archive.update(refreshed.record) }
         // Hygiene first: retro-apply hotword fixes and catch up refinement
         // the live session dropped, so the notes map over the cleanest text
-        // we can produce.
-        let hygiene = await engine.hygienePass(refreshed.record)
+        // we can produce. Skipped when resuming onto an existing map
+        // checkpoint: hygiene already ran before that map started, and
+        // re-running it re-rolls hotword restores that failed last time
+        // (LLM, nondeterministic) — one changed entry inside the covered
+        // range wipes the checkpoint and remaps the whole transcript (the
+        // background→foreground progress-reset bug).
+        let hygiene: (record: SessionRecord, changed: Bool)
+        if isResume, Self.hasUsableMapCheckpoint(refreshed.record) {
+            hygiene = (refreshed.record, false)
+            logger.info("hygiene skipped (resume onto checkpoint)")
+        } else {
+            hygiene = await engine.hygienePass(refreshed.record)
+            if hygiene.changed, refreshed.record.chunkNotes != nil,
+               hygiene.record.chunkNotes == nil {
+                logger.warning("hygiene reset coverage: notes wiped, full remap ahead")
+            }
+        }
         let cleaned = hygiene.record
         if hygiene.changed { archive.update(cleaned) }
         let result = try await engine.summarize(
             cleaned, style: style, length: length,
-            in: SummaryEngine.summaryLanguage(for: cleaned)
-        ) { [weak self] done, total in
-            guard let self, self.activities[sessionID] != nil else { return }
-            self.activities[sessionID] = .summarizing(done: done, total: total)
-        }
+            in: SummaryEngine.summaryLanguage(for: cleaned),
+            progress: { [weak self] done, total in
+                guard let self, self.activities[sessionID] != nil else { return }
+                self.activities[sessionID] = .summarizing(done: done, total: total)
+            },
+            checkpoint: { [weak self] notes, coveredThroughID in
+                // Persist each completed map chunk so a mid-summary
+                // interruption (background, or a hard Metal crash) resumes
+                // from here instead of remapping the whole transcript.
+                // Re-fetch to avoid clobbering a concurrent edit.
+                guard let self,
+                      var record = self.archive.sessions.first(where: { $0.id == sessionID })
+                else { return }
+                record.chunkNotes = notes
+                record.liveNotesEndEntryID = coveredThroughID
+                self.archive.update(record)
+                self.logger.info("summary checkpoint: \(notes.count) notes, coverage full=\(coveredThroughID == record.entries.last?.id)")
+            })
         var updated = cleaned
         updated.summary = result.summary
         updated.summaryEdited = nil

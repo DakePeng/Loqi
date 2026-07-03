@@ -171,6 +171,9 @@ final class CaptionPipeline {
     private var thermalWatch: Task<Void, Never>?
     private var systemObservers: [NSObjectProtocol] = []
     private var backgroundUnload: Task<Void, Never>?
+    /// Tail of the ordered LLM scene-state handoff chain; see
+    /// `forwardLLMSceneState`.
+    private var llmSceneForward: Task<Void, Never>?
     /// Fires on critical system memory pressure, foreground or background.
     private var memoryPressureSource: DispatchSourceMemoryPressure?
     private var lastMemoryShed: ContinuousClock.Instant?
@@ -295,6 +298,7 @@ final class CaptionPipeline {
             self.recoverInterruptedSession()
             self.archive.sweepOrphans()
             self.jobs.resumeUnfinishedImports()
+            self.jobs.resumeUnfinishedSummaries()
         }
 
         // UIKit's memory warning only arrives in the foreground; a
@@ -916,8 +920,36 @@ final class CaptionPipeline {
     /// Scene is leaving the foreground. Stop live speaker separation before
     /// background: its FluidAudio/CoreML path submits Metal command buffers,
     /// and iOS kills background submissions instead of handing us an error.
+    ///
+    /// Post-hoc LLM/ASR jobs are ABANDONED here, at `.inactive` (which
+    /// fires before `.background`): cancel the job, flag the LLM so its
+    /// generation loop stops at the next boundary, and touch nothing else —
+    /// no draining, no cleanup. Waiting on the GPU during a scene
+    /// transition can wedge MLX's global eval lock forever (the frozen-app
+    /// bug); abandoning costs at most one checkpointed chunk, and even a
+    /// buffer abort surfaces as a caught error in LLMService (forked mlx)
+    /// that suspends the job for a foreground restart. Transient
+    /// `.inactive` (control center, app switcher) pays the same small
+    /// price.
     func handleInactive() {
         pauseLiveDiarizationForSceneExit()
+        // Skip the .inactive that precedes .active on the way back from
+        // background (isBackgrounded still set): only act when actually
+        // leaving the foreground.
+        guard !isBackgrounded else { return }
+        jobs.setBackgrounded(true)
+        forwardLLMSceneState(backgrounded: true)
+    }
+
+    /// Ordered forwarding of scene state to the LLM actor: each handoff is
+    /// chained behind the previous one, so a rapid inactive→active flip can
+    /// never deliver set-true after set-false and leave generation parked
+    /// forever.
+    private func forwardLLMSceneState(backgrounded: Bool) {
+        llmSceneForward = Task { [llm, previous = llmSceneForward] in
+            await previous?.value
+            await llm.setBackgrounded(backgrounded)
+        }
     }
 
     /// Scene went to background. A running session keeps capturing — the
@@ -929,11 +961,23 @@ final class CaptionPipeline {
         pauseLiveDiarizationForSceneExit()
         isBackgrounded = true
         // No Metal work may run in the background — it aborts the process
-        // uncatchably. Park new generations at the model, and cancel any
-        // post-hoc summarize/re-transcribe job that could reach LLM or
-        // FluidAudio work. Imports keep their existing grace path.
-        Task { [llm] in await llm.setBackgrounded(true) }
+        // uncatchably (an in-flight ASR decode included). Post-hoc jobs were
+        // already cancelled at `.inactive` (earlier, so their GPU work could
+        // drain); this re-asserts the suspension defensively (idempotent).
+        // Imports/summaries resume from their checkpoints on foreground.
+        forwardLLMSceneState(backgrounded: true)
         jobs.setBackgrounded(true)
+        // Persistence is asynchronous and coalesced; land whatever's queued
+        // before a background jetsam can drop it. The grace keeps iOS from
+        // suspending the process mid-flush — without it this Task races
+        // suspension and a jetsam can revert the session to its pre-job
+        // state (e.g. a summary checkpoint that never reached disk).
+        let flushGrace = BackgroundTaskGrace()
+        flushGrace.begin(name: "persist-flush")
+        Task { [archive] in
+            await archive.flushPersistence()
+            flushGrace.end()
+        }
         // Photo descriptions pause in BOTH branches: post-hoc jobs can be
         // mid-generation with no session running.
         Task { [describeQueue] in await describeQueue?.setPaused(true) }
@@ -941,20 +985,18 @@ final class CaptionPipeline {
             Task { [refinement, noteQueue, llm] in
                 await refinement?.setPaused(true)
                 await noteQueue?.setPaused(true)
-                // All LLM work is paused back here, so the loaded weights
-                // are pure dead weight — and the single largest jetsam
-                // target during long locked-screen recordings. Drop them;
-                // handleForeground reloads and the queues catch up.
+                // Request an unload; LLMService defers MLX cleanup until
+                // foreground if iOS has already revoked GPU access.
                 await llm.unload()
             }
         } else {
             backgroundUnload = Task { [llm, streamingDiarizer, weak self] in
                 try? await Task.sleep(for: .seconds(120))
                 guard !Task.isCancelled else { return }
-                // A background import may still be running in its grace
-                // window — its own teardown frees the offline diarizer. The
-                // resident weights worth shedding here are the LLM and the
-                // streaming model.
+                // A paused import still holds its activity slot until
+                // foreground resumes it, so hasActiveWork covers it here too.
+                // The resident weights worth shedding are the LLM and the
+                // streaming model; LLMService defers MLX cleanup if needed.
                 guard self?.jobs.hasActiveWork != true else { return }
                 await llm.unload()
                 await streamingDiarizer.unload()
@@ -966,7 +1008,7 @@ final class CaptionPipeline {
         isBackgrounded = false
         resumeLiveDiarizationAfterSceneExit()
         // Un-park the model and restart any LLM job background cancelled.
-        Task { [llm] in await llm.setBackgrounded(false) }
+        forwardLLMSceneState(backgrounded: false)
         jobs.setBackgrounded(false)
         backgroundUnload?.cancel()
         backgroundUnload = nil
@@ -1666,7 +1708,7 @@ final class CaptionPipeline {
     }
 
     /// Memory-warning hook (RootView forwards the notification). The system
-    /// is about to kill us — drop the big models, not just the MLX cache.
+    /// is about to kill us — drop what can be dropped without background GPU.
     /// Tier-1 captions keep working; the LLM reloads on the next quiet gap.
     func handleMemoryWarning() {
         // Coalesce bursts of critical-pressure events — one shed is enough —
@@ -1676,16 +1718,34 @@ final class CaptionPipeline {
         // again. The headroom check at the dispatch source already stops
         // system-wide thrash.
         if let shed = lastMemoryShed, shed.duration(to: .now) < .seconds(3) { return }
+        // While a summarize/import/re-transcribe is actively running in the
+        // foreground, unloading the weights is self-defeating: the job's
+        // very next generate self-heals with a full reload, so the warning
+        // buys churn (10s+ of load, extra allocation spikes) instead of
+        // headroom. Shed the MLX buffer cache and keep working; a warning
+        // with no job running (or backgrounded — jobs are held there)
+        // still unloads fully.
+        let shedOnly = !isBackgrounded && jobs.hasRunningLLMJob
+        #if os(iOS)
+        let sceneState = UIApplication.shared.applicationState.rawValue
+        logger.warning(
+            "memory warning: \(shedOnly ? "shedding cache (job running)" : "unloading models") (appState=\(sceneState))")
+        #else
         logger.warning("memory warning: unloading models")
+        #endif
         lastMemoryShed = .now
         setStatus(.llm, nil)
         setStatus(.memory, String(localized: "AI features paused (low memory)"))
         let shouldUnloadVoiceprint = Self.shouldUnloadVoiceprintOnMemoryWarning(
             isRunning: isRunning,
             diarizationActive: diarizationActive)
-        Task { [llm, streamingDiarizer, refinement, shouldUnloadVoiceprint] in
+        Task { [llm, streamingDiarizer, refinement, shouldUnloadVoiceprint, shedOnly] in
             await refinement?.setPaused(true)
-            await llm.unload()
+            if shedOnly {
+                await llm.clearCache()
+            } else {
+                await llm.unload()
+            }
             // The live diarizer is the memory target during a session; the
             // offline voiceprint isn't loaded while recording.
             if shouldUnloadVoiceprint {

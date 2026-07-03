@@ -1,4 +1,5 @@
 import Foundation
+import MLX
 import Testing
 
 @testable import Loqi
@@ -31,6 +32,22 @@ struct LLMServiceTests {
             free: headroom - Self.band, requiredHeadroom: headroom) == nil)
         #expect(LLMService.admittedCacheLimit(
             free: 0, requiredHeadroom: headroom) == nil)
+    }
+
+    @Test func backgroundUnloadStillMarksModelUnloaded() async {
+        // A backgrounded unload skips the Metal-touching cache clear but
+        // must still drop the model state so a foreground load starts fresh.
+        let llm = LLMService()
+
+        await llm.setBackgrounded(true)
+        await llm.unload()
+
+        let state = await llm.loadState
+        if case .unloaded = state {
+            // Expected.
+        } else {
+            Issue.record("background unload should still mark the model unloaded")
+        }
     }
 
     @Test func backgroundHuggingFaceSnapshotCountsAsDownloaded() throws {
@@ -140,42 +157,6 @@ struct DiagnosticTokenEstimateTests {
     }
 }
 
-struct GenerationCollectionTests {
-    @Test func cancelledCollectionThrowsInsteadOfReturningPartialText() async {
-        let (stream, continuation) = AsyncStream<String>.makeStream()
-        let task = Task {
-            try await LLMService.collectGeneratedText(from: stream) { $0 }
-        }
-
-        continuation.yield("partial")
-        task.cancel()
-        continuation.yield("ignored")
-        continuation.finish()
-
-        do {
-            _ = try await task.value
-            Issue.record("expected CancellationError")
-        } catch is CancellationError {
-            // Expected.
-        } catch {
-            Issue.record("expected CancellationError, got \(error)")
-        }
-    }
-
-    @Test func collectionConcatenatesChunks() async throws {
-        let stream = AsyncStream<String> { continuation in
-            continuation.yield("hello")
-            continuation.yield(" ")
-            continuation.yield("world")
-            continuation.finish()
-        }
-
-        let text = try await LLMService.collectGeneratedText(from: stream) { $0 }
-
-        #expect(text == "hello world")
-    }
-}
-
 @MainActor
 struct PipelineResourceTests {
     @Test func llmResourceMessagesCollapseToOneVisibleStatus() {
@@ -218,12 +199,85 @@ struct PipelineResourceTests {
             .retranscribing(.identifyingSpeakers(0))))
         #expect(SummaryJobCenter.shouldSuspendForBackground(
             .retranscribing(.transcribing(0))))
-        #expect(!SummaryJobCenter.shouldSuspendForBackground(
+        #expect(SummaryJobCenter.shouldSuspendForBackground(
             .importing(.transcribing(0))))
     }
 
     @Test func recordingResumeLeavesLLMJobsPausedWhileBackgrounded() {
         #expect(!SummaryJobCenter.shouldResumeLLMJobsAfterRecording(isBackgrounded: true))
         #expect(SummaryJobCenter.shouldResumeLLMJobsAfterRecording(isBackgrounded: false))
+    }
+
+    /// A background GPU abort must map to the suspend path even when the
+    /// scene flag hasn't flipped yet (scenePhase delivery lag) — matched
+    /// by error content. Anything else stays a real error.
+    @Test func backgroundGPUAbortIsRecognizedByContent() {
+        #expect(LLMService.isBackgroundGPUAbort(.caught(
+            "[METAL] Command buffer execution failed: Insufficient Permission "
+            + "(to submit GPU work from background) "
+            + "(00000006:kIOGPUCommandBufferCallbackErrorBackgroundExecutionNotPermitted)")))
+        #expect(!LLMService.isBackgroundGPUAbort(.caught(
+            "[METAL] Command buffer execution failed: Caused GPU Timeout Error")))
+        #expect(!LLMService.isBackgroundGPUAbort(.caught("broadcast shape mismatch")))
+    }
+
+    /// A manual re-summarize with unchanged style+length is a redo and
+    /// must bypass the cached-notes short-circuit (otherwise it reduce-
+    /// only re-renders the same notes and "does nothing"); a style or
+    /// length change keeps the cheap reduce-only path.
+    @Test func sameStyleResummarizeIsARedoRequest() {
+        let timestamp = Date(timeIntervalSince1970: 1_000_000)
+        var record = SessionRecord(
+            mode: .captions, startedAt: timestamp, endedAt: timestamp, entries: [])
+
+        // No summary yet: first-time summarize, not a redo.
+        #expect(!SummaryJobCenter.isRedoRequest(record, style: .meeting, length: .standard))
+
+        record.summary = "已有摘要"
+        record.summaryStyle = SummaryStyle.meeting.rawValue
+        record.summaryLength = SummaryLength.standard.rawValue
+        #expect(SummaryJobCenter.isRedoRequest(record, style: .meeting, length: .standard))
+        // Changed style or length: cheap reduce-only, not a redo.
+        #expect(!SummaryJobCenter.isRedoRequest(record, style: .journal, length: .standard))
+        #expect(!SummaryJobCenter.isRedoRequest(record, style: .meeting, length: .detailed))
+        // Deleted session: nothing to redo.
+        #expect(!SummaryJobCenter.isRedoRequest(nil, style: .meeting, length: .standard))
+    }
+
+    /// A resume must recognize the mid-map checkpoint so it skips the
+    /// hygiene pass — re-running hygiene can wipe the checkpoint and
+    /// remap the whole transcript (the background→foreground 0/N bug).
+    @Test func resumeRecognizesUsableMapCheckpoint() {
+        let timestamp = Date(timeIntervalSince1970: 1_000_000)
+        let pair = LanguagePair(source: .chinese, target: .chinese)
+        let covered = SessionRecord.Entry(
+            sourceText: "第一段", translation: nil, speaker: nil,
+            direction: pair, timestamp: timestamp)
+        let uncovered = SessionRecord.Entry(
+            sourceText: "第二段", translation: nil, speaker: nil,
+            direction: pair, timestamp: timestamp)
+        var record = SessionRecord(
+            mode: .captions,
+            startedAt: timestamp,
+            endedAt: timestamp,
+            entries: [covered, uncovered])
+
+        // Fresh record: nothing to resume from.
+        #expect(!SummaryJobCenter.hasUsableMapCheckpoint(record))
+
+        // Mid-map checkpoint: one chunk mapped, coverage through it.
+        record.chunkNotes = [.init(
+            headline: "第一段", startedAt: timestamp, anchorEntryID: covered.id)]
+        record.liveNotesEndEntryID = covered.id
+        #expect(SummaryJobCenter.hasUsableMapCheckpoint(record))
+
+        // Full coverage (resume during reduce) still counts.
+        record.liveNotesEndEntryID = uncovered.id
+        #expect(SummaryJobCenter.hasUsableMapCheckpoint(record))
+
+        // A coverage boundary that no longer resolves (entry edited away)
+        // can't be resumed from — hygiene must run.
+        record.liveNotesEndEntryID = UUID()
+        #expect(!SummaryJobCenter.hasUsableMapCheckpoint(record))
     }
 }

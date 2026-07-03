@@ -97,4 +97,23 @@ struct SessionArchiveLoadTests {
         #expect(merged.contains { $0.id == resumable.id })
         #expect(!merged.contains { $0.id == abandoned.id })
     }
+
+    @Test func persisterCoalescesWritesAndHonorsRemoval() async {
+        let directory = URL.temporaryDirectory.appending(path: UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let persister = RecordPersister(directory: directory)
+
+        var kept = record(at: 100)
+        await persister.write(kept)
+        kept.titleText = "latest snapshot wins"
+        await persister.write(kept)
+        let removed = record(at: 200)
+        await persister.write(removed)
+        await persister.remove(id: removed.id)
+        await persister.flush()
+
+        let decoded = SessionArchive.decodeAll(in: directory)
+        #expect(decoded.map(\.id) == [kept.id])
+        #expect(decoded.first?.titleText == "latest snapshot wins")
+    }
 }

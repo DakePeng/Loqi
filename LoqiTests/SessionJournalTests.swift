@@ -101,6 +101,9 @@ struct SessionJournalTests {
         let archive = SessionArchive()
         await archive.loadIfNeeded()
         archive.add(record)
+        // Recovery in the second pipeline reads the directory; the record
+        // must be durably on disk first (persistence is asynchronous).
+        await archive.flushPersistence()
         defer {
             archive.delete(id: record.id)
             SessionJournal.clear()
