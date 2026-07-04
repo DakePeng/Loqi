@@ -1,5 +1,7 @@
 # LFM2.5-230M Live-Refine Candidate Implementation Plan
 
+> **Superseded 2026-07-04.** Tasks 1–4 landed, but device testing showed the 230M cannot do stable structured output, and the live architecture was redesigned on this branch: the live LLM (0.8B default, LFM2.5 experimental) now does *monolingual transcript cleanup* only — Apple's Translation framework is the sole translator; the old LLM-refines-the-translation path is deleted. LFM2.5 never enters the summary lineup; the summary picker is Qwen 2B + Bonsai (promoted to standard). Live notes defer to post-session mapping while LFM2.5 is live. Task 5's device checklist below is superseded by the redesign's own verification list (see the branch's later commits / PR #13).
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 > **Re-validated 2026-07-04** against main @ `bccf6117` (post-PR #12 background-model-downloads merge): every "Find this block" snippet still matches verbatim; mlx-swift-lm still pinned at 3.31.3; only the CaptionPipeline call-site line anchor moved (1598→1656).
