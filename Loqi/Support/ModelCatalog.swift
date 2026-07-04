@@ -125,10 +125,11 @@ enum ModelCatalog {
     /// No vision tower: while active, a photo attached live falls back to
     /// OCR-only (AttachmentDescribeQueue already treats every
     /// `describeImage` failure as best-effort). Hidden behind
-    /// `model.liveRefineLFM2Enabled` (off by default).
+    /// `model.liveRefineLFM2Enabled` (off by default); the same flag also
+    /// lists it in the summary lineup for A/B against the Qwen tiers.
     static let lfm2_5_230m = ModelOption(
         id: "LiquidAI/LFM2.5-230M-MLX-4bit",
-        displayName: "Liquid LFM2.5 230M (live refine) — experimental",
+        displayName: "Liquid LFM2.5 230M — experimental",
         requiredHeadroom: 300_000_000,   // ~151 MB weights; tune on device
         downloadBytes: 151_000_000,
         supportsVision: false)
@@ -158,10 +159,14 @@ enum ModelCatalog {
         defaults.bool(forKey: "model.bonsaiEnabled")
     }
 
-    /// Selectable summary models. Bonsai (text-only) appears only when its
-    /// flag is set; the live/vision roles never use it.
+    /// Selectable summary models. The experimental text-only tiers (Bonsai,
+    /// LFM2.5) appear only while their flags are set; the vision role never
+    /// uses them.
     static func availableModels(defaults: UserDefaults = .standard) -> [ModelOption] {
-        bonsaiEnabled(defaults) ? [qwen35_2b, qwen35_0_8b, bonsai8b] : [qwen35_2b, qwen35_0_8b]
+        var lineup = [qwen35_2b, qwen35_0_8b]
+        if bonsaiEnabled(defaults) { lineup.append(bonsai8b) }
+        if liveRefineLFM2Enabled(defaults) { lineup.append(lfm2_5_230m) }
+        return lineup
     }
 
     static var all: [ModelOption] { availableModels() }

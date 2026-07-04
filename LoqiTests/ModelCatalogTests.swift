@@ -122,15 +122,29 @@ struct ModelCatalogTests {
             < ModelCatalog.liveModel.requiredHeadroom)
     }
 
-    @Test func lfm2CandidateNeverAppearsInSummaryLineup() {
+    @Test func lfm2AppearsInSummaryLineupOnlyWhenFlagEnabled() {
         let suite = "ModelCatalogTests.\(UUID().uuidString)"
         let defaults = UserDefaults(suiteName: suite)!
         defer { defaults.removePersistentDomain(forName: suite) }
 
-        defaults.set(true, forKey: "model.liveRefineLFM2Enabled")
+        // Off by default — and independent of the Bonsai flag.
         defaults.set(true, forKey: "model.bonsaiEnabled")
         #expect(!ModelCatalog.availableModels(defaults: defaults)
             .contains { $0.id == ModelCatalog.lfm2_5_230m.id })
+
+        defaults.set(true, forKey: "model.liveRefineLFM2Enabled")
+        #expect(ModelCatalog.availableModels(defaults: defaults)
+            .contains { $0.id == ModelCatalog.lfm2_5_230m.id })
+    }
+
+    @Test func normalizationDropsLFM2WhenFlagDisabled() {
+        let suite = "ModelCatalogTests.\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suite)!
+        defer { defaults.removePersistentDomain(forName: suite) }
+
+        defaults.set(ModelCatalog.lfm2_5_230m.id, forKey: "model.id")  // flag stays off
+        ModelCatalog.normalizeStoredSelection(defaults)
+        #expect(defaults.string(forKey: "model.id") == ModelCatalog.default.id)
     }
 
     @Test func liveRefineModelDefaultsToLiveModelTier() {

@@ -189,6 +189,10 @@ struct SettingsView: View {
                             "Experimental: Liquid LFM2.5 live-refine model",
                             isOn: $liveRefineLFM2Enabled)
                             .onChange(of: liveRefineLFM2Enabled) {
+                                if !liveRefineLFM2Enabled,
+                                   modelID == ModelCatalog.lfm2_5_230m.id {
+                                    modelID = ModelCatalog.default.id
+                                }
                                 Task { await refreshStats() }
                             }
 
