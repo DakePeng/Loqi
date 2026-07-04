@@ -190,6 +190,12 @@ final class SessionArchive {
             }
         }
         sessions.remove(atOffsets: offsets)
+        // Deletions must survive an immediate force-quit:
+        // `deletedSessionIDs` is in-memory only, so an unflushed queued
+        // removal would resurrect the record (audio already gone) at next
+        // launch. Land it now instead of waiting for the next background
+        // flush.
+        Task { [weak self] in await self?.flushPersistence() }
     }
 
     /// Delete a whole session: record JSON, audio file, in-memory entry.

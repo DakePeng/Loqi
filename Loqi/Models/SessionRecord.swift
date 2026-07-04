@@ -203,6 +203,11 @@ struct SessionRecord: Identifiable, Codable, Sendable {
     struct PendingSummary: Codable, Sendable {
         var styleRaw: String
         var lengthRaw: String
+        /// Download consent the user gave when requesting this summary —
+        /// a resume after a kill must keep pulling the weights they
+        /// approved, not fail with "model not downloaded". Optional:
+        /// legacy markers decode as nil (no consent).
+        var allowDownload: Bool?
     }
     /// True when speaker separation was requested for this session but the
     /// diarizer failed (model download or analysis) — the transcript is

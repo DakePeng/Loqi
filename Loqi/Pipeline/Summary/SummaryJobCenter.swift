@@ -165,6 +165,18 @@ final class SummaryJobCenter {
             activities[sessionID] = nil
             return
         }
+        // A held or already-unwound import has no live task left to
+        // observe this cancel — the placeholder + checkpoint would
+        // survive and the next resume sweep would restart the job the
+        // user just cancelled. Tear it down here, mirroring the import
+        // task's own user-cancel path.
+        if Self.isHeldActivity(activities[sessionID]) || tasks[sessionID] == nil,
+           archive.sessions.first(where: { $0.id == sessionID })?.importing == true {
+            hotwords.discardSuggestions(forSession: sessionID)
+            archive.delete(id: sessionID)
+            activities[sessionID] = nil
+            return
+        }
         if activities[sessionID] == .pausedForBackground {
             activities[sessionID] = nil
             return
@@ -416,7 +428,9 @@ final class SummaryJobCenter {
               archive.sessions.contains(where: { $0.id == sessionID })
         else { return }
         errors[sessionID] = nil
-        markPendingSummary(sessionID: sessionID, style: style, length: length)
+        markPendingSummary(
+            sessionID: sessionID, style: style, length: length,
+            allowDownload: allowDownload)
         activeSummarizeRequest[sessionID] = SummarizeRequest(
             style: style, length: length, allowDownload: allowDownload,
             suggestVocabulary: suggestVocabulary)
@@ -708,7 +722,8 @@ final class SummaryJobCenter {
             // backgrounding can cancel and restart on its own — persist that
             // intent so even a process kill restarts it at next launch.
             markPendingSummary(
-                sessionID: sessionID, style: request.style, length: request.length)
+                sessionID: sessionID, style: request.style, length: request.length,
+                allowDownload: request.allowDownload)
             activeSummarizeRequest[sessionID] = SummarizeRequest(
                 style: request.style, length: request.length,
                 allowDownload: request.allowDownload,
@@ -805,9 +820,14 @@ final class SummaryJobCenter {
     /// (`SessionArchive.loadIfNeeded()` keeps resumable records instead of
     /// sweeping them) and after a recording that yielded one ends.
     func resumeUnfinishedImports() {
-        guard !isRecording() else { return }
+        // The background guard lives HERE so every caller is safe:
+        // resumeAfterRecording can fire while still backgrounded (recording
+        // stopped from the lock screen), and Metal-backed ASR must wait
+        // for handleForeground.
+        guard !isRecording(), !isBackgrounded else { return }
         for session in archive.sessions
-        where session.importing == true && tasks[session.id] == nil {
+        where session.importing == true && tasks[session.id] == nil
+            && activities[session.id] == nil {
             guard let checkpoint = session.importCheckpoint,
                   let audioFileName = session.audioFileName
             else { continue }
@@ -836,16 +856,23 @@ final class SummaryJobCenter {
                 continue
             }
             logger.info("pending-summary sweep: restarting \(session.id, privacy: .public) notes=\(session.chunkNotes?.count ?? 0)")
-            summarize(sessionID: session.id, style: style, length: length, isResume: true)
+            summarize(
+                sessionID: session.id, style: style, length: length,
+                // Carry the consent the user gave when they requested this
+                // summary — a restart mid-download must keep downloading.
+                allowDownload: pending.allowDownload ?? false,
+                isResume: true)
         }
     }
 
     private func markPendingSummary(
-        sessionID: UUID, style: SummaryStyle, length: SummaryLength
+        sessionID: UUID, style: SummaryStyle, length: SummaryLength,
+        allowDownload: Bool = false
     ) {
         guard var record = archive.sessions.first(where: { $0.id == sessionID }) else { return }
         record.pendingSummary = SessionRecord.PendingSummary(
-            styleRaw: style.rawValue, lengthRaw: length.rawValue)
+            styleRaw: style.rawValue, lengthRaw: length.rawValue,
+            allowDownload: allowDownload)
         archive.update(record)
     }
 
@@ -896,6 +923,16 @@ final class SummaryJobCenter {
                 }
             } catch {
                 self.errors[sessionID] = error.localizedDescription
+                // A failed import must not auto-retry (the finishJob
+                // re-sweep would restart it immediately, and a
+                // deterministic failure — e.g. no recognizable speech —
+                // would loop forever). Dropping the checkpoint makes the
+                // resume sweeps skip it; the checkpoint-less placeholder
+                // is swept at next launch, same as pre-resume behavior.
+                if var record = self.archive.sessions.first(where: { $0.id == sessionID }) {
+                    record.importCheckpoint = nil
+                    self.archive.update(record)
+                }
             }
         }
     }
@@ -1036,6 +1073,14 @@ final class SummaryJobCenter {
         tasks[sessionID] = nil
         graces[sessionID]?.end()
         graces[sessionID] = nil
+        // A resume sweep that ran while this job was still unwinding
+        // skipped its session (`tasks` non-nil). Now that teardown is
+        // done, re-sweep — otherwise a checkpointed import cancelled by
+        // backgrounding/yield whose unwind outlived the foreground sweep
+        // stays stranded until the next cold launch. The sweep's own
+        // guards (foreground, not recording, no badge, checkpoint
+        // present) make this a no-op in every other case.
+        resumeUnfinishedImports()
     }
 
     /// Respect the gates, then make the model ready. With consent the load
