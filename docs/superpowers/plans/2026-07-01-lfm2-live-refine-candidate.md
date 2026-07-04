@@ -2,6 +2,8 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
+> **Re-validated 2026-07-04** against main @ `bccf6117` (post-PR #12 background-model-downloads merge): every "Find this block" snippet still matches verbatim; mlx-swift-lm still pinned at 3.31.3; only the CaptionPipeline call-site line anchor moved (1598→1656).
+
 **Goal:** Add `LiquidAI/LFM2.5-230M-MLX-4bit` as an opt-in, off-by-default alternative to the fixed Qwen3.5 0.8B model for the *live-refine* role only (translation refinement + live notes during recording) — same settings-gated experimental pattern already used for the Bonsai 8B summary tier.
 
 **Architecture:** `ModelCatalog.liveModel` (Qwen3.5 0.8B, vision-capable) currently serves two roles on the single shared `LLMService` actor: (a) live text refinement (`RefinementQueue`, driven from `CaptionPipeline.loadLLMIfAllowed()`) and (b) live/post-session photo description (`AttachmentDescribeQueue`, `SummaryJobCenter`'s vision back-fill). LFM2.5-230M is text-only, so it can only take over role (a). This plan introduces a new resolver, `ModelCatalog.liveRefineModel()`, that role (a) calls instead of `liveModel` directly; `liveModel` itself is untouched and keeps serving role (b) exactly as today. When the experimental flag is on and a photo is attached mid-recording, `AttachmentDescribeQueue` already treats any `describeImage` failure as best-effort (falls back to OCR-only) — `LLMService.describeImage` throws `.visionUnsupported` immediately when the resident model lacks vision, so this is a clean, already-handled degradation, not a new failure mode to build.
@@ -167,7 +169,7 @@ git commit -m "feat: add LFM2.5-230M as an experimental live-refine candidate"
 ## Task 2: Wire the resolver into CaptionPipeline's live loader
 
 **Files:**
-- Modify: `Loqi/Support/CaptionPipeline.swift:1598-1599`
+- Modify: `Loqi/Support/CaptionPipeline.swift:1656-1657`
 
 **Interfaces:**
 - Consumes: `ModelCatalog.liveRefineModel() -> ModelOption` (Task 1).
@@ -175,7 +177,7 @@ git commit -m "feat: add LFM2.5-230M as an experimental live-refine candidate"
 
 - [ ] **Step 1: Swap the call site**
 
-Find (`Loqi/Support/CaptionPipeline.swift:1598-1599`):
+Find (`Loqi/Support/CaptionPipeline.swift:1656-1657`):
 
 ```swift
         Task { [llm] in
@@ -485,12 +487,3 @@ If Steps 2-5 pass, the candidate is viable for the flag to eventually flip to on
 
 **3. Type consistency:** `ModelCatalog.liveRefineModel(_ defaults: UserDefaults = .standard) -> ModelOption` is defined once in Task 1 and called identically (`ModelCatalog.liveRefineModel()`) in Tasks 2 and 3. `ModelCatalog.lfm2_5_230m` and `ModelCatalog.liveRefineLFM2Enabled` are likewise defined once and referenced with matching names throughout.
 
----
-
-Plan complete and saved to `docs/superpowers/plans/2026-07-01-lfm2-live-refine-candidate.md`. Two execution options:
-
-**1. Subagent-Driven (recommended)** - I dispatch a fresh subagent per task, review between tasks, fast iteration
-
-**2. Inline Execution** - Execute tasks in this session using executing-plans, batch execution with checkpoints
-
-**Which approach?**
