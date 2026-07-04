@@ -5,7 +5,6 @@ struct SettingsView: View {
 
     @AppStorage(AppUILanguage.defaultsKey) private var appLanguageRaw = AppUILanguage.system.rawValue
     @AppStorage("model.id") private var modelID: String = ModelCatalog.default.id
-    @AppStorage("model.bonsaiEnabled") private var bonsaiEnabled = false
     @AppStorage("model.liveRefineLFM2Enabled") private var liveRefineLFM2Enabled = false
     @AppStorage("model.source") private var sourceRaw: String = ModelSource.huggingFace.rawValue
     @AppStorage("llm.enabled") private var llmEnabled = true
@@ -181,29 +180,15 @@ struct SettingsView: View {
                         }
 
                         // Experimental: a smaller text-only model for the
-                        // live-refine tier (translation refinement + live
-                        // notes). No vision tower — photos attached live
-                        // fall back to OCR-only while this is on. Off by
-                        // default.
+                        // live-refine tier (transcript cleanup). No vision
+                        // tower — photos attached live fall back to OCR-only
+                        // and live notes wait for post-session mapping while
+                        // this is on. Off by default.
                         Toggle(
                             "Experimental: Liquid LFM2.5 live-refine model",
                             isOn: $liveRefineLFM2Enabled)
                             .onChange(of: liveRefineLFM2Enabled) {
-                                if !liveRefineLFM2Enabled,
-                                   modelID == ModelCatalog.lfm2_5_230m.id {
-                                    modelID = ModelCatalog.default.id
-                                }
                                 Task { await refreshStats() }
-                            }
-
-                        // Experimental: a stronger text-only model for the
-                        // summary tier. Needs the 1-bit-kernel mlx-swift fork
-                        // to actually load; off by default.
-                        Toggle("Experimental: Bonsai 8B summary model", isOn: $bonsaiEnabled)
-                            .onChange(of: bonsaiEnabled) {
-                                if !bonsaiEnabled, modelID == ModelCatalog.bonsai8b.id {
-                                    modelID = ModelCatalog.default.id
-                                }
                             }
 
                         // Summary tier — user's pick, runs after recording.
@@ -392,8 +377,6 @@ struct SettingsView: View {
         switch option.id {
         case ModelCatalog.qwen35_2b.id:
             localized("Qwen3.5 2B — recommended")
-        case ModelCatalog.qwen35_0_8b.id:
-            localized("Qwen3.5 0.8B — fastest")
         case ModelCatalog.bonsai8b.id:
             localized("Bonsai 8B (ternary 2-bit) — experimental")
         default:

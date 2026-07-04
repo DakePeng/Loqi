@@ -97,12 +97,12 @@ enum ModelCatalog {
         downloadBytes: 652_000_000,
         supportsVision: true)
 
-    /// Experimental text-only 8B (Qwen3-8B arch), ternary weights stored in
-    /// MLX 2-bit format — which stock mlx-swift loads out of the box (the
-    /// 1-bit build needs a custom fork and aborts: upstream MLX `quantize`
-    /// only supports 2/3/4/5/6/8 bits). No vision tower, so when picked, photo
-    /// description routes to the live VLM (see SummaryJobCenter). Hidden behind
-    /// `model.bonsaiEnabled` (off by default).
+    /// Text-only 8B (Qwen3-8B arch), ternary weights stored in MLX 2-bit
+    /// format — which stock mlx-swift loads out of the box (the 1-bit build
+    /// needs a custom fork and aborts: upstream MLX `quantize` only supports
+    /// 2/3/4/5/6/8 bits). No vision tower, so when picked, photo description
+    /// routes to the live VLM (see SummaryJobCenter). Standard summary
+    /// option since 2026-07 — validated on device.
     static let bonsai8b = ModelOption(
         id: "prism-ml/Ternary-Bonsai-8B-mlx-2bit",
         displayName: "Bonsai 8B (ternary 2-bit) — experimental",
@@ -125,8 +125,8 @@ enum ModelCatalog {
     /// No vision tower: while active, a photo attached live falls back to
     /// OCR-only (AttachmentDescribeQueue already treats every
     /// `describeImage` failure as best-effort). Hidden behind
-    /// `model.liveRefineLFM2Enabled` (off by default); the same flag also
-    /// lists it in the summary lineup for A/B against the Qwen tiers.
+    /// `model.liveRefineLFM2Enabled` (off by default). Live-refine only:
+    /// it cannot do stable structured output, so it never summarizes.
     static let lfm2_5_230m = ModelOption(
         id: "LiquidAI/LFM2.5-230M-MLX-4bit",
         displayName: "Liquid LFM2.5 230M — experimental",
@@ -140,8 +140,8 @@ enum ModelCatalog {
         defaults.bool(forKey: "model.liveRefineLFM2Enabled")
     }
 
-    /// Model `CaptionPipeline` loads during recording for translation
-    /// refinement and live notes (text-only path; never touches vision).
+    /// Model `CaptionPipeline` loads during recording for live transcript
+    /// cleanup — sentence refinement (text-only path; never touches vision).
     /// Defaults to `liveModel`; swaps to the LFM2.5 candidate when the
     /// experimental flag is on.
     static func liveRefineModel(_ defaults: UserDefaults = .standard) -> ModelOption {
@@ -153,20 +153,12 @@ enum ModelCatalog {
     /// fast tier, in which case the boundary swap is a no-op.
     static var summaryModel: ModelOption { current }
 
-    /// Whether the experimental Bonsai tier is offered. Off by default; it
-    /// needs the 1-bit-kernel mlx-swift fork present to actually load.
-    static func bonsaiEnabled(_ defaults: UserDefaults = .standard) -> Bool {
-        defaults.bool(forKey: "model.bonsaiEnabled")
-    }
-
-    /// Selectable summary models. The experimental text-only tiers (Bonsai,
-    /// LFM2.5) appear only while their flags are set; the vision role never
-    /// uses them.
+    /// Selectable summary models. The live tiers (0.8B, LFM2.5) never
+    /// appear: live and summary roles are fully split. Bonsai is standard —
+    /// validated on device (text-only; photo description routes via the
+    /// live VLM).
     static func availableModels(defaults: UserDefaults = .standard) -> [ModelOption] {
-        var lineup = [qwen35_2b, qwen35_0_8b]
-        if bonsaiEnabled(defaults) { lineup.append(bonsai8b) }
-        if liveRefineLFM2Enabled(defaults) { lineup.append(lfm2_5_230m) }
-        return lineup
+        [qwen35_2b, bonsai8b]
     }
 
     static var all: [ModelOption] { availableModels() }

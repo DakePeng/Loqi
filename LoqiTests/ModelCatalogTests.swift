@@ -3,43 +3,23 @@ import Testing
 
 @testable import Loqi
 
-/// Catalog shape guards. Qwen3.5 is natively multimodal — every tier
-/// carries the vision tower, so there is no separate photo model and the
-/// older Qwen3 tiers are gone. (History: a TokenRing crash on 2-D VLM
-/// prompts was briefly misattributed to Qwen3.5 itself; the fix lives in
-/// LLMService.FlattenedPromptProcessor.)
+/// Catalog shape guards. The summary lineup is the 2B (vision) plus the
+/// standard text-only Bonsai tier; the live tiers (0.8B, LFM2.5) never
+/// appear in it — live and summary roles are fully split. (History: a
+/// TokenRing crash on 2-D VLM prompts was briefly misattributed to
+/// Qwen3.5 itself; the fix lives in LLMService.FlattenedPromptProcessor.)
 struct ModelCatalogTests {
     @Test func defaultIsQwen35() {
         #expect(ModelCatalog.default.id == ModelCatalog.qwen35_2b.id)
     }
 
-    @Test func defaultLineupIgnoresStandardBonsaiFlag() {
-        let oldValue = UserDefaults.standard.object(forKey: "model.bonsaiEnabled")
-        defer {
-            if let oldValue {
-                UserDefaults.standard.set(oldValue, forKey: "model.bonsaiEnabled")
-            } else {
-                UserDefaults.standard.removeObject(forKey: "model.bonsaiEnabled")
-            }
-        }
-
-        UserDefaults.standard.set(true, forKey: "model.bonsaiEnabled")
-
+    @Test func defaultLineupIsQwen2BAndBonsai() {
         #expect(defaultSelectableModelsForTests().map(\.id) == [
             ModelCatalog.qwen35_2b.id,
-            ModelCatalog.qwen35_0_8b.id,
+            ModelCatalog.bonsai8b.id,
         ])
-    }
-
-    @Test func lineupIsAllQwen35() {
-        #expect(defaultSelectableModelsForTests().map(\.id) == [
-            ModelCatalog.qwen35_2b.id,
-            ModelCatalog.qwen35_0_8b.id,
-        ])
-    }
-
-    @Test func everyTierSupportsVision() {
-        #expect(defaultSelectableModelsForTests().allSatisfy { $0.supportsVision })
+        // Bonsai is text-only; the vision route depends on this staying false.
+        #expect(ModelCatalog.bonsai8b.supportsVision == false)
     }
 
     @Test func knownIdsResolveToThemselves() {
@@ -63,40 +43,25 @@ struct ModelCatalogTests {
         #expect(defaults.string(forKey: "model.id") == ModelCatalog.default.id)
     }
 
-    @Test func normalizationLeavesLiveSelectionsAlone() {
+    @Test func normalizationSnapsFastTierSummaryPickToDefault() {
         let suite = "ModelCatalogTests.\(UUID().uuidString)"
         let defaults = UserDefaults(suiteName: suite)!
         defer { defaults.removePersistentDomain(forName: suite) }
 
+        // Migration for existing users: 0.8B used to be a summary pick.
         defaults.set(ModelCatalog.qwen35_0_8b.id, forKey: "model.id")
         ModelCatalog.normalizeStoredSelection(defaults)
-        #expect(defaults.string(forKey: "model.id") == ModelCatalog.qwen35_0_8b.id)
-    }
-
-    @Test func bonsaiAppearsOnlyWhenFlagEnabled() {
-        let suite = "ModelCatalogTests.\(UUID().uuidString)"
-        let defaults = UserDefaults(suiteName: suite)!
-        defer { defaults.removePersistentDomain(forName: suite) }
-
-        // Off by default.
-        #expect(!ModelCatalog.availableModels(defaults: defaults)
-            .contains { $0.id == ModelCatalog.bonsai8b.id })
-
-        defaults.set(true, forKey: "model.bonsaiEnabled")
-        let on = ModelCatalog.availableModels(defaults: defaults)
-        #expect(on.contains { $0.id == ModelCatalog.bonsai8b.id })
-        // Bonsai is text-only; the vision route depends on this staying false.
-        #expect(ModelCatalog.bonsai8b.supportsVision == false)
-    }
-
-    @Test func normalizationDropsBonsaiWhenFlagDisabled() {
-        let suite = "ModelCatalogTests.\(UUID().uuidString)"
-        let defaults = UserDefaults(suiteName: suite)!
-        defer { defaults.removePersistentDomain(forName: suite) }
-
-        defaults.set(ModelCatalog.bonsai8b.id, forKey: "model.id")  // flag stays off
-        ModelCatalog.normalizeStoredSelection(defaults)
         #expect(defaults.string(forKey: "model.id") == ModelCatalog.default.id)
+    }
+
+    @Test func normalizationLeavesBonsaiPickAlone() {
+        let suite = "ModelCatalogTests.\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suite)!
+        defer { defaults.removePersistentDomain(forName: suite) }
+
+        defaults.set(ModelCatalog.bonsai8b.id, forKey: "model.id")
+        ModelCatalog.normalizeStoredSelection(defaults)
+        #expect(defaults.string(forKey: "model.id") == ModelCatalog.bonsai8b.id)
     }
 
     @Test func liveModelIsTheFastTier() {
@@ -122,27 +87,26 @@ struct ModelCatalogTests {
             < ModelCatalog.liveModel.requiredHeadroom)
     }
 
-    @Test func lfm2AppearsInSummaryLineupOnlyWhenFlagEnabled() {
+    @Test func liveTiersNeverAppearInSummaryLineup() {
         let suite = "ModelCatalogTests.\(UUID().uuidString)"
         let defaults = UserDefaults(suiteName: suite)!
         defer { defaults.removePersistentDomain(forName: suite) }
 
-        // Off by default — and independent of the Bonsai flag.
-        defaults.set(true, forKey: "model.bonsaiEnabled")
-        #expect(!ModelCatalog.availableModels(defaults: defaults)
-            .contains { $0.id == ModelCatalog.lfm2_5_230m.id })
-
+        // Even with the live-refine flag on, live tiers stay out.
         defaults.set(true, forKey: "model.liveRefineLFM2Enabled")
-        #expect(ModelCatalog.availableModels(defaults: defaults)
-            .contains { $0.id == ModelCatalog.lfm2_5_230m.id })
+        let ids = ModelCatalog.availableModels(defaults: defaults).map(\.id)
+        #expect(!ids.contains(ModelCatalog.qwen35_0_8b.id))
+        #expect(!ids.contains(ModelCatalog.lfm2_5_230m.id))
+        #expect(ids.contains(ModelCatalog.bonsai8b.id))
     }
 
-    @Test func normalizationDropsLFM2WhenFlagDisabled() {
+    @Test func normalizationDropsLFM2EvenWhenFlagEnabled() {
         let suite = "ModelCatalogTests.\(UUID().uuidString)"
         let defaults = UserDefaults(suiteName: suite)!
         defer { defaults.removePersistentDomain(forName: suite) }
 
-        defaults.set(ModelCatalog.lfm2_5_230m.id, forKey: "model.id")  // flag stays off
+        defaults.set(true, forKey: "model.liveRefineLFM2Enabled")
+        defaults.set(ModelCatalog.lfm2_5_230m.id, forKey: "model.id")
         ModelCatalog.normalizeStoredSelection(defaults)
         #expect(defaults.string(forKey: "model.id") == ModelCatalog.default.id)
     }
