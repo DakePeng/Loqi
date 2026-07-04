@@ -255,9 +255,8 @@ final class CaptionPipeline {
         let source = ModelSource(
             rawValue: defaults.string(forKey: "model.source") ?? "") ?? .huggingFace
         self.llm = llm ?? LLMService(model: model, source: source)
-        let store = self.store
-        refinement = RefinementQueue(llm: self.llm) { [weak store] entryID, outcome in
-            store?.setRefined(outcome.translation, for: entryID)
+        refinement = RefinementQueue(llm: self.llm) { [weak self] entryID, outcome in
+            self?.applySentenceRefinement(entryID, outcome: outcome)
         }
         hotwords.onChange = { [weak self] in
             self?.pushHotwordsToEngines()
@@ -1337,14 +1336,13 @@ final class CaptionPipeline {
             await enqueueChunkNote(for: closed)
         }
 
-        // Transcribe-only sessions (source == target) have nothing to refine:
-        // the transcript IS the record of what was said.
-        let translationEnabled = direction.source != direction.target
-        guard translationEnabled else {
-            store.setRefined(nil, for: entry.id)
-            return
+        // Instant feedback: Apple's draft translation of the raw ASR text.
+        // Sentence refinement no longer depends on translation being on —
+        // it cleans the transcript itself, and a translating session gets a
+        // second Apple pass over the cleaned sentence when it lands.
+        if direction.source != direction.target {
+            guard await produceDraft(for: entry) != nil else { return }
         }
-        guard let draft = await produceDraft(for: entry) else { return }
 
         let matcher = hotwords.matcher
         let text = entry.sourceText
@@ -1362,22 +1360,46 @@ final class CaptionPipeline {
         if wantsRefinement, llmEnabled, !isBackgrounded,
            thermal.policy == .full, await llmIsReady() {
             store.markRefining(entry.id)
-            let history = store.recentHistory(limit: 6).map {
-                PromptBuilder.HistoryTurn(
-                    sourceLanguage: $0.direction.source,
-                    sourceText: $0.sourceText,
-                    translation: $0.displayTranslation ?? "")
-            }
             await refinement?.enqueue(RefinementQueue.Job(
                 entryID: entry.id,
                 source: text,
-                draft: draft,
-                direction: direction,
-                history: history,
-                glossary: matcher.glossaryLines(
-                    direction: direction, sourceText: text)))
+                language: direction.source,
+                context: store.recentSourceTexts(
+                    limit: 3, language: direction.source, excluding: entry.id),
+                glossary: matcher.noteGlossaryLines(
+                    language: direction.source, text: text)))
         } else {
             store.setRefined(nil, for: entry.id)
+        }
+    }
+
+    /// A sentence-refinement job finished. Accepted and actually different:
+    /// update the transcript (the raw ASR text stays recoverable in
+    /// rawSourceText) and re-translate the cleaned sentence via Apple's
+    /// framework as the refined translation. Anything else: the raw
+    /// sentence and the draft stand.
+    private func applySentenceRefinement(
+        _ entryID: UUID, outcome: RefinementQueue.Outcome
+    ) {
+        guard let entry = store.entry(for: entryID),
+              let cleaned = outcome.cleanedSource,
+              cleaned != entry.sourceText else {
+            store.setRefined(nil, for: entryID)
+            return
+        }
+        store.applyCleanedSource(cleaned, for: entryID)
+        writeJournal()
+        guard entry.direction.source != entry.direction.target else {
+            store.setRefined(nil, for: entryID)   // transcribe-only: done
+            return
+        }
+        Task { [translator, store] in
+            // Apple failing here keeps the draft (of the raw text) — a
+            // slight mismatch with the cleaned transcript, accepted over
+            // showing nothing.
+            let refined = try? await translator.draft(
+                cleaned, direction: entry.direction)
+            store.setRefined(refined, for: entryID)
         }
     }
 

@@ -63,20 +63,6 @@ struct SummaryEngineTests {
         #expect(chunks.count == 1)
     }
 
-    // MARK: Refinement output parsing (translation only — source rewriting
-    // was removed; an "S:" line from an old prompt shape is ignored)
-
-    @Test func taggedTranslationParses() {
-        let parsed = PromptBuilder().parseRefinement(
-            "S: 我觉得要不就英法都考一下\nT: I think we should test both English and French.")
-        #expect(parsed == "I think we should test both English and French.")
-    }
-
-    @Test func untaggedOutputIsTheTranslation() {
-        let parsed = PromptBuilder().parseRefinement("こんにちは、お元気ですか。")
-        #expect(parsed == "こんにちは、お元気ですか。")
-    }
-
     // MARK: Hotword-restore parsing + fidelity gate
 
     @Test func restoredSentenceParsesTaggedAndUntagged() {

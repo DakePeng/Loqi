@@ -1,22 +1,23 @@
 import Foundation
 import os
 
-/// Serial queue feeding finalized sentences to the LLM, strictly one
-/// generation at a time. The caption stream never waits on this: drafts are
-/// already on screen, refinement upgrades them when it lands.
+/// Serial queue feeding finalized sentences to the LLM for transcript
+/// cleanup, strictly one generation at a time. The caption stream never
+/// waits on this: the raw sentence (and its Apple draft translation) is
+/// already on screen; the cleaned sentence upgrades both when it lands.
 actor RefinementQueue {
     struct Job: Sendable {
         var entryID: UUID
         var source: String
-        var draft: String
-        var direction: LanguagePair
-        var history: [PromptBuilder.HistoryTurn]
+        var language: AppLanguage
+        var context: [String] = []
         var glossary: [String] = []
     }
 
-    /// What a finished job delivers: nil means "keep the draft on screen".
+    /// What a finished job delivers: nil means "keep the raw source and
+    /// the draft translation on screen".
     struct Outcome: Sendable {
-        var translation: String?
+        var cleanedSource: String?
     }
 
     /// Jobs beyond this depth drop oldest-first; their drafts stand.
@@ -99,29 +100,30 @@ actor RefinementQueue {
 
             var outcome = Outcome()
             do {
+                // Output ≈ input sentence; 160 gives long CJK sentences
+                // headroom (the fidelity gate rejects truncation anyway).
                 let raw = try await llm.generate(
-                    system: prompts.systemPrompt(direction: job.direction),
-                    user: prompts.userPrompt(
-                        source: job.source,
-                        draft: job.draft,
-                        direction: job.direction,
-                        history: job.history,
+                    system: prompts.sentenceRefineSystemPrompt(language: job.language),
+                    user: prompts.sentenceRefineUserPrompt(
+                        sentence: job.source,
+                        language: job.language,
+                        context: job.context,
                         glossary: job.glossary),
-                    maxTokens: 120)
-                if let translation = prompts.parseRefinement(raw),
-                   prompts.isAcceptable(translation, draft: job.draft) {
-                    outcome.translation = translation
+                    maxTokens: 160)
+                if let cleaned = prompts.parseRefinedSentence(raw),
+                   prompts.isAcceptableSentenceRefinement(cleaned, original: job.source) {
+                    outcome.cleanedSource = cleaned
                 } else {
-                    // Draft stays on screen; log the raw output so a model
-                    // whose refinements keep getting discarded (repetition,
-                    // length blowout, garbled decode) is distinguishable
-                    // from one that never generated at all.
+                    // Raw sentence stays; log the output so a model whose
+                    // cleanups keep getting discarded (repetition, rewrite,
+                    // garbled decode) is distinguishable from one that
+                    // never generated at all.
                     logger.warning(
-                        "refinement rejected, draft kept: \(raw, privacy: .public)")
+                        "refinement rejected, raw sentence kept: \(raw, privacy: .public)")
                 }
             } catch {
                 logger.warning(
-                    "refinement generate failed, draft kept: \(error.localizedDescription, privacy: .public)")
+                    "refinement generate failed, raw sentence kept: \(error.localizedDescription, privacy: .public)")
                 outcome = Outcome()
             }
             let entryID = job.entryID

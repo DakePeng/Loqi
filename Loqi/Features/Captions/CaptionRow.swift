@@ -5,8 +5,9 @@ import SwiftUI
 ///
 /// Transcribe-only sessions (no translation) promote the source text to the
 /// primary slot — it IS the content, not a caption above a translation. The
-/// source text is exactly what was recognized (plus the deterministic
-/// hotword fixup); the LLM never rewrites it.
+/// source text is what was recognized, plus the deterministic hotword fixup
+/// and the conservative LLM sentence cleanup (fidelity-gated; the raw ASR
+/// text stays recoverable in rawSourceText).
 struct CaptionRow: View {
     let entry: CaptionEntry
     var isLatest = false

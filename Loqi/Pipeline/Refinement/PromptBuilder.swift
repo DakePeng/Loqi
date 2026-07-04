@@ -1,48 +1,13 @@
 import Foundation
 
-/// Builds the refinement prompt. The LLM *edits* the tier-1 draft rather
-/// than translating from scratch: outputs are shorter and more stable, and
-/// "draft is already good" is a cheap no-op.
+/// Builds the live LLM prompts. During recording the LLM *cleans the
+/// source sentence* (Apple's Translation framework does all translating);
+/// post-session it powers notes, summaries, and the hotword restore.
 ///
 /// Pure logic — unit-testable without MLX or a device.
 struct PromptBuilder: Sendable {
-    /// Rolling history turns included for context (register, honorifics,
-    /// pronouns, topic continuity).
-    var historyLimit = 6
-    /// Rough prompt budget; history is trimmed oldest-first to stay under.
+    /// Rough prompt budget; context is trimmed oldest-first to stay under.
     var maxPromptCharacters = 2200
-
-    struct HistoryTurn: Sendable {
-        var sourceLanguage: AppLanguage
-        var sourceText: String
-        var translation: String
-    }
-
-    func systemPrompt(direction: LanguagePair) -> String {
-        """
-        You are an expert \(direction.source.promptName)-to-\(direction.target.promptName) interpreter. \
-        Improve the draft translation of the given sentence. Preserve the meaning; \
-        fix register, honorifics, pronouns, and terminology using the conversation \
-        context. Output ONLY the improved \(direction.target.promptName) translation, \
-        nothing else. If the draft is already good, output it unchanged.
-        """
-    }
-
-    /// Parse the refinement output into the improved translation. Tolerates
-    /// a leading "T:" tag (fullwidth colon too) from older prompt shapes;
-    /// untagged output IS the translation. (The "S:" cleaned-source line is
-    /// gone with the transcript-polish feature — the transcript is the
-    /// record of what was said, not LLM material.)
-    func parseRefinement(_ raw: String) -> String? {
-        for line in cleanResponse(raw).split(separator: "\n") {
-            let trimmed = line.trimmingCharacters(in: .whitespaces)
-            if let value = tagged(trimmed, "T") {
-                return value
-            }
-        }
-        let whole = cleanResponse(raw)
-        return whole.isEmpty ? nil : whole
-    }
 
     /// Match a tagged line (`H: value`), tolerant of the decorations small
     /// models wrap them in: leading bullets/numbering/markdown headers,
@@ -222,42 +187,6 @@ struct PromptBuilder: Sendable {
     func isAcceptableSentenceRefinement(_ cleaned: String, original: String) -> Bool {
         guard cleaned.unicodeScalars.allSatisfy({ $0 != "\u{FFFD}" }) else { return false }
         return isAcceptableHotwordRestore(cleaned, original: original)
-    }
-
-    func userPrompt(
-        source: String,
-        draft: String,
-        direction: LanguagePair,
-        history: [HistoryTurn],
-        glossary: [String] = []
-    ) -> String {
-        var historyLines = history.suffix(historyLimit).map { turn in
-            "[\(turn.sourceLanguage.promptName)] \(turn.sourceText) → \(turn.translation)"
-        }
-
-        // Glossary outranks history: it never gets trimmed.
-        let glossaryBlock = glossary.isEmpty
-            ? ""
-            : "Glossary — the sentence may contain mis-transcriptions of these "
-                + "terms; restore them and use these exact renderings:\n"
-                + glossary.joined(separator: "\n") + "\n\n"
-
-        let request = """
-        Sentence (\(direction.source.promptName)): \(source)
-        Draft (\(direction.target.promptName)): \(draft)
-        """
-
-        // Trim oldest history until the prompt fits the budget.
-        func assembled() -> String {
-            let context = historyLines.isEmpty
-                ? ""
-                : "Conversation so far:\n" + historyLines.joined(separator: "\n") + "\n\n"
-            return glossaryBlock + context + request
-        }
-        while assembled().count > maxPromptCharacters, !historyLines.isEmpty {
-            historyLines.removeFirst()
-        }
-        return assembled()
     }
 
     /// Defensive cleanup: strip any thinking block the chat template let
@@ -1298,14 +1227,6 @@ struct PromptBuilder: Sendable {
     /// wildly longer than any plausible translation, full of replacement
     /// characters, or a degenerate repetition loop — in all those cases the
     /// NMT draft must stand.
-    func isAcceptable(_ refined: String, draft: String) -> Bool {
-        guard !refined.isEmpty else { return false }
-        guard refined.unicodeScalars.allSatisfy({ $0 != "\u{FFFD}" }) else { return false }
-        guard !Self.hasDegenerateRepetition(refined) else { return false }
-        let limit = max(draft.count * 3, 120)
-        return refined.count <= limit
-    }
-
     /// Detects "this, this, this…" style generation loops, in both spaced
     /// (Latin) and unspaced (CJK) text.
     static func hasDegenerateRepetition(_ text: String) -> Bool {

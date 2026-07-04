@@ -27,8 +27,8 @@ struct TranscriptSegmenter: Sendable {
         var timedRuns: [TimedRun]? = nil
     }
 
-    /// Below these lengths, refinement is skipped — the NMT draft is fine
-    /// for greetings, numbers, fragments.
+    /// Below these lengths, LLM sentence cleanup is skipped — greetings,
+    /// numbers, and fragments rarely carry a mishearing worth fixing.
     var minLatinWords = 5
     var minCJKCharacters = 8
 

@@ -42,7 +42,9 @@ struct VoiceprintMathTests {
 
     @Test func acceptableRejectsRepetitionLoops() {
         let loop = Array(repeating: "this", count: 30).joined(separator: ", ")
-        #expect(!PromptBuilder().isAcceptable(loop, draft: String(repeating: "长", count: 60)))
+        // Even against itself (perfect similarity/length), a loop fails the
+        // sentence-refinement gate via the repetition detector.
+        #expect(!PromptBuilder().isAcceptableSentenceRefinement(loop, original: loop))
     }
 
     @Test func summaryCleanupStripsMarkdown() {

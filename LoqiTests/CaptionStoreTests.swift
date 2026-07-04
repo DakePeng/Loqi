@@ -73,15 +73,6 @@ struct CaptionStoreTests {
         #expect(store.activeEntryID == nil)
     }
 
-    @Test func historyDrawsFromFinalTranslatedEntries() {
-        let store = CaptionStore()
-        store.applyVolatile(text: "lecture", direction: enToZh)
-        if let entry = store.finalizeActive(text: "lecture", direction: enToZh) {
-            store.setDraft("讲座", for: entry.id)
-        }
-        #expect(store.recentHistory(limit: 6).map(\.sourceText) == ["lecture"])
-    }
-
     @Test func applyCleanedSourceSwapsTextAndKeepsRaw() {
         let store = CaptionStore()
         store.applyVolatile(text: "hi", direction: enToZh)

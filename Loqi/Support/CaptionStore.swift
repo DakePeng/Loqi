@@ -170,17 +170,10 @@ final class CaptionStore {
 
     // MARK: Refinement context
 
-    /// Recent completed turns, oldest first, for the LLM prompt.
-    func recentHistory(limit: Int) -> [CaptionEntry] {
-        entries
-            .filter { $0.state != .volatile && $0.displayTranslation != nil }
-            .suffix(limit)
-    }
-
     /// Recent finalized source sentences in `language`, oldest first,
     /// excluding the entry being refined — monolingual context for sentence
-    /// refinement. Unlike `recentHistory` it needs no translations, so it
-    /// works in transcribe-only sessions too.
+    /// refinement. Needs no translations, so it works in transcribe-only
+    /// sessions too.
     func recentSourceTexts(
         limit: Int, language: AppLanguage, excluding id: UUID
     ) -> [String] {
