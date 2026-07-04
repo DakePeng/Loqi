@@ -297,3 +297,187 @@ struct SummaryJobCenterCacheTests {
         #expect(jobs.error(for: record.id) == SummaryJobCenter.JobError.aiDisabled.localizedDescription)
     }
 }
+
+@MainActor
+struct ImportResumeTests {
+    private func makeTempDirectory() -> URL {
+        let url = FileManager.default.temporaryDirectory
+            .appending(path: UUID().uuidString)
+        try? FileManager.default.createDirectory(
+            at: url, withIntermediateDirectories: true)
+        return url
+    }
+
+    private func importingRecord(resumable: Bool) -> SessionRecord {
+        var record = SessionRecord(
+            mode: .captions, startedAt: .now, endedAt: .now, entries: [])
+        record.importing = true
+        if resumable {
+            record.audioFileName = "\(record.id.uuidString).m4a"
+            record.importCheckpoint = SessionRecord.ImportCheckpoint(
+                direction: LanguagePair(source: .english, target: .english),
+                speakerCount: 1, engine: "apple", sensitivityRaw: "balanced",
+                recordedAt: .now, duration: 10)
+        }
+        return record
+    }
+
+    @Test func onlyResumesImportsWithACheckpointAndDurableAudio() {
+        let hotwordDirectory = makeTempDirectory()
+        defer { try? FileManager.default.removeItem(at: hotwordDirectory) }
+        let archive = SessionArchive()
+        let jobs = SummaryJobCenter(
+            llm: LLMService(), archive: archive,
+            hotwords: HotwordStore(directory: hotwordDirectory),
+            translator: TranslationCoordinator(), voiceprint: VoiceprintService(),
+            isRecording: { false })
+
+        let finished = SessionRecord(
+            mode: .captions, startedAt: .now, endedAt: .now, entries: [])
+        let abandoned = importingRecord(resumable: false)
+        let resumable = importingRecord(resumable: true)
+        for record in [finished, abandoned, resumable] { archive.add(record) }
+        defer {
+            for record in [finished, abandoned, resumable] { archive.delete(id: record.id) }
+        }
+
+        jobs.resumeUnfinishedImports()
+
+        // activities[sessionID] is set synchronously before any await, so
+        // this is deterministic without waiting on the (doomed — there's no
+        // real audio file on disk) resumed task to actually run.
+        #expect(!jobs.isBusy(finished.id))
+        #expect(!jobs.isBusy(abandoned.id))
+        #expect(jobs.isBusy(resumable.id))
+    }
+
+    @Test func neverResumesWhileRecording() {
+        let hotwordDirectory = makeTempDirectory()
+        defer { try? FileManager.default.removeItem(at: hotwordDirectory) }
+        let archive = SessionArchive()
+        let jobs = SummaryJobCenter(
+            llm: LLMService(), archive: archive,
+            hotwords: HotwordStore(directory: hotwordDirectory),
+            translator: TranslationCoordinator(), voiceprint: VoiceprintService(),
+            isRecording: { true })
+
+        let resumable = importingRecord(resumable: true)
+        archive.add(resumable)
+        defer { archive.delete(id: resumable.id) }
+
+        jobs.resumeUnfinishedImports()
+
+        #expect(!jobs.isBusy(resumable.id))
+    }
+
+    @Test func launchScanResumesOnlyValidPendingSummaries() {
+        let hotwordDirectory = makeTempDirectory()
+        defer { try? FileManager.default.removeItem(at: hotwordDirectory) }
+        let archive = SessionArchive()
+        let jobs = SummaryJobCenter(
+            llm: LLMService(), archive: archive,
+            hotwords: HotwordStore(directory: hotwordDirectory),
+            translator: TranslationCoordinator(), voiceprint: VoiceprintService(),
+            isRecording: { false })
+
+        var pending = SessionRecord(
+            mode: .captions, startedAt: .now, endedAt: .now, entries: [])
+        pending.pendingSummary = .init(
+            styleRaw: SummaryStyle.meeting.rawValue,
+            lengthRaw: SummaryLength.standard.rawValue)
+        let finished = SessionRecord(
+            mode: .captions, startedAt: .now, endedAt: .now, entries: [])
+        var corrupt = SessionRecord(
+            mode: .captions, startedAt: .now, endedAt: .now, entries: [])
+        corrupt.pendingSummary = .init(styleRaw: "no-such-style", lengthRaw: "nope")
+        var midImport = importingRecord(resumable: true)
+        midImport.pendingSummary = pending.pendingSummary
+        for record in [pending, finished, corrupt, midImport] { archive.add(record) }
+        defer {
+            for record in [pending, finished, corrupt, midImport] {
+                archive.delete(id: record.id)
+            }
+        }
+
+        jobs.resumeUnfinishedSummaries()
+
+        #expect(jobs.isBusy(pending.id))
+        #expect(!jobs.isBusy(finished.id))
+        #expect(!jobs.isBusy(corrupt.id))
+        // Unparseable markers get dropped instead of rescanned forever.
+        #expect(archive.sessions.first { $0.id == corrupt.id }?.pendingSummary == nil)
+        // Importing placeholders re-arm through the import resume instead.
+        #expect(!jobs.isBusy(midImport.id))
+    }
+
+    @Test func memoryShedPredicateTracksRunningJobs() {
+        let hotwordDirectory = makeTempDirectory()
+        defer { try? FileManager.default.removeItem(at: hotwordDirectory) }
+        let archive = SessionArchive()
+        let jobs = SummaryJobCenter(
+            llm: LLMService(), archive: archive,
+            hotwords: HotwordStore(directory: hotwordDirectory),
+            translator: TranslationCoordinator(), voiceprint: VoiceprintService(),
+            isRecording: { false })
+        #expect(!jobs.hasRunningLLMJob)
+
+        let record = SessionRecord(
+            mode: .captions, startedAt: .now, endedAt: .now, entries: [])
+        archive.add(record)
+        defer { archive.delete(id: record.id) }
+        jobs.summarize(sessionID: record.id, style: .meeting, length: .standard)
+        #expect(jobs.hasRunningLLMJob)
+
+        // Held jobs aren't "running": a background memory warning must
+        // still take the full-unload path.
+        jobs.setBackgrounded(true)
+        #expect(!jobs.hasRunningLLMJob)
+    }
+
+    @Test func cancelClearsThePendingSummaryMarker() {
+        let hotwordDirectory = makeTempDirectory()
+        defer { try? FileManager.default.removeItem(at: hotwordDirectory) }
+        let archive = SessionArchive()
+        let jobs = SummaryJobCenter(
+            llm: LLMService(), archive: archive,
+            hotwords: HotwordStore(directory: hotwordDirectory),
+            translator: TranslationCoordinator(), voiceprint: VoiceprintService(),
+            isRecording: { false })
+
+        var record = SessionRecord(
+            mode: .captions, startedAt: .now, endedAt: .now, entries: [])
+        record.pendingSummary = .init(
+            styleRaw: SummaryStyle.meeting.rawValue,
+            lengthRaw: SummaryLength.standard.rawValue)
+        archive.add(record)
+        defer { archive.delete(id: record.id) }
+
+        jobs.cancel(record.id)
+
+        #expect(archive.sessions.first { $0.id == record.id }?.pendingSummary == nil)
+    }
+
+    @Test func foregroundAfterBackgroundResumesACheckpointedImport() {
+        let hotwordDirectory = makeTempDirectory()
+        defer { try? FileManager.default.removeItem(at: hotwordDirectory) }
+        let archive = SessionArchive()
+        let jobs = SummaryJobCenter(
+            llm: LLMService(), archive: archive,
+            hotwords: HotwordStore(directory: hotwordDirectory),
+            translator: TranslationCoordinator(), voiceprint: VoiceprintService(),
+            isRecording: { false })
+
+        // A checkpointed import left over from before this background/
+        // foreground cycle (e.g. one already paused) — never resumed until
+        // setBackgrounded(false) sweeps for it, same as a cold launch would.
+        let resumable = importingRecord(resumable: true)
+        archive.add(resumable)
+        defer { archive.delete(id: resumable.id) }
+
+        jobs.setBackgrounded(true)
+        #expect(!jobs.isBusy(resumable.id))
+        jobs.setBackgrounded(false)
+
+        #expect(jobs.isBusy(resumable.id))
+    }
+}

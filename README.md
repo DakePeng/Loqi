@@ -121,3 +121,7 @@ Latest docs scan: 2026-06-20. The repo is an iOS-first Swift 6 / XcodeGen app wi
 ## Not in v1 (by design)
 
 Two-way interpreter mode and TTS output (removed in the capture-first pivot — Apple ships live translation at the OS level) · a supported Mac / desktop app (the iPhone app is the v1 focus; the existing Mac target is not a shipped surface) · automatic spoken-language detection · always-on ambient listening (an explicitly started session does continue in the background) · languages beyond zh/en/ja/ko. The seams exist — see `AppLanguage` and the direction-resolution step in `CaptionPipeline.handle`.
+
+## License
+
+[PolyForm Noncommercial License 1.0.0](LICENSE) — free for personal, research, and other noncommercial use; commercial use requires a separate license from the project.

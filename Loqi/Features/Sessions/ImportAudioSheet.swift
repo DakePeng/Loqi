@@ -20,6 +20,8 @@ struct ImportAudioSheet: View {
     // key (not the live "captions.speakerCount") so import and Record keep
     // independent defaults and don't inherit each other's last choice.
     @AppStorage("import.speakerCount") private var speakerCount = -1
+    @AppStorage("import.sensitivity") private var sensitivityRaw
+        = MicSensitivity.balanced.rawValue
     /// Per-import engine choice. Defaults to the fast accurate option;
     /// Qwen3-ASR decodes near realtime, so it's an explicit pick per file,
     /// never an auto-upgrade (re-transcribe is the automatic Qwen3 pass).
@@ -44,8 +46,18 @@ struct ImportAudioSheet: View {
         return rawValue
     }
 
+    static func importSensitivityRaw(_ rawValue: String?) -> String {
+        guard let rawValue, MicSensitivity(rawValue: rawValue) != nil else {
+            return MicSensitivity.balanced.rawValue
+        }
+        return rawValue
+    }
+
     private var translationTarget: AppLanguage? { AppLanguage(rawValue: translationRaw) }
     private var source: AppLanguage { AppLanguage(rawValue: sourceRaw) ?? .english }
+    private var sensitivity: MicSensitivity {
+        MicSensitivity(rawValue: Self.importSensitivityRaw(sensitivityRaw)) ?? .balanced
+    }
 
     /// Diarization is requested but the model isn't on disk yet.
     private var needsSpeakerModelConsent: Bool {
@@ -59,7 +71,8 @@ struct ImportAudioSheet: View {
             direction: LanguagePair(
                 source: source, target: translationTarget ?? source),
             speakerCount: speakerCount,
-            engine: importEngine)
+            engine: importEngine,
+            sensitivity: sensitivity)
         dismiss()
     }
 
@@ -87,6 +100,13 @@ struct ImportAudioSheet: View {
                         Text("One voice").tag(0)
                         Text("Auto").tag(-1)
                         ForEach(2...6, id: \.self) { Text("\($0) speakers").tag($0) }
+                    }
+                    if importEngine != "apple" {
+                        Picker("Speech pickup", selection: $sensitivityRaw) {
+                            ForEach(MicSensitivity.allCases) { preset in
+                                Text(preset.displayName).tag(preset.rawValue)
+                            }
+                        }
                     }
                     Picker("Engine", selection: $importEngine) {
                         Text("Apple (instant)").tag("apple")

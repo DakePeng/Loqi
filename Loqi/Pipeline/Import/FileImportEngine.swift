@@ -45,6 +45,11 @@ final class FileImportEngine {
         direction: LanguagePair,
         speakerCount: Int,
         engine: String = "apple",
+        sensitivity: MicSensitivity = .balanced,
+        onAudioReady: @MainActor @Sendable (
+            _ recordingName: String, _ duration: TimeInterval, _ recordedAt: Date
+        ) -> Void = { _, _, _ in },
+        onSegmentComplete: (@MainActor @Sendable (SessionRecord.ImportCheckpoint.Segment) -> Void)? = nil,
         onPhase: @escaping @MainActor @Sendable (Phase) -> Void
     ) async throws -> SessionRecord {
         // Files-picker URLs are security-scoped; copy into our container so
@@ -70,6 +75,17 @@ final class FileImportEngine {
         let recordedAt = (try? url.resourceValues(forKeys: [.creationDateKey]).creationDate)
             ?? Date.now.addingTimeInterval(-duration)
 
+        // Persist the imported audio before transcribing, not after: a kill
+        // mid-decode still leaves a durable file a resume can read back.
+        // Keep the source extension (AVAudioPlayer reads m4a/wav/caf alike).
+        let recordingName = "\(sessionID.uuidString)."
+            + (workingURL.pathExtension.isEmpty ? "m4a" : workingURL.pathExtension)
+        let recordingURL = SessionArchive.recordingURL(fileName: recordingName)
+        try FileManager.default.createDirectory(
+            at: SessionArchive.recordingsDirectory, withIntermediateDirectories: true)
+        try FileManager.default.copyItem(at: workingURL, to: recordingURL)
+        onAudioReady(recordingName, duration, recordedAt)
+
         // MARK: Transcribe (finals only, each carrying a time range)
         onPhase(.transcribing(0))
         let backend = OfflineTranscriber.importBackend(
@@ -81,7 +97,9 @@ final class FileImportEngine {
             audioFile,
             language: direction.source,
             backend: backend,
-            hotwords: hotwords?.biasStrings(for: direction.source) ?? []
+            sensitivity: sensitivity,
+            hotwords: hotwords?.biasStrings(for: direction.source) ?? [],
+            onSegmentComplete: onSegmentComplete
         ) { fraction in
             onPhase(.transcribing(fraction))
         }
@@ -90,7 +108,7 @@ final class FileImportEngine {
         let utterances = rawUtterances.filter { $0.text.hasSpeechContent }
         logger.info("import: \(utterances.count) utterances from \(Int(duration))s file")
 
-        var entries = utterances.map { utterance in
+        let entries = utterances.map { utterance in
             SessionRecord.Entry(
                 sourceText: utterance.text,
                 translation: nil,
@@ -100,7 +118,82 @@ final class FileImportEngine {
                 audioOffset: utterance.start)
         }
 
-        // MARK: Diarization + tier-1 translation
+        return try await finishImport(
+            sessionID: sessionID, direction: direction, speakerCount: speakerCount,
+            utterances: utterances, entries: entries, recordingName: recordingName,
+            recordedAt: recordedAt, duration: duration, onPhase: onPhase)
+    }
+
+    /// Resumes an interrupted import from its checkpoint. Reads audio
+    /// straight from the durable copy a prior attempt already made — never
+    /// touches the original picker URL, which may not even be valid
+    /// anymore after a relaunch — and skips VAD segments already decoded.
+    func resumeImport(
+        checkpoint: SessionRecord.ImportCheckpoint,
+        sessionID: UUID,
+        audioFileName: String,
+        onSegmentComplete: (@MainActor @Sendable (SessionRecord.ImportCheckpoint.Segment) -> Void)? = nil,
+        onPhase: @escaping @MainActor @Sendable (Phase) -> Void
+    ) async throws -> SessionRecord {
+        let audioFile = try AVAudioFile(
+            forReading: SessionArchive.recordingURL(fileName: audioFileName))
+        let direction = checkpoint.direction
+        let sensitivity = MicSensitivity(rawValue: checkpoint.sensitivityRaw) ?? .balanced
+
+        onPhase(.transcribing(0))
+        let backend = OfflineTranscriber.importBackend(
+            choice: checkpoint.engine,
+            senseVoiceInstalled: SenseVoiceModelStore.isInstalled,
+            qwen3Installed: Qwen3ASRModelStore.isInstalled)
+        if backend == .qwen3ASR { await llm?.unload() }
+        let rawUtterances = try await OfflineTranscriber.transcribe(
+            audioFile,
+            language: direction.source,
+            backend: backend,
+            sensitivity: sensitivity,
+            hotwords: hotwords?.biasStrings(for: direction.source) ?? [],
+            alreadyDecoded: checkpoint.segments,
+            onSegmentComplete: onSegmentComplete
+        ) { fraction in
+            onPhase(.transcribing(fraction))
+        }
+        let utterances = rawUtterances.filter { $0.text.hasSpeechContent }
+        logger.info(
+            "import: resumed with \(utterances.count) utterances, \(checkpoint.segments.count) cached")
+
+        let entries = utterances.map { utterance in
+            SessionRecord.Entry(
+                sourceText: utterance.text,
+                translation: nil,
+                speaker: nil,
+                direction: direction,
+                timestamp: checkpoint.recordedAt.addingTimeInterval(utterance.start),
+                audioOffset: utterance.start)
+        }
+
+        return try await finishImport(
+            sessionID: sessionID, direction: direction, speakerCount: checkpoint.speakerCount,
+            utterances: utterances, entries: entries, recordingName: audioFileName,
+            recordedAt: checkpoint.recordedAt, duration: checkpoint.duration, onPhase: onPhase)
+    }
+
+    /// Diarization + tier-1 translation, then the final record. Shared by a
+    /// fresh import and a resumed one — by the time this runs the durable
+    /// audio copy already exists at `recordingName` either way.
+    private func finishImport(
+        sessionID: UUID,
+        direction: LanguagePair,
+        speakerCount: Int,
+        utterances: [OfflineTranscriber.Utterance],
+        entries initialEntries: [SessionRecord.Entry],
+        recordingName: String,
+        recordedAt: Date,
+        duration: TimeInterval,
+        onPhase: @escaping @MainActor @Sendable (Phase) -> Void
+    ) async throws -> SessionRecord {
+        var entries = initialEntries
+        let recordingURL = SessionArchive.recordingURL(fileName: recordingName)
+
         // The two phases are independent — diarization reads the audio and
         // writes speaker slots; translation reads source text and writes the
         // translation field — so when both run, the tier-1 drafts overlap the
@@ -124,7 +217,7 @@ final class FileImportEngine {
             onPhase(.identifyingSpeakers(0))
             do {
                 let segments = try await voiceprint.diarizeFile(
-                    url: workingURL, maxSpeakers: speakerCap, source: .current
+                    url: recordingURL, maxSpeakers: speakerCap, source: .current
                 ) { progress in
                     Task { @MainActor in
                         switch progress {
@@ -142,6 +235,12 @@ final class FileImportEngine {
                     entries[index].speaker = slots[index]
                 }
                 logger.info("import: \(Set(segments.map(\.slot)).count) speakers across \(segments.count) segments")
+            } catch is CancellationError {
+                // A background/yield preempt mid-diarization must stop the
+                // whole import (checkpointed, resumed on foreground) — not
+                // be swallowed as "labels failed" and keep Metal-backed
+                // work running past the scene exit.
+                throw CancellationError()
             } catch {
                 // Speaker labels are an enhancement: a failed model download
                 // or analysis must not cost the transcript. But surface it —
@@ -166,15 +265,6 @@ final class FileImportEngine {
         }
 
         guard entries.count >= 1 else { throw ImportError.nothingTranscribed }
-        // Persist the imported audio so the session gets playback, re-transcribe,
-        // and an in-place speaker-separation retry — same as a live recording.
-        // Keep the source extension (AVAudioPlayer reads m4a/wav/caf alike).
-        let recordingName = "\(sessionID.uuidString)."
-            + (workingURL.pathExtension.isEmpty ? "m4a" : workingURL.pathExtension)
-        let recordingURL = SessionArchive.recordingURL(fileName: recordingName)
-        try? FileManager.default.createDirectory(
-            at: SessionArchive.recordingsDirectory, withIntermediateDirectories: true)
-        try? FileManager.default.copyItem(at: workingURL, to: recordingURL)
 
         // Preassigned ID: the job center's placeholder record keeps its
         // identity when this finished record replaces it.

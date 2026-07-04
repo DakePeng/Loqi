@@ -4,6 +4,20 @@ import Testing
 @testable import Loqi
 
 struct SenseVoiceTuningTests {
+    @Test func micSensitivityDefaultsToFarWhenUnset() {
+        let old = UserDefaults.standard.string(forKey: MicSensitivity.defaultsKey)
+        defer {
+            if let old {
+                UserDefaults.standard.set(old, forKey: MicSensitivity.defaultsKey)
+            } else {
+                UserDefaults.standard.removeObject(forKey: MicSensitivity.defaultsKey)
+            }
+        }
+
+        UserDefaults.standard.removeObject(forKey: MicSensitivity.defaultsKey)
+        #expect(MicSensitivity.current == .far)
+    }
+
     @Test func partialIntervalSlowsUnderReduceHeat() {
         // Default cadence is 0.7s @ 16kHz = 11_200 samples.
         #expect(SenseVoiceTuning.partialInterval(reduceHeat: false) == 11_200)

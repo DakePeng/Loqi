@@ -26,6 +26,15 @@ enum VADSegmentedTranscriber {
         return (Double(start) / rate, Double(start + n) / rate)
     }
 
+    /// Text already decoded for this exact segment range on a prior
+    /// attempt, if any. Pure for testing.
+    static func cachedText(
+        start: TimeInterval, end: TimeInterval,
+        in alreadyDecoded: [SessionRecord.ImportCheckpoint.Segment]
+    ) -> String? {
+        alreadyDecoded.first(where: { $0.start == start && $0.end == end })?.text
+    }
+
     /// A decode that comes back empty for a clearly-speech-length segment
     /// is suspicious (autoregressive decoders can blank out near their
     /// token budget); retrying the halves rescues the content instead of
@@ -92,23 +101,33 @@ enum VADSegmentedTranscriber {
     /// meaningful and at most pool-size segment buffers are held at once.
     /// Cancellation-cooperative: long files decode for minutes and a
     /// cancelled import must stop promptly.
+    ///
+    /// `alreadyDecoded` lets a resumed import skip segments it already has
+    /// text for (matched by exact time range — VAD is a deterministic
+    /// function of the same audio, so a replay reproduces the same
+    /// ranges). `onSegmentComplete` reports each freshly-decoded (non-empty)
+    /// segment as it lands, so a caller can checkpoint it immediately.
+    /// ponytail: a segment rescued by `retryHalves` caches under its two
+    /// half-ranges, not the parent range, so a resume re-decodes it once
+    /// more instead of matching — harmless (same deterministic result),
+    /// just not a free skip; only worth precise sub-range matching if that
+    /// shows up as a real resume-time cost.
     static func transcribe(
         samples16k samples: [Float],
         vadModelPath: String,
+        sensitivity: MicSensitivity = .balanced,
         maxSpeechDuration: Float,
         decoders: [@Sendable ([Float]) async -> String],
+        alreadyDecoded: [SessionRecord.ImportCheckpoint.Segment] = [],
+        onSegmentComplete: (@MainActor @Sendable (SessionRecord.ImportCheckpoint.Segment) -> Void)? = nil,
         onProgress: @MainActor @Sendable (Double) -> Void
     ) async throws -> [Utterance] {
         precondition(!decoders.isEmpty, "need at least one decoder")
         var vadConfig = sherpaOnnxVadModelConfig(
             sileroVad: sherpaOnnxSileroVadModelConfig(
                 model: vadModelPath,
-                // 0.3 to match SenseVoiceEngine's balanced preset: imported
-                // recordings (often meetings captured far-field, without our
-                // live boost) are exactly where stricter gates drop faint
-                // talkers.
-                threshold: 0.3,
-                minSilenceDuration: 0.5,
+                threshold: sensitivity.sileroThreshold,
+                minSilenceDuration: sensitivity.sileroMinSilence,
                 minSpeechDuration: 0.25,
                 windowSize: 512,
                 maxSpeechDuration: maxSpeechDuration),
@@ -139,11 +158,22 @@ enum VADSegmentedTranscriber {
                 guard let done = try await group.next() else { return }
                 results[done.segment] = done.utterances
                 free.append(done.slot)
+                for utterance in done.utterances {
+                    await onSegmentComplete?(SessionRecord.ImportCheckpoint.Segment(
+                        start: utterance.start, end: utterance.end, text: utterance.text))
+                }
             }
 
             // Dispatch a closed segment to an idle decoder, harvesting first
             // when the pool is saturated (this is what paces the producer).
+            // A segment whose exact range was already decoded on a prior
+            // attempt reuses that text instead of paying for another decode.
             func dispatch(_ segmentSamples: [Float], start: Int, index: Int) async throws {
+                let (s, e) = timeRange(start: start, n: segmentSamples.count, sampleRate: sampleRate)
+                if let text = Self.cachedText(start: s, end: e, in: alreadyDecoded) {
+                    results[index] = [Utterance(text: text, start: s, end: e)]
+                    return
+                }
                 if free.isEmpty { try await harvestOne() }
                 let slot = free.removeLast()
                 group.addTask {

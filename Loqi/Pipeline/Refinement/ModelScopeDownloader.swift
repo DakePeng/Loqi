@@ -67,7 +67,7 @@ struct ModelScopeDownloader: Downloader {
                 URLQueryItem(name: "FilePath", value: file.path),
             ]
             let base = completedBytes
-            try await SegmentedDownloader().download(
+            try await ModelFileDownloader.download(
                 url: components.url!, to: target,
                 expectedBytes: file.size, sha256: file.sha256
             ) { bytes in

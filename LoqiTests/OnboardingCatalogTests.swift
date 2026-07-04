@@ -9,6 +9,25 @@ import Testing
 /// users on unreachable hosts (and the diarizer must use HF-Mirror, never
 /// ModelScope, where its repos don't exist).
 struct OnboardingCatalogTests {
+    // MARK: App language
+
+    @Test func selectedUILanguageOverridesReaderLanguage() {
+        let old = UserDefaults.standard.string(forKey: AppUILanguage.defaultsKey)
+        defer {
+            if let old {
+                UserDefaults.standard.set(old, forKey: AppUILanguage.defaultsKey)
+            } else {
+                UserDefaults.standard.removeObject(forKey: AppUILanguage.defaultsKey)
+            }
+        }
+
+        UserDefaults.standard.set(AppUILanguage.chinese.rawValue, forKey: AppUILanguage.defaultsKey)
+        #expect(AppLanguage.devicePreferred == .chinese)
+
+        UserDefaults.standard.set(AppUILanguage.english.rawValue, forKey: AppUILanguage.defaultsKey)
+        #expect(AppLanguage.devicePreferred == .english)
+    }
+
     // MARK: Region suggestion
 
     @Test func mainlandChinaGetsMirrorSuggestion() {

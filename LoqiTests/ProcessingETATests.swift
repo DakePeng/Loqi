@@ -146,6 +146,19 @@ struct RecordingElapsedFormatterTests {
 }
 
 struct RecordCopyTests {
+    @Test func idleRecordOptionChipsUsePlainButtonStyle() throws {
+        let repoRoot = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+        let contents = try String(
+            contentsOf: repoRoot.appending(path: "Loqi/Features/Captions/LiveCaptionsView.swift"),
+            encoding: .utf8)
+
+        #expect(contents.contains(
+            ".padding(.horizontal, 16)\n                    .buttonStyle(.plain)"))
+        #expect(contents.contains(".transaction { $0.animation = nil }"))
+    }
+
     @Test func recordNotesDoNotReferToTappingTheMic() throws {
         let repoRoot = URL(fileURLWithPath: #filePath)
             .deletingLastPathComponent()

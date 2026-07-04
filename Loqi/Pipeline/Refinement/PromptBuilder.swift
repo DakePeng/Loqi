@@ -226,6 +226,27 @@ struct PromptBuilder: Sendable {
         return text.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
+    /// Content fields must read as prose: the model copies its source-id
+    /// citations into the text ("m004-007 价格：80元/斤", "（m005 提及
+    /// 杨梅）"), and m-ids are meaningless to users. Strip id tokens
+    /// (single, comma lists, ranges) plus a directly trailing colon, then
+    /// tidy emptied parentheses and doubled spaces. Grounding is
+    /// unaffected — ids are captured structurally from the source_ids
+    /// field. Applied at parse time AND at the reduce/render boundaries,
+    /// so notes persisted before this scrub display clean too.
+    static func strippedSourceIDTokens(_ text: String) -> String {
+        guard text.contains("m") else { return text }
+        // Swift Regex has no lookbehind: capture the preceding non-letter
+        // (if any) and re-emit it, so words like "team004" stay intact.
+        let idRun = /(?:^|([^A-Za-z]))m\d{2,4}(?:\s*[-–—~,，、]\s*m?\d{1,4})*\s*[:：]?\s*/
+        var cleaned = text.replacing(idRun) { match in
+            match.output.1.map(String.init) ?? ""
+        }
+        cleaned = cleaned.replacing(/[（(]\s*[)）]/, with: "")
+        return cleaned.replacing(/\s{2,}/, with: " ")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
     /// Remove XML-ish tags that sometimes leak from small models. This keeps
     /// the enclosed words (`<summary>ship it</summary>` -> `ship it`) but
     /// drops standalone wrappers/control tags so the summary renderer never
@@ -281,6 +302,9 @@ struct PromptBuilder: Sendable {
         R	chunk_id	source_ids	risk
         E	chunk_id	source_ids	term
         J	chunk_id	source_ids	reflection
+
+        Example output (format reference only; never copy its content or ids):
+        \(Self.chunkRecordExample(in: language))
         """
         var blocks = [
             "chunk_id: \(chunkID)",
@@ -310,6 +334,136 @@ struct PromptBuilder: Sendable {
         }
     }
 
+    /// Privacy-safe accounting of why parsed lines were accepted or
+    /// rejected — counts only, never content, so it is loggable (see
+    /// `debugLogsDoNotExposeTranscriptText`). An all-rejected response
+    /// used to stub the chunk silently; these tallies say which rule bit.
+    struct ParseDiagnostics {
+        var lines = 0
+        var hadTabs = false
+        var accepted = 0
+        var unknownTag = 0
+        var overCap = 0
+        var specEcho = 0
+        var columnCount = 0
+        var chunkIDMismatch = 0
+        var invalidSourceIDs = 0
+        var exampleEcho = 0
+        /// Records recovered by the lenient second pass (strict parse
+        /// accepted nothing; near-miss shapes were re-read).
+        var salvaged = 0
+        /// Tag and field count of column-rejected lines (first few, e.g.
+        /// "T:4" = a topic line missing one field) — says which record
+        /// kinds are malformed and how, without logging any content.
+        var columnsSeen: [String] = []
+
+        var logDescription: String {
+            "lines=\(lines) tabs=\(hadTabs) accepted=\(accepted) "
+                + "unknownTag=\(unknownTag) columns=\(columnCount) "
+                + "idMiss=\(chunkIDMismatch) badSourceIDs=\(invalidSourceIDs) "
+                + "overCap=\(overCap) specEcho=\(specEcho) "
+                + "exampleEcho=\(exampleEcho) salvaged=\(salvaged) "
+                + "colsSeen=\(columnsSeen)"
+        }
+    }
+
+    /// One-shot example for `chunkRecordPrompt` — device logs showed the
+    /// 2B model answering by copying the format-spec block verbatim
+    /// (specEcho=8/8), the classic failure of a bare spec with no
+    /// demonstration. The example is in the note language so the model
+    /// doesn't mimic its language over the session's. A verbatim copy of
+    /// these lines is kept out of the records by `exampleContent` (the
+    /// model borrows the example's c000 chunk id on real records too, so
+    /// the id can't be the echo gate — see `acceptsChunkID`).
+    static func chunkRecordExample(in language: AppLanguage) -> String {
+        let f = Self.exampleFields(in: language)
+        // Six lines on purpose: a 3-line example anchored the 2B to
+        // emitting exactly one T/P/A per chunk (device logs) — the
+        // demonstration's cardinality is imitated along with its format.
+        return """
+        T\tc000\t00:00-02:00\t\(f.topic)\t\(f.summary)
+        P\tc000\tm001,m002\t\(f.point)
+        P\tc000\tm004\t\(f.point2)
+        D\tc000\tm005\t\(f.decision)
+        A\tc000\tm003\t\(f.owner)\t\(f.task)\t\(f.deadline)
+        Q\tc000\tm006\t\(f.question)
+        """
+    }
+
+    private static func exampleFields(
+        in language: AppLanguage
+    ) -> (topic: String, summary: String, point: String, point2: String,
+          decision: String, question: String, owner: String, task: String, deadline: String) {
+        switch language {
+        case .english:
+            ("Budget planning", "Agreed on next quarter's budget direction",
+             "Budget set at 420k", "Venue stays on the second floor",
+             "Local suppliers will be used", "Whether an external audit is needed",
+             "Alex", "Prepare the budget breakdown", "Friday")
+        case .chinese:
+            ("预算规划", "确定了下季度预算方向",
+             "预算定为 42 万", "场地定在二楼",
+             "决定采用本地供应商", "是否需要外部审核",
+             "王经理", "准备预算明细", "周五")
+        case .japanese:
+            ("予算計画", "来四半期の予算方針を決定",
+             "予算は42万に決定", "会場は二階に決定",
+             "地元の業者を採用する", "外部監査が必要かどうか",
+             "田中さん", "予算明細を準備する", "金曜日")
+        case .korean:
+            ("예산 계획", "다음 분기 예산 방향 확정",
+             "예산은 42만으로 확정", "장소는 2층으로 확정",
+             "현지 공급업체를 사용하기로 결정", "외부 감사가 필요한지 여부",
+             "김 팀장", "예산 내역 준비", "금요일")
+        }
+    }
+
+    /// The distinctive long-form strings from every language's example
+    /// (NOT short common fields like owners or "Friday", which appear in
+    /// real meetings). A parsed line carrying one of these verbatim is
+    /// the model copying the example, not extracting — dropped like a
+    /// spec echo.
+    private static let exampleContent: Set<String> = Set(
+        AppLanguage.allCases.flatMap { language -> [String] in
+            let f = exampleFields(in: language)
+            return [f.summary, f.point, f.point2, f.decision, f.question, f.task]
+        })
+
+    /// Placeholder tokens from `chunkRecordPrompt`'s format spec: a line
+    /// whose content fields are these words is the model echoing the spec
+    /// block, not a record. Keep in sync with the spec in
+    /// `chunkRecordPrompt`.
+    private static let specPlaceholders: Set<String> = [
+        "chunk_id", "time_range", "topic_title", "one_line_summary",
+        "source_ids", "key_point", "decision", "owner", "task", "deadline",
+        "question", "risk", "term", "reflection",
+    ]
+
+    /// The 2B model routinely mis-fills the chunk-id field: the literal
+    /// `chunk_id` placeholder, or a borrowed id like the example's c000
+    /// (device logs: idMiss=5/7 on lines carrying real records). Only one
+    /// chunk exists per call, so any c-number can only mean this chunk —
+    /// accept them all rather than discard good records; grounding is
+    /// enforced by the source-id check, and example/spec echoes are
+    /// rejected by content (`exampleContent`/`specPlaceholders`).
+    private static func acceptsChunkID(_ field: String, expected: String) -> Bool {
+        field == expected || field == "chunk_id"
+            || field.wholeMatch(of: /c\d{1,4}/) != nil
+    }
+
+    /// P/D/Q/R/E/J tag → record kind. T and A construct their records
+    /// specially and never route through this.
+    private static func recordKind(for tag: String) -> SessionRecord.SummaryRecord.Kind {
+        switch tag {
+        case "P": .point
+        case "D": .decision
+        case "Q": .question
+        case "R": .risk
+        case "E": .term
+        default: .reflection
+        }
+    }
+
     func parseSummaryRecords(
         _ raw: String,
         chunkID: String,
@@ -317,6 +471,22 @@ struct PromptBuilder: Sendable {
         source: SessionRecord.SummaryRecord.Source,
         timestamp: Date,
         sourceLabel: String? = nil
+    ) -> [SessionRecord.SummaryRecord] {
+        var diagnostics = ParseDiagnostics()
+        return parseSummaryRecords(
+            raw, chunkID: chunkID, validSourceIDs: validSourceIDs,
+            source: source, timestamp: timestamp, sourceLabel: sourceLabel,
+            diagnostics: &diagnostics)
+    }
+
+    func parseSummaryRecords(
+        _ raw: String,
+        chunkID: String,
+        validSourceIDs: [String],
+        source: SessionRecord.SummaryRecord.Source,
+        timestamp: Date,
+        sourceLabel: String? = nil,
+        diagnostics: inout ParseDiagnostics
     ) -> [SessionRecord.SummaryRecord] {
         let valid = Set(validSourceIDs)
         let order = Dictionary(uniqueKeysWithValues: validSourceIDs.enumerated().map {
@@ -346,68 +516,283 @@ struct PromptBuilder: Sendable {
             ids.compactMap { order[$0] }.min() ?? 0
         }
 
-        for rawLine in cleanResponse(raw).split(separator: "\n") {
+        // Split one record line into its fields, tolerating the separators
+        // small models actually emit — real tabs, runs of 2+ spaces, or (as
+        // a last resort) single spaces, where only the FINAL field can
+        // contain internal spaces. Tried per line: device logs showed one
+        // response mixing tabbed and space-separated lines, so a whole-
+        // response choice mis-splits half of it. Trailing empty fields
+        // (a trailing tab) are dropped. Returns nil when no strategy
+        // yields the tag's expected count.
+        func fields(of line: String, expecting expected: Int) -> [String]? {
+            var candidates: [[Substring]] = []
+            if line.contains("\t") {
+                candidates.append(
+                    line.split(separator: "\t", omittingEmptySubsequences: false))
+            }
+            candidates.append(line.split(separator: /\s{2,}/))
+            candidates.append(line.split(separator: /\s+/, maxSplits: expected - 1))
+            for candidate in candidates {
+                var parts = candidate.map { cleanField(String($0)) }
+                while parts.count > expected, parts.last?.isEmpty == true {
+                    parts.removeLast()
+                }
+                if parts.count == expected { return parts }
+            }
+            return nil
+        }
+
+        // Shape check WITHOUT the single-space desperation splitter (which
+        // can conjure any field count out of content spaces): only real
+        // tabs or 2+-space runs count as deliberate separators.
+        func hasStrictShape(_ line: String, expecting expected: Int) -> Bool {
+            if line.contains("\t") {
+                var parts = line.split(separator: "\t", omittingEmptySubsequences: false)
+                    .map { cleanField(String($0)) }
+                while parts.count > expected, parts.last?.isEmpty == true {
+                    parts.removeLast()
+                }
+                if parts.count == expected { return true }
+            }
+            return line.split(separator: /\s{2,}/).count == expected
+        }
+
+        let cleaned = cleanResponse(raw)
+        diagnostics.hadTabs = cleaned.contains("\t")
+        let expectedColumns = ["T": 5, "A": 6, "P": 4, "D": 4, "Q": 4, "R": 4, "E": 4, "J": 4]
+
+        for rawLine in cleaned.split(separator: "\n") {
             let line = Self.stripLineDecorations(String(rawLine))
-            let parts = line.split(
-                separator: "\t", omittingEmptySubsequences: false
-            ).map { cleanField(String($0)) }
-            guard let tag = parts.first, let cap = caps[tag],
-                  (counts[tag] ?? 0) < cap else { continue }
+            guard !line.isEmpty else { continue }
+            diagnostics.lines += 1
+            let tag = String(line.prefix(while: { !$0.isWhitespace }))
+            guard let cap = caps[tag], let expected = expectedColumns[tag] else {
+                diagnostics.unknownTag += 1
+                continue
+            }
+            guard (counts[tag] ?? 0) < cap else {
+                diagnostics.overCap += 1
+                continue
+            }
+            guard let parts = fields(of: line, expecting: expected) else {
+                diagnostics.columnCount += 1
+                if diagnostics.columnsSeen.count < 8 {
+                    // Tag + tab-split count of the failed line, for the log.
+                    let count = line.split(
+                        separator: "\t", omittingEmptySubsequences: false).count
+                    diagnostics.columnsSeen.append("\(tag):\(count)")
+                }
+                continue
+            }
+            // A verbatim spec-block echo has placeholder words where
+            // content belongs; an example echo carries the example's
+            // distinctive strings. The tolerant chunk-id match below
+            // would otherwise let both through as records.
+            if parts.dropFirst(2).contains(where: { Self.specPlaceholders.contains($0) }) {
+                diagnostics.specEcho += 1
+                continue
+            }
+            if parts.dropFirst(2).contains(where: { Self.exampleContent.contains($0) }) {
+                diagnostics.exampleEcho += 1
+                continue
+            }
 
             func append(_ record: SessionRecord.SummaryRecord) {
                 guard !record.text.isEmpty else { return }
                 records.append(record)
                 counts[tag, default: 0] += 1
+                diagnostics.accepted += 1
             }
 
             switch tag {
             case "T":
-                guard parts.count == 5, parts[1] == chunkID else { continue }
+                guard Self.acceptsChunkID(parts[1], expected: chunkID) else {
+                    diagnostics.chunkIDMismatch += 1
+                    continue
+                }
                 append(.init(
                     kind: .topic,
                     source: source,
                     sourceIDs: validSourceIDs,
                     sourceIndex: 0,
                     timestamp: timestamp,
-                    text: parts[4],
-                    topicTitle: parts[3],
+                    text: Self.strippedSourceIDTokens(parts[4]),
+                    topicTitle: Self.strippedSourceIDTokens(parts[3]),
                     timeRange: parts[2],
                     sourceLabel: sourceLabel))
             case "P", "D", "Q", "R", "E", "J":
-                guard parts.count == 4, parts[1] == chunkID,
-                      let ids = sourceIDs(from: parts[2]) else { continue }
-                let kind: SessionRecord.SummaryRecord.Kind = switch tag {
-                case "P": .point
-                case "D": .decision
-                case "Q": .question
-                case "R": .risk
-                case "E": .term
-                default: .reflection
+                guard Self.acceptsChunkID(parts[1], expected: chunkID) else {
+                    diagnostics.chunkIDMismatch += 1
+                    continue
+                }
+                guard let ids = sourceIDs(from: parts[2]) else {
+                    diagnostics.invalidSourceIDs += 1
+                    continue
                 }
                 append(.init(
-                    kind: kind,
+                    kind: Self.recordKind(for: tag),
                     source: source,
                     sourceIDs: ids,
                     sourceIndex: sourceIndex(ids),
                     timestamp: timestamp,
-                    text: parts[3],
+                    text: Self.strippedSourceIDTokens(parts[3]),
                     sourceLabel: sourceLabel))
             case "A":
-                guard parts.count == 6, parts[1] == chunkID,
-                      let ids = sourceIDs(from: parts[2]) else { continue }
+                guard Self.acceptsChunkID(parts[1], expected: chunkID) else {
+                    diagnostics.chunkIDMismatch += 1
+                    continue
+                }
+                guard let ids = sourceIDs(from: parts[2]) else {
+                    diagnostics.invalidSourceIDs += 1
+                    continue
+                }
+                let task = Self.strippedSourceIDTokens(parts[4])
                 append(.init(
                     kind: .action,
                     source: source,
                     sourceIDs: ids,
                     sourceIndex: sourceIndex(ids),
                     timestamp: timestamp,
-                    text: parts[4],
-                    owner: parts[3],
-                    task: parts[4],
-                    deadline: parts[5],
+                    text: task,
+                    owner: Self.strippedSourceIDTokens(parts[3]),
+                    task: task,
+                    deadline: Self.strippedSourceIDTokens(parts[5]),
                     sourceLabel: sourceLabel))
             default:
                 continue
+            }
+        }
+
+        // Salvage pass: the 2B model sometimes settles into a compressed
+        // schema, dropping exactly one field per record kind (device logs:
+        // colsSeen=["T:4","P:3","A:4"], stable across attempts). When the
+        // strict pass accepted NOTHING — the chunk would otherwise degrade
+        // to a fallback stub — re-read those near-miss shapes: T without
+        // its time range, P/D/Q/R/E/J without citations (empty sourceIDs
+        // marks them ungrounded), A without owner/deadline. Strict output
+        // wins whenever it exists, so a compliant response never pays
+        // this leniency.
+        if records.isEmpty, diagnostics.lines > diagnostics.accepted {
+            let salvageColumns = [
+                "T": 4, "A": 4, "P": 3, "D": 3, "Q": 3, "R": 3, "E": 3, "J": 3,
+            ]
+            for rawLine in cleaned.split(separator: "\n") {
+                let line = Self.stripLineDecorations(String(rawLine))
+                guard !line.isEmpty else { continue }
+                let tag = String(line.prefix(while: { !$0.isWhitespace }))
+                guard let cap = caps[tag], (counts[tag] ?? 0) < cap else { continue }
+
+                func salvage(_ record: SessionRecord.SummaryRecord) {
+                    guard !record.text.isEmpty else { return }
+                    records.append(record)
+                    counts[tag, default: 0] += 1
+                    diagnostics.salvaged += 1
+                }
+                func echoFree(_ parts: [String]) -> Bool {
+                    !parts.dropFirst(1).contains(where: {
+                        Self.specPlaceholders.contains($0)
+                            || Self.exampleContent.contains($0)
+                    })
+                }
+
+                // Id-led shape: mid-response the model omits the chunk-id
+                // column entirely and leads with its citations
+                // ("P\tm004\t内容"). The valid-source-id check IS the
+                // proof of interpretation — stronger than the chunk-id
+                // echo — so this shape may also rescue strict-shaped
+                // lines the id check rejected.
+                if tag != "T" {
+                    let idLedCounts = tag == "A" ? [5, 4] : [3]
+                    var rescued = false
+                    for count in idLedCounts {
+                        guard let parts = fields(of: line, expecting: count),
+                              let ids = sourceIDs(from: parts[1]),
+                              echoFree(parts)
+                        else { continue }
+                        if tag == "A" {
+                            let task = Self.strippedSourceIDTokens(parts[3])
+                            salvage(.init(
+                                kind: .action,
+                                source: source,
+                                sourceIDs: ids,
+                                sourceIndex: sourceIndex(ids),
+                                timestamp: timestamp,
+                                text: task,
+                                owner: Self.strippedSourceIDTokens(parts[2]),
+                                task: task,
+                                deadline: count == 5
+                                    ? Self.strippedSourceIDTokens(parts[4]) : "未明确",
+                                sourceLabel: sourceLabel))
+                        } else {
+                            salvage(.init(
+                                kind: Self.recordKind(for: tag),
+                                source: source,
+                                sourceIDs: ids,
+                                sourceIndex: sourceIndex(ids),
+                                timestamp: timestamp,
+                                text: Self.strippedSourceIDTokens(parts[2]),
+                                sourceLabel: sourceLabel))
+                        }
+                        rescued = true
+                        break
+                    }
+                    if rescued { continue }
+                }
+
+                guard let expected = salvageColumns[tag],
+                      // Shape near-misses only: a line that genuinely fit
+                      // the strict column count was rejected for cause
+                      // (invalid citation, echo) — don't resurrect those.
+                      expectedColumns[tag].map({ !hasStrictShape(line, expecting: $0) }) == true,
+                      let parts = fields(of: line, expecting: expected),
+                      Self.acceptsChunkID(parts[1], expected: chunkID),
+                      echoFree(parts)
+                else { continue }
+
+                switch tag {
+                case "T":
+                    // [T, id, a, b]: a time-like means the range survived
+                    // and title/summary merged; otherwise the range was
+                    // the dropped field.
+                    let timeLike = parts[2].contains(/\d{1,2}:\d{2}/)
+                    salvage(.init(
+                        kind: .topic,
+                        source: source,
+                        sourceIDs: validSourceIDs,
+                        sourceIndex: 0,
+                        timestamp: timestamp,
+                        text: Self.strippedSourceIDTokens(parts[3]),
+                        topicTitle: Self.strippedSourceIDTokens(
+                            timeLike ? parts[3] : parts[2]),
+                        timeRange: timeLike ? parts[2] : "",
+                        sourceLabel: sourceLabel))
+                case "A":
+                    // [A, id, x, task]: x either cites ids or names the
+                    // owner — the ids validation decides.
+                    let ids = sourceIDs(from: parts[2])
+                    let task = Self.strippedSourceIDTokens(parts[3])
+                    salvage(.init(
+                        kind: .action,
+                        source: source,
+                        sourceIDs: ids ?? [],
+                        sourceIndex: ids.map(sourceIndex) ?? 0,
+                        timestamp: timestamp,
+                        text: task,
+                        owner: ids == nil
+                            ? Self.strippedSourceIDTokens(parts[2]) : "未明确",
+                        task: task,
+                        deadline: "未明确",
+                        sourceLabel: sourceLabel))
+                default:
+                    salvage(.init(
+                        kind: Self.recordKind(for: tag),
+                        source: source,
+                        sourceIDs: [],
+                        sourceIndex: 0,
+                        timestamp: timestamp,
+                        text: Self.strippedSourceIDTokens(parts[2]),
+                        sourceLabel: sourceLabel))
+                }
             }
         }
         return records

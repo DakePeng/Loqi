@@ -1,3 +1,4 @@
+import AVFoundation
 import Foundation
 import Testing
 @testable import Loqi
@@ -64,6 +65,43 @@ struct ImportEngineTests {
             senseVoiceInstalled: false, qwen3Installed: false) == nil)
     }
 
+    @MainActor
+    @Test func cancelledOfflineDecodeStopsBeforeModelCheck() async throws {
+        let url = URL.temporaryDirectory
+            .appending(path: UUID().uuidString)
+            .appendingPathExtension("caf")
+        defer { try? FileManager.default.removeItem(at: url) }
+
+        let format = try #require(AVAudioFormat(
+            standardFormatWithSampleRate: 16_000,
+            channels: 1))
+        let writer = try AVAudioFile(forWriting: url, settings: format.settings)
+        let buffer = try #require(AVAudioPCMBuffer(
+            pcmFormat: format,
+            frameCapacity: 16_000))
+        buffer.frameLength = 16_000
+        try writer.write(from: buffer)
+
+        let reader = try AVAudioFile(forReading: url)
+        let task = Task { @MainActor in
+            try await OfflineTranscriber.transcribe(
+                reader,
+                language: .english,
+                backend: .senseVoice
+            ) { _ in }
+        }
+        task.cancel()
+
+        do {
+            _ = try await task.value
+            Issue.record("expected CancellationError")
+        } catch is CancellationError {
+            // Expected.
+        } catch {
+            Issue.record("expected CancellationError, got \(error)")
+        }
+    }
+
     @Test func segmentTimeRangeMapsSamplesToSeconds() {
         // 16 kHz: sample 8000 = 0.5s; 24000 samples long = 1.5s window.
         let range = VADSegmentedTranscriber.timeRange(
@@ -100,6 +138,23 @@ struct ImportEngineTests {
             freeBytes: 0, perInstanceBytes: 900_000_000,
             coreCount: 6, hardCap: 3) == 1)
     }
+
+    @Test func cachedTextMatchesOnlyExactRange() {
+        let checkpoint = [
+            SessionRecord.ImportCheckpoint.Segment(start: 0, end: 4.5, text: "大家好"),
+            SessionRecord.ImportCheckpoint.Segment(start: 4.5, end: 9, text: "今天讲翻译"),
+        ]
+        #expect(VADSegmentedTranscriber.cachedText(
+            start: 0, end: 4.5, in: checkpoint) == "大家好")
+        #expect(VADSegmentedTranscriber.cachedText(
+            start: 4.5, end: 9, in: checkpoint) == "今天讲翻译")
+        // A resumed decode reproducing a different boundary (VAD drift,
+        // or the retry-halves sub-ranges) is a clean miss, not a mismatch.
+        #expect(VADSegmentedTranscriber.cachedText(
+            start: 0, end: 5, in: checkpoint) == nil)
+        #expect(VADSegmentedTranscriber.cachedText(
+            start: 10, end: 12, in: []) == nil)
+    }
 }
 
 struct ImportAudioSheetTests {
@@ -107,6 +162,12 @@ struct ImportAudioSheetTests {
         #expect(ImportAudioSheet.importLanguageRaw("auto") == AppLanguage.english.rawValue)
         #expect(ImportAudioSheet.importLanguageRaw(nil) == AppLanguage.english.rawValue)
         #expect(ImportAudioSheet.importLanguageRaw("chinese") == AppLanguage.chinese.rawValue)
+    }
+
+    @Test func importSensitivityDefaultsToBalancedAndKeepsValidChoices() {
+        #expect(ImportAudioSheet.importSensitivityRaw(nil) == MicSensitivity.balanced.rawValue)
+        #expect(ImportAudioSheet.importSensitivityRaw("loud") == MicSensitivity.balanced.rawValue)
+        #expect(ImportAudioSheet.importSensitivityRaw("far") == MicSensitivity.far.rawValue)
     }
 }
 

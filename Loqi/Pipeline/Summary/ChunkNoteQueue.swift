@@ -116,11 +116,15 @@ actor ChunkNoteQueue {
                 target: job.chunkText,
                 vocabulary: job.vocabulary,
                 in: job.language)
-            let task = Task { [llm] in
+            let task = Task { [llm, chunkID = job.chunkID] in
                 try await llm.generate(
                     system: prompt.system, user: prompt.user,
                     maxTokens: SummaryEngine.chunkNoteMaxTokens,
-                    temperature: 0.3)
+                    temperature: 0.3,
+                    // Same first-line anchor as batch summarize: without it
+                    // the 2B drifts into a compressed schema from the very
+                    // first token and the chunk degrades to a stub.
+                    responsePrefix: "T\t\(chunkID)\t")
             }
             generation = task
             do {

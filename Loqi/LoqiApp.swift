@@ -1,7 +1,25 @@
 import SwiftUI
 
+#if os(iOS)
+final class LoqiAppDelegate: NSObject, UIApplicationDelegate {
+    func application(
+        _ application: UIApplication,
+        handleEventsForBackgroundURLSession identifier: String,
+        completionHandler: @escaping @Sendable () -> Void
+    ) {
+        BackgroundModelDownloader.shared.setCompletionHandler(
+            completionHandler,
+            for: identifier)
+    }
+}
+#endif
+
 @main
 struct LoqiApp: App {
+    #if os(iOS)
+    @UIApplicationDelegateAdaptor(LoqiAppDelegate.self) private var appDelegate
+    #endif
+
     init() {
         #if DEBUG
         // UI tests re-enter onboarding by deleting the gate: an argument-
@@ -29,6 +47,7 @@ struct LoqiApp: App {
 
 struct RootView: View {
     @AppStorage("onboardingComplete") private var onboardingComplete = false
+    @AppStorage(AppUILanguage.defaultsKey) private var appLanguageRaw = AppUILanguage.system.rawValue
     /// The shared instance: App Intents drive the same pipeline (plain
     /// `let` is fine — @Observable tracking doesn't need @State).
     private let pipeline = CaptionPipeline.shared
@@ -62,6 +81,7 @@ struct RootView: View {
                 }
             }
         }
+        .environment(\.locale, appUILanguage.locale)
         // Translation sessions only exist while their host views are
         // attached, so the stack lives at the root for the app's lifetime.
         .background(TranslationHostStack(coordinator: pipeline.translator))
@@ -86,5 +106,9 @@ struct RootView: View {
             @unknown default: break
             }
         }
+    }
+
+    private var appUILanguage: AppUILanguage {
+        AppUILanguage(rawValue: appLanguageRaw) ?? .system
     }
 }

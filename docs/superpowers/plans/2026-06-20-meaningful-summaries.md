@@ -15,7 +15,7 @@
 - **The transcript is sacred.** Never modify the stored/displayed transcript text. Map-phase input may be cleaned in-memory only.
 - **Multilingual.** All prompt/heading changes must hold for zh/ja/ko/en. Test fixtures use Chinese.
 - **Map phase is style-independent and cached** (`chunkNotes`); changing the map prompt only affects newly-mapped chunks, which is fine.
-- **Phase 2 is flag-gated and OFF by default.** `prism-ml/Bonsai-8B-mlx-1bit`: 8.19B @ 1-bit (~1.30 GB on disk), **text-only (no vision)**, Qwen3-8B arch, ships via a custom mlx-swift fork with 1-bit kernels (NOT upstream mlx-swift-lm 3.31.3).
+- **Phase 2 is flag-gated and OFF by default.** Use a **2-bit** Bonsai (`prism-ml/Ternary-Bonsai-8B-mlx-2bit`, 8.19B ternary stored as MLX 2-bit, ~2.30 GB, text-only, Qwen3-8B arch) — it loads on **stock mlx-swift, no fork**. Do NOT use `Bonsai-8B-mlx-1bit`: stock MLX `quantize` supports only 2/3/4/5/6/8 bits and **fatal-crashes on 1-bit** (uncatchable). 4B-2bit (`prism-ml/Ternary-Bonsai-4B-mlx-2bit`, ~1.13 GB) is the lighter alt.
 
 ---
 
@@ -254,20 +254,18 @@ git commit -m "experiment: collapse map-input stutters for cleaner extraction"
 
 # PHASE 2 — Bonsai-8B behind a flag
 
-> **HARD GATE:** Task 0 must pass before any of Tasks 1-4 are written. Bonsai ships via a custom mlx-swift fork with 1-bit kernels, not upstream `mlx-swift-lm 3.31.3`. If the fork does not build/run coherently in the app, STOP — Phase 1 already delivers the meaningful-summary win.
+> **GATE (simplified — no fork):** the 2-bit Bonsai loads on the existing mlx-swift, so there is no dependency migration. Task 0 is now a device load+quality check, not a fork spike. If it fails, Phase 1 already delivers the meaningful-summary win.
 
-### Task 0: Fork feasibility spike (investigation, throwaway branch — NO production commit)
+### Task 0: Device load + quality check (on real hardware)
 
-**Goal:** prove `prism-ml/Bonsai-8B-mlx-1bit` loads and generates a coherent Chinese summary inside this app's MLX stack.
+**Goal:** prove `prism-ml/Ternary-Bonsai-8B-mlx-2bit` loads via stock mlx-swift and generates a coherent Chinese summary.
 
-- [ ] **Step 1:** Find the fork's exact SPM coordinates. The HF card (`huggingface.co/prism-ml/Bonsai-8B-mlx-1bit`) references "an mlx-swift fork with 1-bit kernels." Record: git URL, package/product name, the API delta vs. `mlx-swift-lm` (does `MLXLMCommon.loadModelContainer` / `generate(input:parameters:context:)` still work, or is there a new entry point?).
-- [ ] **Step 2:** In a throwaway worktree, add the fork as an SPM dependency alongside (or replacing) `mlx-swift-lm`. Confirm the project builds for an iOS Simulator destination.
-- [ ] **Step 3:** Write a one-off test that loads `prism-ml/Bonsai-8B-mlx-1bit` and generates from `reduceSummaryPrompt` over a fixed Chinese `notes` string (reuse the input from `reducePromptRequiresNaturalWritingConstraints`).
-- [ ] **Step 4:** Evaluate against three pass criteria. ALL must hold:
-  1. **Runs:** loads + generates without crashing; output is not gibberish/degenerate (`!PromptBuilder.hasDegenerateRepetition`).
-  2. **CJK quality:** Chinese summary is coherent and at least as good as Qwen 2B on the same notes (eyeball side-by-side; include the calibration session).
-  3. **Device budget:** loads on a real iPhone within memory headroom (~1.3 GB weights; record actual peak).
-- [ ] **Step 5:** Write a go/no-go note in the PR/issue. If NO-GO, delete the worktree and stop Phase 2. If GO, record the exact SPM coordinates + measured `requiredHeadroom` for Task 1, then proceed.
+- [ ] **Step 1:** Enable the Settings toggle (Task 3), pick Bonsai, download (~2.30 GB).
+- [ ] **Step 2:** Evaluate against three pass criteria. ALL must hold:
+  1. **Loads:** no crash. (1-bit fatal-crashed on the bits check; 2-bit must pass it.)
+  2. **Not gibberish:** ternary-2bit packing on stock MLX is the open risk — confirm output isn't degenerate (`!PromptBuilder.hasDegenerateRepetition`; if it is, the reduce already falls back deterministically, no crash).
+  3. **CJK quality + memory:** Chinese summary is coherent and at least as good as Qwen 2B on the calibration session; record the memory peak and set `bonsai8b.requiredHeadroom` accordingly (currently a 3.0 GB estimate).
+- [ ] **Step 3:** Go/no-go note. If gibberish or worse than Qwen, keep the flag off by default; otherwise proceed to A/B (Task 4).
 
 ### Task 1: Add Bonsai as a flag-gated `ModelOption`
 
@@ -317,10 +315,10 @@ Replace `static let all = [qwen35_2b, qwen35_0_8b]` with:
     /// description routes to a vision model (see SummaryJobCenter). Gated OFF
     /// by default behind `model.bonsaiEnabled`. requiredHeadroom from spike.
     static let bonsai8b = ModelOption(
-        id: "prism-ml/Bonsai-8B-mlx-1bit",
-        displayName: "Bonsai 8B (1-bit) — experimental",
-        requiredHeadroom: 1_600_000_000,   // TODO(spike): set to measured peak
-        downloadBytes: 1_300_000_000,
+        id: "prism-ml/Ternary-Bonsai-8B-mlx-2bit",   // 2-bit loads on stock mlx-swift; 1-bit crashes
+        displayName: "Bonsai 8B (ternary 2-bit) — experimental",
+        requiredHeadroom: 3_000_000_000,   // ~2.3 GB weights + cache; tune on device
+        downloadBytes: 2_300_000_000,
         supportsVision: false)
 
     static func bonsaiEnabled(_ defaults: UserDefaults = .standard) -> Bool {

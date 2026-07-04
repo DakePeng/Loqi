@@ -76,20 +76,30 @@ enum OfflineTranscriber {
 
     /// `onProgress` reports 0...1 through the file. `hotwords` reach only
     /// the Qwen3-ASR decoder (the other backends have no biasing).
+    /// `alreadyDecoded`/`onSegmentComplete` let a resumed import skip and
+    /// checkpoint VAD segments; the Apple backend has no segment
+    /// boundaries, so both are no-ops there.
     static func transcribe(
         _ audioFile: AVAudioFile,
         language: AppLanguage,
         backend: Backend,
+        sensitivity: MicSensitivity = .balanced,
         hotwords: [String] = [],
+        alreadyDecoded: [SessionRecord.ImportCheckpoint.Segment] = [],
+        onSegmentComplete: (@MainActor @Sendable (SessionRecord.ImportCheckpoint.Segment) -> Void)? = nil,
         onProgress: @escaping (Double) -> Void
     ) async throws -> [Utterance] {
         switch backend {
         case .qwen3ASR:
             return try await transcribeWithQwen3ASR(
-                audioFile, hotwords: hotwords, onProgress: onProgress)
+                audioFile, sensitivity: sensitivity, hotwords: hotwords,
+                alreadyDecoded: alreadyDecoded, onSegmentComplete: onSegmentComplete,
+                onProgress: onProgress)
         case .senseVoice:
             return try await transcribeWithSenseVoice(
-                audioFile, language: language, onProgress: onProgress)
+                audioFile, language: language, sensitivity: sensitivity,
+                alreadyDecoded: alreadyDecoded, onSegmentComplete: onSegmentComplete,
+                onProgress: onProgress)
         case .apple:
             let duration = Double(audioFile.length) / audioFile.fileFormat.sampleRate
             return try await transcribeWithApple(
@@ -138,12 +148,18 @@ enum OfflineTranscriber {
     /// hotword-primed. Same decode-to-16k + VAD flow as SenseVoice.
     private static func transcribeWithQwen3ASR(
         _ audioFile: AVAudioFile,
+        sensitivity: MicSensitivity,
         hotwords: [String],
+        alreadyDecoded: [SessionRecord.ImportCheckpoint.Segment] = [],
+        onSegmentComplete: (@MainActor @Sendable (SessionRecord.ImportCheckpoint.Segment) -> Void)? = nil,
         onProgress: @escaping (Double) -> Void
     ) async throws -> [Utterance] {
-        let samples = try decodeMono16k(audioFile)
+        let samples = try await decodeMono16k(audioFile)
         let transcriber = Qwen3ASRFileTranscriber(hotwords: hotwords)
-        let utterances = try await transcriber.transcribe(samples16k: samples) { fraction in
+        let utterances = try await transcriber.transcribe(
+            samples16k: samples, sensitivity: sensitivity,
+            alreadyDecoded: alreadyDecoded, onSegmentComplete: onSegmentComplete
+        ) { fraction in
             onProgress(fraction)
         }
         return utterances.map { ($0.text, $0.start, $0.end) }
@@ -154,18 +170,24 @@ enum OfflineTranscriber {
     private static func transcribeWithSenseVoice(
         _ audioFile: AVAudioFile,
         language: AppLanguage,
+        sensitivity: MicSensitivity,
+        alreadyDecoded: [SessionRecord.ImportCheckpoint.Segment] = [],
+        onSegmentComplete: (@MainActor @Sendable (SessionRecord.ImportCheckpoint.Segment) -> Void)? = nil,
         onProgress: @escaping (Double) -> Void
     ) async throws -> [Utterance] {
-        let samples = try decodeMono16k(audioFile)
+        let samples = try await decodeMono16k(audioFile)
         let transcriber = SenseVoiceFileTranscriber(language: language)
-        let utterances = try await transcriber.transcribe(samples16k: samples) { fraction in
+        let utterances = try await transcriber.transcribe(
+            samples16k: samples, sensitivity: sensitivity,
+            alreadyDecoded: alreadyDecoded, onSegmentComplete: onSegmentComplete
+        ) { fraction in
             onProgress(fraction)
         }
         return utterances.map { ($0.text, $0.start, $0.end) }
     }
 
     /// Decode an audio file to a flat 16 kHz mono float buffer for SenseVoice.
-    private static func decodeMono16k(_ file: AVAudioFile) throws -> [Float] {
+    private static func decodeMono16k(_ file: AVAudioFile) async throws -> [Float] {
         guard let target = AVAudioFormat(
             commonFormat: .pcmFormatFloat32,
             sampleRate: 16_000, channels: 1, interleaved: false),
@@ -177,6 +199,7 @@ enum OfflineTranscriber {
         var finished = false
 
         while !finished {
+            try Task.checkCancellation()
             guard let outBuffer = AVAudioPCMBuffer(
                 pcmFormat: target, frameCapacity: readSize) else { break }
             var conversionError: NSError?
@@ -208,6 +231,7 @@ enum OfflineTranscriber {
                 finished = true
             }
         }
+        try Task.checkCancellation()
         return output
     }
 }

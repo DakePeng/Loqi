@@ -33,7 +33,7 @@ struct LiveCaptionsView: View {
     @AppStorage("captions.speakerCount") private var speakerCount
         = VoiceprintService.defaultLiveSpeakerPickerValue()
     @AppStorage(MicSensitivity.defaultsKey) private var sensitivityRaw
-        = MicSensitivity.balanced.rawValue
+        = MicSensitivity.far.rawValue
     @State private var errorMessage: String?
     /// Start failed on the mic permission: the alert offers Open Settings
     /// instead of describing the journey.
@@ -376,6 +376,8 @@ struct LiveCaptionsView: View {
                         translationChip
                     }
                     .padding(.horizontal, 16)
+                    .buttonStyle(.plain)
+                    .transaction { $0.animation = nil }
                 }
                 .scrollIndicators(.hidden)
                 .scrollBounceBehavior(.basedOnSize, axes: [.horizontal])
@@ -584,7 +586,7 @@ struct LiveCaptionsView: View {
     }
 
     private var sensitivity: MicSensitivity {
-        MicSensitivity(rawValue: sensitivityRaw) ?? .balanced
+        MicSensitivity(rawValue: sensitivityRaw) ?? .far
     }
 
     /// Mic pickup preset, adjustable mid-session too: switching restarts

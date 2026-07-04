@@ -13,19 +13,37 @@ struct ModelCatalogTests {
         #expect(ModelCatalog.default.id == ModelCatalog.qwen35_2b.id)
     }
 
+    @Test func defaultLineupIgnoresStandardBonsaiFlag() {
+        let oldValue = UserDefaults.standard.object(forKey: "model.bonsaiEnabled")
+        defer {
+            if let oldValue {
+                UserDefaults.standard.set(oldValue, forKey: "model.bonsaiEnabled")
+            } else {
+                UserDefaults.standard.removeObject(forKey: "model.bonsaiEnabled")
+            }
+        }
+
+        UserDefaults.standard.set(true, forKey: "model.bonsaiEnabled")
+
+        #expect(defaultSelectableModelsForTests().map(\.id) == [
+            ModelCatalog.qwen35_2b.id,
+            ModelCatalog.qwen35_0_8b.id,
+        ])
+    }
+
     @Test func lineupIsAllQwen35() {
-        #expect(ModelCatalog.all.map(\.id) == [
+        #expect(defaultSelectableModelsForTests().map(\.id) == [
             ModelCatalog.qwen35_2b.id,
             ModelCatalog.qwen35_0_8b.id,
         ])
     }
 
     @Test func everyTierSupportsVision() {
-        #expect(ModelCatalog.all.allSatisfy { $0.supportsVision })
+        #expect(defaultSelectableModelsForTests().allSatisfy { $0.supportsVision })
     }
 
     @Test func knownIdsResolveToThemselves() {
-        for option in ModelCatalog.all {
+        for option in defaultSelectableModelsForTests() {
             #expect(ModelCatalog.option(for: option.id).id == option.id)
         }
     }
@@ -55,6 +73,32 @@ struct ModelCatalogTests {
         #expect(defaults.string(forKey: "model.id") == ModelCatalog.qwen35_0_8b.id)
     }
 
+    @Test func bonsaiAppearsOnlyWhenFlagEnabled() {
+        let suite = "ModelCatalogTests.\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suite)!
+        defer { defaults.removePersistentDomain(forName: suite) }
+
+        // Off by default.
+        #expect(!ModelCatalog.availableModels(defaults: defaults)
+            .contains { $0.id == ModelCatalog.bonsai8b.id })
+
+        defaults.set(true, forKey: "model.bonsaiEnabled")
+        let on = ModelCatalog.availableModels(defaults: defaults)
+        #expect(on.contains { $0.id == ModelCatalog.bonsai8b.id })
+        // Bonsai is text-only; the vision route depends on this staying false.
+        #expect(ModelCatalog.bonsai8b.supportsVision == false)
+    }
+
+    @Test func normalizationDropsBonsaiWhenFlagDisabled() {
+        let suite = "ModelCatalogTests.\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suite)!
+        defer { defaults.removePersistentDomain(forName: suite) }
+
+        defaults.set(ModelCatalog.bonsai8b.id, forKey: "model.id")  // flag stays off
+        ModelCatalog.normalizeStoredSelection(defaults)
+        #expect(defaults.string(forKey: "model.id") == ModelCatalog.default.id)
+    }
+
     @Test func liveModelIsTheFastTier() {
         #expect(ModelCatalog.liveModel.id == ModelCatalog.qwen35_0_8b.id)
         // Live tier must fit beside SenseVoice — strictly lighter than 2B.
@@ -72,4 +116,11 @@ struct ModelCatalogTests {
         #expect(ModelCatalog.summaryModel.id == ModelCatalog.current.id)
     }
 
+}
+
+private func defaultSelectableModelsForTests() -> [ModelOption] {
+    let suite = "ModelCatalogTests.default.\(UUID().uuidString)"
+    let defaults = UserDefaults(suiteName: suite)!
+    defer { defaults.removePersistentDomain(forName: suite) }
+    return ModelCatalog.availableModels(defaults: defaults)
 }
