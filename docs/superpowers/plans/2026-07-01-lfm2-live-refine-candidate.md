@@ -45,7 +45,7 @@
 - Consumes: existing `ModelOption` struct (`Loqi/Support/ModelCatalog.swift:56-70`), existing `ModelCatalog.liveModel` constant.
 - Produces: `ModelCatalog.lfm2_5_230m: ModelOption`, `ModelCatalog.liveRefineLFM2Enabled(_ defaults: UserDefaults = .standard) -> Bool`, `ModelCatalog.liveRefineModel(_ defaults: UserDefaults = .standard) -> ModelOption`. Tasks 2 and 3 call `ModelCatalog.liveRefineModel()`.
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 Add to `LoqiTests/ModelCatalogTests.swift`, right after the existing `summaryModelFollowsUserPick` test (before the closing `}` of the `struct ModelCatalogTests`):
 
@@ -87,7 +87,7 @@ Add to `LoqiTests/ModelCatalogTests.swift`, right after the existing `summaryMod
     }
 ```
 
-- [ ] **Step 2: Run the tests to verify they fail to compile**
+- [x] **Step 2: Run the tests to verify they fail to compile**
 
 Run:
 ```bash
@@ -95,7 +95,7 @@ xcodebuild test -scheme Loqi -destination 'platform=iOS Simulator,name=iPhone 17
 ```
 Expected: compiler errors like `error: type 'ModelCatalog' has no member 'lfm2_5_230m'` (and `liveRefineModel`). This confirms the tests exercise code that doesn't exist yet.
 
-- [ ] **Step 3: Implement in ModelCatalog.swift**
+- [x] **Step 3: Implement in ModelCatalog.swift**
 
 Find this block (`Loqi/Support/ModelCatalog.swift:113-118`):
 
@@ -149,7 +149,7 @@ Replace it with:
     }
 ```
 
-- [ ] **Step 4: Run the tests to verify they pass**
+- [x] **Step 4: Run the tests to verify they pass**
 
 Run:
 ```bash
@@ -157,7 +157,7 @@ xcodebuild test -scheme Loqi -destination 'platform=iOS Simulator,name=iPhone 17
 ```
 Expected: no `✘ Test` lines, and `Test run with N tests passed` (N = the prior count + 4).
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add Loqi/Support/ModelCatalog.swift LoqiTests/ModelCatalogTests.swift
@@ -175,7 +175,7 @@ git commit -m "feat: add LFM2.5-230M as an experimental live-refine candidate"
 - Consumes: `ModelCatalog.liveRefineModel() -> ModelOption` (Task 1).
 - Produces: nothing new — `loadLLMIfAllowed()`'s behavior is unchanged when the flag is off (resolver returns `liveModel`, identical to today).
 
-- [ ] **Step 1: Swap the call site**
+- [x] **Step 1: Swap the call site**
 
 Find (`Loqi/Support/CaptionPipeline.swift:1656-1657`):
 
@@ -196,7 +196,7 @@ Replace with:
             await llm.setModel(ModelCatalog.liveRefineModel())
 ```
 
-- [ ] **Step 2: Build**
+- [x] **Step 2: Build**
 
 Run:
 ```bash
@@ -204,7 +204,7 @@ xcodebuild build -project Loqi.xcodeproj -scheme Loqi -destination 'platform=iOS
 ```
 Expected: `** BUILD SUCCEEDED **`.
 
-- [ ] **Step 3: Run the full unit test suite as a regression check**
+- [x] **Step 3: Run the full unit test suite as a regression check**
 
 Run:
 ```bash
@@ -212,7 +212,7 @@ xcodebuild test -scheme Loqi -destination 'platform=iOS Simulator,name=iPhone 17
 ```
 Expected: no `✘ Test` lines, `TEST SUCCEEDED`.
 
-- [ ] **Step 4: Commit**
+- [x] **Step 4: Commit**
 
 ```bash
 git add Loqi/Support/CaptionPipeline.swift
@@ -233,7 +233,7 @@ git commit -m "feat: route live refinement through ModelCatalog.liveRefineModel"
 - Consumes: `ModelCatalog.liveRefineModel() -> ModelOption`, `ModelCatalog.liveRefineLFM2Enabled`/flag key `"model.liveRefineLFM2Enabled"` (Task 1); existing `startDownload(_:)`, `stopDownload()`, `downloadingModelID`, `liveDownloaded` (all unchanged in shape).
 - Produces: nothing further downstream — this is the leaf UI surface.
 
-- [ ] **Step 1: Add the `@AppStorage` flag**
+- [x] **Step 1: Add the `@AppStorage` flag**
 
 Find (`Loqi/Features/Settings/SettingsView.swift:8`):
 
@@ -248,7 +248,7 @@ Add directly below it:
     @AppStorage("model.liveRefineLFM2Enabled") private var liveRefineLFM2Enabled = false
 ```
 
-- [ ] **Step 2: Make the live-model row dynamic and add the experimental toggle**
+- [x] **Step 2: Make the live-model row dynamic and add the experimental toggle**
 
 Find (`Loqi/Features/Settings/SettingsView.swift:158-186`):
 
@@ -334,7 +334,7 @@ Replace with:
                             }
 ```
 
-- [ ] **Step 3: Update `refreshStats()`'s download-state check**
+- [x] **Step 3: Update `refreshStats()`'s download-state check**
 
 Find (`Loqi/Features/Settings/SettingsView.swift:435`):
 
@@ -348,7 +348,7 @@ Replace with:
         liveDownloaded = LLMService.isDownloaded(model: ModelCatalog.liveRefineModel())
 ```
 
-- [ ] **Step 4: Update the footer copy**
+- [x] **Step 4: Update the footer copy**
 
 Find (`Loqi/Features/Settings/SettingsView.swift:240`):
 
@@ -362,7 +362,7 @@ Replace with:
                     Text("Live recording uses the fast Qwen3.5 0.8B model by default — or the experimental Liquid LFM2.5 above — so captions and live translation stay responsive and cool. Live photo description needs the 0.8B model, so photos attached while LFM2.5 is active keep their OCR text until the recording ends. After a recording, summaries, titles, vocabulary and chat use the summary model you pick above.")
 ```
 
-- [ ] **Step 5: Build**
+- [x] **Step 5: Build**
 
 Run:
 ```bash
@@ -370,7 +370,7 @@ xcodebuild build -project Loqi.xcodeproj -scheme Loqi -destination 'platform=iOS
 ```
 Expected: `** BUILD SUCCEEDED **`.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add Loqi/Features/Settings/SettingsView.swift
@@ -388,7 +388,7 @@ git commit -m "feat: add experimental Liquid LFM2.5 toggle to Settings live-mode
 - Consumes: the exact English source strings introduced/changed in Task 3 (must match `Text(...)` literals verbatim).
 - Produces: zh-Hans + ja `stringUnit`s. No code consumes this.
 
-- [ ] **Step 1: Add the new keys with translations via a JSON script**
+- [x] **Step 1: Add the new keys with translations via a JSON script**
 
 Run from the repo root:
 
@@ -416,7 +416,7 @@ PY
 ```
 Expected output: `added 2 keys`.
 
-- [ ] **Step 2: Verify the catalog is still valid JSON and the keys landed**
+- [x] **Step 2: Verify the catalog is still valid JSON and the keys landed**
 
 Run:
 ```bash
@@ -432,7 +432,7 @@ print('valid JSON, all keys present')
 ```
 Expected: one `ok:` line then `valid JSON, all keys present`.
 
-- [ ] **Step 3: Build to let Xcode reconcile the catalog**
+- [x] **Step 3: Build to let Xcode reconcile the catalog**
 
 Run:
 ```bash
@@ -440,7 +440,7 @@ xcodebuild build -project Loqi.xcodeproj -scheme Loqi -destination 'platform=iOS
 ```
 Expected: `** BUILD SUCCEEDED **`. Xcode marks the old (pre-Task-3) footer string `stale` — harmless, it no longer appears in code.
 
-- [ ] **Step 4: Commit**
+- [x] **Step 4: Commit**
 
 ```bash
 git add Loqi/Localizable.xcstrings
