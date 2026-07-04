@@ -574,9 +574,16 @@ actor LLMService {
     /// The one MLX error that is always a scene-exit artifact, never a
     /// model/format problem: iOS refused GPU work because the app was
     /// backgrounded. String match on the IOGPU error name — MLXError
-    /// carries only the flattened C++ message.
+    /// carries only the flattened C++ message, so there is nothing typed
+    /// to switch on. Two independent phrasings are matched (the IOGPU
+    /// constant and Metal's human-readable description) so a wording
+    /// change in one layer doesn't silently break the suspend mapping.
+    /// TODO: when the mlx-swift fork is rebased (or dropped for upstream
+    /// ≥ a025496c), surface a typed error code through mlx-c instead.
     nonisolated static func isBackgroundGPUAbort(_ error: MLXError) -> Bool {
-        String(describing: error).contains("BackgroundExecutionNotPermitted")
+        let message = String(describing: error)
+        return message.contains("BackgroundExecutionNotPermitted")
+            || message.contains("GPU work from background")
     }
 
     /// Remove `<think>…</think>` spans (and an unterminated trailing one).

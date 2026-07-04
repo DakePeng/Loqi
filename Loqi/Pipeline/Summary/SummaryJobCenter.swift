@@ -293,15 +293,15 @@ final class SummaryJobCenter {
     }
 
     /// Notes covering a resolvable prefix of the transcript — what
-    /// `SummaryEngine.uncoveredEntries` can actually resume from. Live
+    /// `SummaryEngine.uncoveredEntries` can actually resume from, asked
+    /// of the same function so the two can never diverge (this also means
+    /// a checkpoint whose stub rollback discards everything counts as
+    /// unusable, and hygiene correctly runs before the full remap). Live
     /// notes from a recording have the same shape; a resume can't tell
     /// them apart, so it skips hygiene for those too (a quality trade,
     /// not a correctness one).
     nonisolated static func hasUsableMapCheckpoint(_ record: SessionRecord) -> Bool {
-        guard let notes = record.chunkNotes, !notes.isEmpty,
-              let endID = record.liveNotesEndEntryID
-        else { return false }
-        return record.entries.contains { $0.id == endID }
+        !SummaryEngine.uncoveredEntries(of: record).cachedNotes.isEmpty
     }
 
     private static func isHeldActivity(_ activity: Activity?) -> Bool {

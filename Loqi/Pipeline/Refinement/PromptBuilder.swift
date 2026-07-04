@@ -451,6 +451,19 @@ struct PromptBuilder: Sendable {
             || field.wholeMatch(of: /c\d{1,4}/) != nil
     }
 
+    /// P/D/Q/R/E/J tag → record kind. T and A construct their records
+    /// specially and never route through this.
+    private static func recordKind(for tag: String) -> SessionRecord.SummaryRecord.Kind {
+        switch tag {
+        case "P": .point
+        case "D": .decision
+        case "Q": .question
+        case "R": .risk
+        case "E": .term
+        default: .reflection
+        }
+    }
+
     func parseSummaryRecords(
         _ raw: String,
         chunkID: String,
@@ -616,16 +629,8 @@ struct PromptBuilder: Sendable {
                     diagnostics.invalidSourceIDs += 1
                     continue
                 }
-                let kind: SessionRecord.SummaryRecord.Kind = switch tag {
-                case "P": .point
-                case "D": .decision
-                case "Q": .question
-                case "R": .risk
-                case "E": .term
-                default: .reflection
-                }
                 append(.init(
-                    kind: kind,
+                    kind: Self.recordKind(for: tag),
                     source: source,
                     sourceIDs: ids,
                     sourceIndex: sourceIndex(ids),
@@ -641,15 +646,16 @@ struct PromptBuilder: Sendable {
                     diagnostics.invalidSourceIDs += 1
                     continue
                 }
+                let task = Self.strippedSourceIDTokens(parts[4])
                 append(.init(
                     kind: .action,
                     source: source,
                     sourceIDs: ids,
                     sourceIndex: sourceIndex(ids),
                     timestamp: timestamp,
-                    text: Self.strippedSourceIDTokens(parts[4]),
+                    text: task,
                     owner: Self.strippedSourceIDTokens(parts[3]),
-                    task: Self.strippedSourceIDTokens(parts[4]),
+                    task: task,
                     deadline: Self.strippedSourceIDTokens(parts[5]),
                     sourceLabel: sourceLabel))
             default:
@@ -704,29 +710,22 @@ struct PromptBuilder: Sendable {
                               echoFree(parts)
                         else { continue }
                         if tag == "A" {
+                            let task = Self.strippedSourceIDTokens(parts[3])
                             salvage(.init(
                                 kind: .action,
                                 source: source,
                                 sourceIDs: ids,
                                 sourceIndex: sourceIndex(ids),
                                 timestamp: timestamp,
-                                text: Self.strippedSourceIDTokens(parts[3]),
+                                text: task,
                                 owner: Self.strippedSourceIDTokens(parts[2]),
-                                task: Self.strippedSourceIDTokens(parts[3]),
+                                task: task,
                                 deadline: count == 5
                                     ? Self.strippedSourceIDTokens(parts[4]) : "未明确",
                                 sourceLabel: sourceLabel))
                         } else {
-                            let kind: SessionRecord.SummaryRecord.Kind = switch tag {
-                            case "P": .point
-                            case "D": .decision
-                            case "Q": .question
-                            case "R": .risk
-                            case "E": .term
-                            default: .reflection
-                            }
                             salvage(.init(
-                                kind: kind,
+                                kind: Self.recordKind(for: tag),
                                 source: source,
                                 sourceIDs: ids,
                                 sourceIndex: sourceIndex(ids),
@@ -771,29 +770,22 @@ struct PromptBuilder: Sendable {
                     // [A, id, x, task]: x either cites ids or names the
                     // owner — the ids validation decides.
                     let ids = sourceIDs(from: parts[2])
+                    let task = Self.strippedSourceIDTokens(parts[3])
                     salvage(.init(
                         kind: .action,
                         source: source,
                         sourceIDs: ids ?? [],
                         sourceIndex: ids.map(sourceIndex) ?? 0,
                         timestamp: timestamp,
-                        text: Self.strippedSourceIDTokens(parts[3]),
+                        text: task,
                         owner: ids == nil
                             ? Self.strippedSourceIDTokens(parts[2]) : "未明确",
-                        task: Self.strippedSourceIDTokens(parts[3]),
+                        task: task,
                         deadline: "未明确",
                         sourceLabel: sourceLabel))
                 default:
-                    let kind: SessionRecord.SummaryRecord.Kind = switch tag {
-                    case "P": .point
-                    case "D": .decision
-                    case "Q": .question
-                    case "R": .risk
-                    case "E": .term
-                    default: .reflection
-                    }
                     salvage(.init(
-                        kind: kind,
+                        kind: Self.recordKind(for: tag),
                         source: source,
                         sourceIDs: [],
                         sourceIndex: 0,
