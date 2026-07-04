@@ -200,6 +200,8 @@ struct PipelineResourceTests {
         #expect(SummaryJobCenter.shouldSuspendForBackground(
             .retranscribing(.transcribing(0))))
         #expect(SummaryJobCenter.shouldSuspendForBackground(
+            .retranscribing(.cleaningUpTranscript(0))))
+        #expect(SummaryJobCenter.shouldSuspendForBackground(
             .importing(.transcribing(0))))
     }
 

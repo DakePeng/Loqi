@@ -14,6 +14,7 @@ import os
 struct SessionRetranscriber {
     enum Phase: Equatable {
         case transcribing(Double)   // 0...1 through the file
+        case cleaningUpTranscript(Double)
         case identifyingSpeakers(Double)
         case translating(Double)
     }
@@ -30,6 +31,9 @@ struct SessionRetranscriber {
     let translator: TranslationCoordinator
     /// Vocabulary that primes the Qwen3-ASR decoder when it runs the pass.
     var hotwords: HotwordStore?
+    /// Settings gate for the LFM2.5 cleanup phase. Retranscribe jobs are
+    /// already gated upstream (JobError.aiDisabled); passed for correctness.
+    var llmCleanupEnabled = true
     private let logger = Logger(subsystem: "com.kunzhipeng.loqi", category: "retranscribe")
 
     /// True when the session has audio on disk to re-transcribe — gates
@@ -79,15 +83,43 @@ struct SessionRetranscriber {
         guard !utterances.isEmpty else { throw ImportError.nothingTranscribed }
         logger.info("retranscribe: \(utterances.count) utterances replace \(record.entries.count) entries")
 
+        // Polish before translation drafting so Apple translates the
+        // cleaned text: deterministic hotword fixup for every backend,
+        // plus LFM2.5 sentence cleanup for the non-accuracy-pass ones
+        // (Qwen3-ASR already had decoder hotword priming).
+        let runCleanup = OfflineTranscriptPolisher.shouldRunLLMCleanup(
+            backend: backend,
+            llmEnabled: llmCleanupEnabled,
+            refineModelDownloaded: LLMService.isDownloaded(
+                model: ModelCatalog.liveRefineModel))
+        if runCleanup {
+            onPhase(.cleaningUpTranscript(0))
+            // The ASR pass unloaded the LLM; generate self-heals with a
+            // requireDownloaded load of the 230M (admitLoad absorbs ONNX
+            // arena release lag). The summarize that follows swaps to the
+            // summary model itself, so no unload is needed here.
+            await llm.setModel(ModelCatalog.liveRefineModel)
+        }
+        let polisher = OfflineTranscriptPolisher(matcher: hotwords?.matcher)
+        let polished = try await polisher.polish(
+            utterances.map(\.text),
+            language: direction.source,
+            runLLMCleanup: runCleanup,
+            generate: { [llm] in
+                try await llm.generate(system: $0, user: $1, maxTokens: $2)
+            },
+            onProgress: { onPhase(.cleaningUpTranscript($0)) })
+
         let speakers = Self.inheritSpeakers(
             for: utterances.map { ($0.start, $0.end) }, from: record)
         var entries = utterances.enumerated().map { index, utterance in
             SessionRecord.Entry(
-                sourceText: utterance.text,
+                sourceText: polished.texts[index],
                 translation: nil,
                 speaker: speakers[index],
                 direction: direction,
                 timestamp: record.startedAt.addingTimeInterval(utterance.start),
+                rawSourceText: polished.originals[index],
                 audioOffset: utterance.start)
         }
 

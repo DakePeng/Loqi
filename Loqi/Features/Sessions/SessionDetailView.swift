@@ -368,6 +368,9 @@ struct SessionDetailView: View {
         case .retranscribing(.transcribing(let fraction)):
             PercentProgressRow(
                 label: "Re-transcribing…", fraction: fraction, detail: remainingText)
+        case .retranscribing(.cleaningUpTranscript(let fraction)):
+            PercentProgressRow(
+                label: "Cleaning up transcript…", fraction: fraction, detail: remainingText)
         case .retranscribing(.identifyingSpeakers(let fraction)):
             PercentProgressRow(
                 label: "Identifying speakers…", fraction: fraction, detail: remainingText)

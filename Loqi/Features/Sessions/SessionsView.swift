@@ -437,6 +437,8 @@ private struct SessionRowStatus: View {
              total > 1 ? Double(done) / Double(total) : nil)
         case .retranscribing(.transcribing(let f)):
             (String(localized: "Re-transcribing…"), f)
+        case .retranscribing(.cleaningUpTranscript(let f)):
+            (String(localized: "Cleaning up transcript…"), f)
         case .retranscribing(.identifyingSpeakers(let f)):
             (String(localized: "Identifying speakers…"), f)
         case .retranscribing(.translating(let f)):

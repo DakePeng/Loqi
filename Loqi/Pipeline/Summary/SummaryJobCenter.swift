@@ -704,7 +704,8 @@ final class SummaryJobCenter {
                 throw LLMServiceError.modelNotDownloaded
             }
             let retranscriber = SessionRetranscriber(
-                llm: llm, translator: translator, hotwords: hotwords)
+                llm: llm, translator: translator, hotwords: hotwords,
+                llmCleanupEnabled: llmEnabled)
             let updated: SessionRecord
             let suggestVocabulary: Bool
             switch request.kind {
@@ -1044,6 +1045,9 @@ final class SummaryJobCenter {
         case .transcribing(let f):
             setProgress(sessionID, .retranscribing(.transcribing(Self.percent(f))),
                         phaseKey: "re.asr", fraction: f)
+        case .cleaningUpTranscript(let f):
+            setProgress(sessionID, .retranscribing(.cleaningUpTranscript(Self.percent(f))),
+                        phaseKey: "re.cleanup", fraction: f)
         case .identifyingSpeakers(let f):
             setProgress(sessionID, .retranscribing(.identifyingSpeakers(Self.percent(f))),
                         phaseKey: "re.diarize", fraction: f)
