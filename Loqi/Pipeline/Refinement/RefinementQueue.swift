@@ -1,4 +1,5 @@
 import Foundation
+import os
 
 /// Serial queue feeding finalized sentences to the LLM, strictly one
 /// generation at a time. The caption stream never waits on this: drafts are
@@ -26,6 +27,7 @@ actor RefinementQueue {
 
     private let llm: LLMService
     private let prompts = PromptBuilder()
+    private let logger = Logger(subsystem: "com.kunzhipeng.loqi", category: "refine")
     private var pending: [Job] = []
     private var worker: Task<Void, Never>?
     private var paused = false
@@ -109,8 +111,17 @@ actor RefinementQueue {
                 if let translation = prompts.parseRefinement(raw),
                    prompts.isAcceptable(translation, draft: job.draft) {
                     outcome.translation = translation
+                } else {
+                    // Draft stays on screen; log the raw output so a model
+                    // whose refinements keep getting discarded (repetition,
+                    // length blowout, garbled decode) is distinguishable
+                    // from one that never generated at all.
+                    logger.warning(
+                        "refinement rejected, draft kept: \(raw, privacy: .public)")
                 }
             } catch {
+                logger.warning(
+                    "refinement generate failed, draft kept: \(error.localizedDescription, privacy: .public)")
                 outcome = Outcome()
             }
             let entryID = job.entryID
