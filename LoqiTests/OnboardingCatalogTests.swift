@@ -104,8 +104,9 @@ struct OnboardingCatalogTests {
         }
     }
 
-    @Test func liveLLMItemMatchesTheFastTier() {
-        #expect(OnboardingItemKind.liveLLM.downloadBytes == ModelCatalog.liveModel.downloadBytes)
+    @Test func liveLLMItemMatchesTheLiveRefineTier() {
+        #expect(OnboardingItemKind.liveLLM.downloadBytes
+            == ModelCatalog.liveRefineModel.downloadBytes)
         #expect(OnboardingItemKind.liveLLM.isRecommended)
     }
 
@@ -140,7 +141,7 @@ struct OnboardingCatalogTests {
             installed: [])
         let expected = SenseVoiceModelStore.totalExpectedBytes
             + StreamingDiarizer.approximateDownloadBytes
-            + ModelCatalog.liveModel.downloadBytes
+            + ModelCatalog.liveRefineModel.downloadBytes
             + ModelCatalog.qwen35_2b.downloadBytes
         #expect(total == expected)
     }

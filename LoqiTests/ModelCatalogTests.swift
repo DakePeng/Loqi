@@ -106,41 +106,25 @@ struct ModelCatalogTests {
         let defaults = UserDefaults(suiteName: suite)!
         defer { defaults.removePersistentDomain(forName: suite) }
 
-        // Even with the live-refine flag on, live tiers stay out.
-        defaults.set(true, forKey: "model.liveRefineLFM2Enabled")
         let ids = ModelCatalog.availableModels(defaults: defaults).map(\.id)
         #expect(!ids.contains(ModelCatalog.qwen35_0_8b.id))
         #expect(!ids.contains(ModelCatalog.lfm2_5_230m.id))
         #expect(ids.contains(ModelCatalog.bonsai8b.id))
     }
 
-    @Test func normalizationDropsLFM2EvenWhenFlagEnabled() {
+    @Test func normalizationDropsLFM2SummaryPick() {
         let suite = "ModelCatalogTests.\(UUID().uuidString)"
         let defaults = UserDefaults(suiteName: suite)!
         defer { defaults.removePersistentDomain(forName: suite) }
 
-        defaults.set(true, forKey: "model.liveRefineLFM2Enabled")
         defaults.set(ModelCatalog.lfm2_5_230m.id, forKey: "model.id")
         ModelCatalog.normalizeStoredSelection(defaults)
         #expect(defaults.string(forKey: "model.id") == ModelCatalog.default.id)
     }
 
-    @Test func liveRefineModelDefaultsToLiveModelTier() {
-        let suite = "ModelCatalogTests.\(UUID().uuidString)"
-        let defaults = UserDefaults(suiteName: suite)!
-        defer { defaults.removePersistentDomain(forName: suite) }
-
-        #expect(ModelCatalog.liveRefineModel(defaults).id == ModelCatalog.liveModel.id)
-    }
-
-    @Test func liveRefineModelSwapsToLFM2WhenFlagEnabled() {
-        let suite = "ModelCatalogTests.\(UUID().uuidString)"
-        let defaults = UserDefaults(suiteName: suite)!
-        defer { defaults.removePersistentDomain(forName: suite) }
-
-        defaults.set(true, forKey: "model.liveRefineLFM2Enabled")
-        #expect(ModelCatalog.liveRefineModel(defaults).id == ModelCatalog.lfm2_5_230m.id)
-        // liveModel itself must stay the vision-capable fixed tier.
+    @Test func liveRefineModelIsLockedToLFM2() {
+        #expect(ModelCatalog.liveRefineModel.id == ModelCatalog.lfm2_5_230m.id)
+        // liveModel itself stays the vision-capable tier for photo work.
         #expect(ModelCatalog.liveModel.id == ModelCatalog.qwen35_0_8b.id)
     }
 

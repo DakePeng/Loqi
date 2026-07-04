@@ -473,12 +473,12 @@ final class CaptionPipeline {
         liveChunker = LiveChunker()
         liveNotes.removeAll()
         notesEndEntryID = nil
-        // LFM2.5 (230M) can't produce reliable TSV chunk records — while it
-        // is the live model, skip live note mapping entirely; post-session
-        // summarize maps every chunk from the final transcript anyway (live
-        // notes are only a latency optimization). Evaluated once per session
-        // so note coverage stays a contiguous prefix.
-        liveMappingStopped = ModelCatalog.liveRefineLFM2Enabled()
+        // The live model is locked to LFM2.5 (230M), which can't produce
+        // reliable TSV chunk records — live note mapping is off entirely;
+        // post-session summarize maps every chunk from the final transcript
+        // (live notes were only a latency optimization). Revisit if a
+        // schema-capable live tier returns.
+        liveMappingStopped = true
         audioAnchors.removeAll()
         evictedEntries.removeAll()
         liveAttachments.removeAll()
@@ -1688,7 +1688,7 @@ final class CaptionPipeline {
             // is on — accepted, AttachmentDescribeQueue already treats every
             // describeImage failure as best-effort. Revisit if live photo
             // description quality regressions get reported.
-            await llm.setModel(ModelCatalog.liveRefineModel())
+            await llm.setModel(ModelCatalog.liveRefineModel)
             // Called on every silence gap; only show status when there is
             // actually a load to do (llm.load joins in-flight loads).
             if case .ready = await llm.loadState {

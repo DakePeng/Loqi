@@ -115,8 +115,8 @@ enum ModelCatalog {
     /// the fast, low-memory, low-heat vision-capable tier. Always 0.8B
     /// regardless of the user's quality pick, so live photo description and
     /// the post-session vision back-fill (see SummaryJobCenter) never load
-    /// the heavy VLM beside SenseVoice's in-process ONNX. This never changes
-    /// — `liveRefineModel` below is the swappable one.
+    /// the heavy VLM beside SenseVoice's in-process ONNX. Vision-only role:
+    /// the live-refine role is locked to `liveRefineModel` (LFM2.5).
     static let liveModel = qwen35_0_8b
 
     /// Experimental text-only 230M live-refine candidate (Liquid AI's
@@ -124,9 +124,9 @@ enum ModelCatalog {
     /// `LFM2.swift`, so no fork is needed (config.json model_type "lfm2").
     /// No vision tower: while active, a photo attached live falls back to
     /// OCR-only (AttachmentDescribeQueue already treats every
-    /// `describeImage` failure as best-effort). Hidden behind
-    /// `model.liveRefineLFM2Enabled` (off by default). Live-refine only:
-    /// it cannot do stable structured output, so it never summarizes.
+    /// `describeImage` failure as best-effort). Live-refine only: it
+    /// cannot do stable structured output, so it never summarizes and
+    /// live notes defer to post-session mapping.
     static let lfm2_5_230m = ModelOption(
         id: "LiquidAI/LFM2.5-230M-MLX-4bit",
         displayName: "Liquid LFM2.5 230M — experimental",
@@ -139,19 +139,12 @@ enum ModelCatalog {
         downloadBytes: 151_000_000,
         supportsVision: false)
 
-    /// Whether the experimental LFM2.5 live-refine tier replaces the fixed
-    /// 0.8B during recording. Off by default.
-    static func liveRefineLFM2Enabled(_ defaults: UserDefaults = .standard) -> Bool {
-        defaults.bool(forKey: "model.liveRefineLFM2Enabled")
-    }
-
     /// Model `CaptionPipeline` loads during recording for live transcript
-    /// cleanup — sentence refinement (text-only path; never touches vision).
-    /// Defaults to `liveModel`; swaps to the LFM2.5 candidate when the
-    /// experimental flag is on.
-    static func liveRefineModel(_ defaults: UserDefaults = .standard) -> ModelOption {
-        liveRefineLFM2Enabled(defaults) ? lfm2_5_230m : liveModel
-    }
+    /// cleanup — sentence refinement (text-only path; never touches
+    /// vision). Locked to the 230M: monolingual cleanup is within its
+    /// capability, and it runs far cooler beside ASR + diarization than
+    /// the 0.8B did.
+    static let liveRefineModel = lfm2_5_230m
 
     /// Model post-session summary / title / vocabulary runs on: the user's
     /// quality pick (default 2B). Equals `liveModel` when the user picked the

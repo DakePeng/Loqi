@@ -688,6 +688,7 @@
       }
     },
     "Bonsai 8B (ternary 2-bit) — experimental" : {
+      "extractionState" : "stale",
       "localizations" : {
         "ja" : {
           "stringUnit" : {
@@ -1751,6 +1752,38 @@
         }
       }
     },
+    "During a recording, the on-device AI model cleans up the live transcript — fixing misheard words, names, and punctuation — while Apple's system translation produces the translation itself. The default live model is Qwen3.5 0.8B; the experimental Liquid LFM2.5 above replaces it when enabled, in which case live notes and photo descriptions wait until the recording ends. After a recording, summaries, titles, vocabulary and chat use the summary model you pick above." : {
+      "localizations" : {
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "録音中は、オンデバイスAIモデルがライブ文字起こしを整えます（聞き間違い・人名・句読点の修正）。翻訳自体はAppleのシステム翻訳が行います。デフォルトのライブモデルはQwen3.5 0.8Bで、上の実験的なLiquid LFM2.5を有効にすると置き換わります（その間、ライブノートと写真の説明は録音終了後に生成されます）。録音後は、要約・タイトル・単語・チャットに上で選んだ要約モデルを使用します。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "录音期间，端侧 AI 模型负责整理实时转写——修正听错的词、人名和标点——翻译本身由 Apple 系统翻译完成。默认实时模型为 Qwen3.5 0.8B；启用上方实验性 Liquid LFM2.5 后将替代它，此时实时笔记和照片描述会等到录音结束后再生成。录音结束后，总结、标题、生词和聊天会使用你在上方选择的总结模型。"
+          }
+        }
+      }
+    },
+    "During a recording, the tiny on-device Liquid LFM2.5 model cleans up the live transcript — fixing misheard words, names, and punctuation — while Apple's system translation produces the translation itself. Live notes and photo descriptions are generated after the recording ends. After a recording, summaries, titles, vocabulary and chat use the summary model you pick above." : {
+      "localizations" : {
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "録音中は、超小型のオンデバイスLiquid LFM2.5モデルがライブ文字起こしを整えます（聞き間違い・人名・句読点の修正）。翻訳自体はAppleのシステム翻訳が行います。ライブノートと写真の説明は録音終了後に生成されます。録音後は、要約・タイトル・単語・チャットに上で選んだ要約モデルを使用します。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "录音期间，超小型端侧 Liquid LFM2.5 模型负责整理实时转写——修正听错的词、人名和标点——翻译本身由 Apple 系统翻译完成。实时笔记和照片描述会在录音结束后生成。录音结束后，总结、标题、生词和聊天会使用你在上方选择的总结模型。"
+          }
+        }
+      }
+    },
     "e.g. person name, product, keep untranslated" : {
       "extractionState" : "stale",
       "localizations" : {
@@ -1937,6 +1970,7 @@
       }
     },
     "Experimental: Bonsai 8B summary model" : {
+      "extractionState" : "stale",
       "localizations" : {
         "ja" : {
           "stringUnit" : {
@@ -2048,6 +2082,22 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "用于实时翻译和笔记的快速设备端模型"
+          }
+        }
+      }
+    },
+    "Tiny on-device model that cleans up the live transcript" : {
+      "localizations" : {
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "ライブ文字起こしを整える超小型オンデバイスモデル"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "用于整理实时转写的超小型设备端模型"
           }
         }
       }
@@ -2554,6 +2604,22 @@
         }
       }
     },
+    "Live AI model (LFM2.5)" : {
+      "localizations" : {
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "ライブAIモデル（LFM2.5）"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "实时 AI 模型（LFM2.5）"
+          }
+        }
+      }
+    },
     "Live Captions" : {
       "extractionState" : "stale",
       "localizations" : {
@@ -2623,6 +2689,7 @@
       }
     },
     "Live recording uses the fast Qwen3.5 0.8B model by default — or the experimental Liquid LFM2.5 above — so captions and live translation stay responsive and cool. Live photo description needs the 0.8B model, so photos attached while LFM2.5 is active keep their OCR text until the recording ends. After a recording, summaries, titles, vocabulary and chat use the summary model you pick above." : {
+      "extractionState" : "stale",
       "localizations" : {
         "ja" : {
           "stringUnit" : {
@@ -2634,22 +2701,6 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "录制时默认使用快速的 Qwen3.5 0.8B 模型（或上方的实验性 Liquid LFM2.5 模型），让字幕和实时翻译保持流畅、低发热。实时图片描述需要 0.8B 模型，因此在 LFM2.5 生效期间添加的照片会保留其文字识别结果，直到录制结束。录制结束后，总结、标题、生词和聊天会使用你在上方选择的总结模型。"
-          }
-        }
-      }
-    },
-    "During a recording, the on-device AI model cleans up the live transcript — fixing misheard words, names, and punctuation — while Apple's system translation produces the translation itself. The default live model is Qwen3.5 0.8B; the experimental Liquid LFM2.5 above replaces it when enabled, in which case live notes and photo descriptions wait until the recording ends. After a recording, summaries, titles, vocabulary and chat use the summary model you pick above." : {
-      "localizations" : {
-        "ja" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "録音中は、オンデバイスAIモデルがライブ文字起こしを整えます（聞き間違い・人名・句読点の修正）。翻訳自体はAppleのシステム翻訳が行います。デフォルトのライブモデルはQwen3.5 0.8Bで、上の実験的なLiquid LFM2.5を有効にすると置き換わります（その間、ライブノートと写真の説明は録音終了後に生成されます）。録音後は、要約・タイトル・単語・チャットに上で選んだ要約モデルを使用します。"
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "录音期间，端侧 AI 模型负责整理实时转写——修正听错的词、人名和标点——翻译本身由 Apple 系统翻译完成。默认实时模型为 Qwen3.5 0.8B；启用上方实验性 Liquid LFM2.5 后将替代它，此时实时笔记和照片描述会等到录音结束后再生成。录音结束后，总结、标题、生词和聊天会使用你在上方选择的总结模型。"
           }
         }
       }

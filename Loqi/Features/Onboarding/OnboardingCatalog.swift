@@ -88,7 +88,7 @@ enum OnboardingItemKind: String, CaseIterable, Identifiable {
         case .translationPacks: String(localized: "Translation language packs")
         case .senseVoice: String(localized: "SenseVoice live recognition")
         case .diarizer: String(localized: "Speaker recognition")
-        case .liveLLM: String(localized: "Live AI model (0.8B)")
+        case .liveLLM: String(localized: "Live AI model (LFM2.5)")
         case .summaryLLM: String(localized: "Summary AI model (2B)")
         case .qwen3ASR: String(localized: "Qwen3-ASR re-transcription")
         }
@@ -105,7 +105,7 @@ enum OnboardingItemKind: String, CaseIterable, Identifiable {
         case .diarizer:
             String(localized: "Tells voices apart in recordings")
         case .liveLLM:
-            String(localized: "Fast on-device model for live translation and notes")
+            String(localized: "Tiny on-device model that cleans up the live transcript")
         case .summaryLLM:
             String(localized: "Higher-quality summaries, titles and chat")
         case .qwen3ASR:
@@ -120,7 +120,7 @@ enum OnboardingItemKind: String, CaseIterable, Identifiable {
         case .appleSpeech, .translationPacks: nil
         case .senseVoice: SenseVoiceModelStore.totalExpectedBytes
         case .diarizer: StreamingDiarizer.approximateDownloadBytes
-        case .liveLLM: ModelCatalog.liveModel.downloadBytes
+        case .liveLLM: ModelCatalog.liveRefineModel.downloadBytes
         case .summaryLLM: ModelCatalog.qwen35_2b.downloadBytes
         case .qwen3ASR: Qwen3ASRModelStore.totalExpectedBytes
         }
@@ -161,7 +161,7 @@ enum OnboardingItemKind: String, CaseIterable, Identifiable {
         case .appleSpeech, .translationPacks: false
         case .senseVoice: SenseVoiceModelStore.isInstalled
         case .diarizer: StreamingDiarizer.isModelCached
-        case .liveLLM: LLMService.isDownloaded(model: ModelCatalog.liveModel)
+        case .liveLLM: LLMService.isDownloaded(model: ModelCatalog.liveRefineModel)
         case .summaryLLM: LLMService.isDownloaded(model: ModelCatalog.qwen35_2b)
         case .qwen3ASR: Qwen3ASRModelStore.isInstalled
         }

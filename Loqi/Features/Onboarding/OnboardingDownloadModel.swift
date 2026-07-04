@@ -202,7 +202,7 @@ final class OnboardingDownloadModel {
         case .translationPacks: await downloadTranslationPacks(item)
         case .senseVoice: await downloadSenseVoice(item)
         case .diarizer: await downloadDiarizer(item)
-        case .liveLLM: await downloadSingleLLM(item, model: ModelCatalog.liveModel)
+        case .liveLLM: await downloadSingleLLM(item, model: ModelCatalog.liveRefineModel)
         case .summaryLLM: await downloadSingleLLM(item, model: ModelCatalog.qwen35_2b)
         case .qwen3ASR: await downloadQwen3ASR(item)
         }
