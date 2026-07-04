@@ -116,6 +116,42 @@ struct ModelCatalogTests {
         #expect(ModelCatalog.summaryModel.id == ModelCatalog.current.id)
     }
 
+    @Test func lfm2CandidateIsTextOnlyAndLighterThanLiveModel() {
+        #expect(ModelCatalog.lfm2_5_230m.supportsVision == false)
+        #expect(ModelCatalog.lfm2_5_230m.requiredHeadroom
+            < ModelCatalog.liveModel.requiredHeadroom)
+    }
+
+    @Test func lfm2CandidateNeverAppearsInSummaryLineup() {
+        let suite = "ModelCatalogTests.\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suite)!
+        defer { defaults.removePersistentDomain(forName: suite) }
+
+        defaults.set(true, forKey: "model.liveRefineLFM2Enabled")
+        defaults.set(true, forKey: "model.bonsaiEnabled")
+        #expect(!ModelCatalog.availableModels(defaults: defaults)
+            .contains { $0.id == ModelCatalog.lfm2_5_230m.id })
+    }
+
+    @Test func liveRefineModelDefaultsToLiveModelTier() {
+        let suite = "ModelCatalogTests.\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suite)!
+        defer { defaults.removePersistentDomain(forName: suite) }
+
+        #expect(ModelCatalog.liveRefineModel(defaults).id == ModelCatalog.liveModel.id)
+    }
+
+    @Test func liveRefineModelSwapsToLFM2WhenFlagEnabled() {
+        let suite = "ModelCatalogTests.\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suite)!
+        defer { defaults.removePersistentDomain(forName: suite) }
+
+        defaults.set(true, forKey: "model.liveRefineLFM2Enabled")
+        #expect(ModelCatalog.liveRefineModel(defaults).id == ModelCatalog.lfm2_5_230m.id)
+        // liveModel itself must stay the vision-capable fixed tier.
+        #expect(ModelCatalog.liveModel.id == ModelCatalog.qwen35_0_8b.id)
+    }
+
 }
 
 private func defaultSelectableModelsForTests() -> [ModelOption] {
