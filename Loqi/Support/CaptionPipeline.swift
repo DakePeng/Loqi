@@ -1654,7 +1654,12 @@ final class CaptionPipeline {
             return
         }
         Task { [llm] in
-            await llm.setModel(ModelCatalog.liveModel)
+            // ponytail: LFM2.5 has no vision tower, so a photo attached live
+            // this session degrades to OCR-only while the experimental flag
+            // is on — accepted, AttachmentDescribeQueue already treats every
+            // describeImage failure as best-effort. Revisit if live photo
+            // description quality regressions get reported.
+            await llm.setModel(ModelCatalog.liveRefineModel())
             // Called on every silence gap; only show status when there is
             // actually a load to do (llm.load joins in-flight loads).
             if case .ready = await llm.loadState {
