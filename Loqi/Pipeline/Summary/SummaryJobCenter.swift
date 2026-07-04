@@ -273,10 +273,11 @@ final class SummaryJobCenter {
     /// runs in the foreground, a memory warning sheds the MLX cache instead
     /// of unloading the weights — a full unload mid-job just forces an
     /// immediate self-heal reload, which costs more memory churn (and GPU
-    /// time) than it frees. Imports are deliberately excluded: their decode
-    /// pipeline is ASR/translation only (the auto-summary afterwards is its
-    /// own job), so under memory pressure the resident weights are pure
-    /// reclaimable headroom there.
+    /// time) than it frees. Imports are deliberately excluded EXCEPT their
+    /// transcript-cleanup phase, which actively generates on the 230M; the
+    /// decode/translate phases are ASR/translation only (the auto-summary
+    /// afterwards is its own job), so under memory pressure the resident
+    /// weights are pure reclaimable headroom there.
     var hasRunningLLMJob: Bool {
         activities.values.contains(where: Self.usesLLM)
     }
@@ -284,6 +285,7 @@ final class SummaryJobCenter {
     nonisolated static func usesLLM(_ activity: Activity) -> Bool {
         switch activity {
         case .downloadingModel, .summarizing, .retranscribing: true
+        case .importing(.cleaningUpTranscript): true
         default: false
         }
     }
@@ -779,7 +781,8 @@ final class SummaryJobCenter {
             await self.llm.setModel(ModelCatalog.summaryModel)
             let importer = FileImportEngine(
                 translator: self.translator, voiceprint: self.voiceprint,
-                llm: self.llm, hotwords: self.hotwords)
+                llm: self.llm, hotwords: self.hotwords,
+                llmCleanupEnabled: self.llmEnabled)
             return try await importer.importAudio(
                 url: url,
                 sessionID: sessionID,
@@ -813,7 +816,8 @@ final class SummaryJobCenter {
             await self.llm.setModel(ModelCatalog.summaryModel)
             let importer = FileImportEngine(
                 translator: self.translator, voiceprint: self.voiceprint,
-                llm: self.llm, hotwords: self.hotwords)
+                llm: self.llm, hotwords: self.hotwords,
+                llmCleanupEnabled: self.llmEnabled)
             return try await importer.resumeImport(
                 checkpoint: checkpoint,
                 sessionID: sessionID,
@@ -1025,6 +1029,9 @@ final class SummaryJobCenter {
         case .transcribing(let f):
             setProgress(sessionID, .importing(.transcribing(Self.percent(f))),
                         phaseKey: "import.asr", fraction: f)
+        case .cleaningUpTranscript(let f):
+            setProgress(sessionID, .importing(.cleaningUpTranscript(Self.percent(f))),
+                        phaseKey: "import.cleanup", fraction: f)
         case .fetchingSpeakerModel(let f):
             setProgress(sessionID, .importing(.fetchingSpeakerModel(Self.percent(f))),
                         phaseKey: "import.fetch", fraction: f)

@@ -380,6 +380,9 @@ struct SessionDetailView: View {
         case .importing(.transcribing(let fraction)):
             PercentProgressRow(
                 label: "Transcribing…", fraction: fraction, detail: remainingText)
+        case .importing(.cleaningUpTranscript(let fraction)):
+            PercentProgressRow(
+                label: "Cleaning up transcript…", fraction: fraction, detail: remainingText)
         case .importing(.fetchingSpeakerModel(let fraction)):
             PercentProgressRow(
                 label: "Downloading speaker model…", fraction: fraction,

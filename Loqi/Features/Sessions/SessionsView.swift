@@ -445,6 +445,8 @@ private struct SessionRowStatus: View {
             (String(localized: "Translating…"), f)
         case .importing(.transcribing(let f)):
             (String(localized: "Transcribing…"), f)
+        case .importing(.cleaningUpTranscript(let f)):
+            (String(localized: "Cleaning up transcript…"), f)
         case .importing(.fetchingSpeakerModel(let f)):
             (String(localized: "Downloading speaker model…"), f)
         case .importing(.identifyingSpeakers(let f)):

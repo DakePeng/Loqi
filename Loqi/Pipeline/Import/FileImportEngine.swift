@@ -11,6 +11,7 @@ import os
 final class FileImportEngine {
     enum Phase: Equatable {
         case transcribing(Double)   // 0...1 through the file
+        case cleaningUpTranscript(Double)
         case fetchingSpeakerModel(Double)   // first diarized import only
         case identifyingSpeakers(Double)
         case translating(Double)
@@ -18,25 +19,30 @@ final class FileImportEngine {
 
     private let translator: TranslationCoordinator
     private let voiceprint: VoiceprintService
-    /// Unloaded before a Qwen3-ASR decode: its ~940MB of weights and the
-    /// resident LLM can't coexist on 6GB devices. Imports never use the
-    /// LLM (drafts come from the system translator), so it reloads lazily
-    /// at the next AI feature.
+    /// Unloaded before every offline decode: the resident summary model is
+    /// pure reclaimable headroom next to the ASR weights (mandatory for
+    /// Qwen3-ASR's ~940MB). The cleanup phase then briefly loads the 230M
+    /// live-refine model; drafts still come from the system translator.
     private let llm: LLMService?
-    /// Vocabulary that primes the Qwen3-ASR decoder.
+    /// Vocabulary that primes the Qwen3-ASR decoder and the polish passes.
     private let hotwords: HotwordStore?
+    /// Settings gate for the LFM2.5 cleanup phase (imports have no
+    /// upstream AI gate, unlike re-transcribe jobs).
+    private let llmCleanupEnabled: Bool
     private let logger = Logger(subsystem: "com.kunzhipeng.loqi", category: "import")
 
     init(
         translator: TranslationCoordinator,
         voiceprint: VoiceprintService,
         llm: LLMService? = nil,
-        hotwords: HotwordStore? = nil
+        hotwords: HotwordStore? = nil,
+        llmCleanupEnabled: Bool = true
     ) {
         self.translator = translator
         self.voiceprint = voiceprint
         self.llm = llm
         self.hotwords = hotwords
+        self.llmCleanupEnabled = llmCleanupEnabled
     }
 
     func importAudio(
@@ -92,7 +98,7 @@ final class FileImportEngine {
             choice: engine,
             senseVoiceInstalled: SenseVoiceModelStore.isInstalled,
             qwen3Installed: Qwen3ASRModelStore.isInstalled)
-        if backend == .qwen3ASR { await llm?.unload() }
+        await llm?.unload()
         let rawUtterances = try await OfflineTranscriber.transcribe(
             audioFile,
             language: direction.source,
@@ -108,19 +114,9 @@ final class FileImportEngine {
         let utterances = rawUtterances.filter { $0.text.hasSpeechContent }
         logger.info("import: \(utterances.count) utterances from \(Int(duration))s file")
 
-        let entries = utterances.map { utterance in
-            SessionRecord.Entry(
-                sourceText: utterance.text,
-                translation: nil,
-                speaker: nil,
-                direction: direction,
-                timestamp: recordedAt.addingTimeInterval(utterance.start),
-                audioOffset: utterance.start)
-        }
-
         return try await finishImport(
             sessionID: sessionID, direction: direction, speakerCount: speakerCount,
-            utterances: utterances, entries: entries, recordingName: recordingName,
+            utterances: utterances, backend: backend, recordingName: recordingName,
             recordedAt: recordedAt, duration: duration, onPhase: onPhase)
     }
 
@@ -145,7 +141,7 @@ final class FileImportEngine {
             choice: checkpoint.engine,
             senseVoiceInstalled: SenseVoiceModelStore.isInstalled,
             qwen3Installed: Qwen3ASRModelStore.isInstalled)
-        if backend == .qwen3ASR { await llm?.unload() }
+        await llm?.unload()
         let rawUtterances = try await OfflineTranscriber.transcribe(
             audioFile,
             language: direction.source,
@@ -161,37 +157,63 @@ final class FileImportEngine {
         logger.info(
             "import: resumed with \(utterances.count) utterances, \(checkpoint.segments.count) cached")
 
-        let entries = utterances.map { utterance in
-            SessionRecord.Entry(
-                sourceText: utterance.text,
-                translation: nil,
-                speaker: nil,
-                direction: direction,
-                timestamp: checkpoint.recordedAt.addingTimeInterval(utterance.start),
-                audioOffset: utterance.start)
-        }
-
         return try await finishImport(
             sessionID: sessionID, direction: direction, speakerCount: checkpoint.speakerCount,
-            utterances: utterances, entries: entries, recordingName: audioFileName,
+            utterances: utterances, backend: backend, recordingName: audioFileName,
             recordedAt: checkpoint.recordedAt, duration: checkpoint.duration, onPhase: onPhase)
     }
 
-    /// Diarization + tier-1 translation, then the final record. Shared by a
-    /// fresh import and a resumed one — by the time this runs the durable
-    /// audio copy already exists at `recordingName` either way.
+    /// Transcript polish + diarization + tier-1 translation, then the final
+    /// record. Shared by a fresh import and a resumed one — by the time
+    /// this runs the durable audio copy already exists at `recordingName`
+    /// either way, and the ASR checkpoints have persisted (an interrupted
+    /// polish simply re-runs on resume).
     private func finishImport(
         sessionID: UUID,
         direction: LanguagePair,
         speakerCount: Int,
         utterances: [OfflineTranscriber.Utterance],
-        entries initialEntries: [SessionRecord.Entry],
+        backend: OfflineTranscriber.Backend,
         recordingName: String,
         recordedAt: Date,
         duration: TimeInterval,
         onPhase: @escaping @MainActor @Sendable (Phase) -> Void
     ) async throws -> SessionRecord {
-        var entries = initialEntries
+        // Polish before the translation drafts so Apple translates the
+        // cleaned text: hotword fixup for every backend, LFM2.5 cleanup
+        // for the non-accuracy-pass ones.
+        let runCleanup = llm != nil && OfflineTranscriptPolisher.shouldRunLLMCleanup(
+            backend: backend,
+            llmEnabled: llmCleanupEnabled,
+            refineModelDownloaded: LLMService.isDownloaded(
+                model: ModelCatalog.liveRefineModel))
+        if runCleanup {
+            onPhase(.cleaningUpTranscript(0))
+            await llm?.setModel(ModelCatalog.liveRefineModel)
+        }
+        let polished = try await OfflineTranscriptPolisher(matcher: hotwords?.matcher).polish(
+            utterances.map(\.text),
+            language: direction.source,
+            runLLMCleanup: runCleanup,
+            generate: { [llm] in
+                guard let llm else { throw LLMServiceError.modelNotLoaded }
+                return try await llm.generate(system: $0, user: $1, maxTokens: $2)
+            },
+            onProgress: { onPhase(.cleaningUpTranscript($0)) })
+        // Imports keep no resident LLM outside the cleanup phase; the
+        // auto-summary afterwards reloads what it needs itself.
+        if runCleanup { await llm?.unload() }
+
+        var entries = utterances.enumerated().map { index, utterance in
+            SessionRecord.Entry(
+                sourceText: polished.texts[index],
+                translation: nil,
+                speaker: nil,
+                direction: direction,
+                timestamp: recordedAt.addingTimeInterval(utterance.start),
+                rawSourceText: polished.originals[index],
+                audioOffset: utterance.start)
+        }
         let recordingURL = SessionArchive.recordingURL(fileName: recordingName)
 
         // The two phases are independent — diarization reads the audio and

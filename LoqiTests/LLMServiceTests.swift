@@ -218,6 +218,8 @@ struct PipelineResourceTests {
         #expect(SummaryJobCenter.usesLLM(.downloadingModel(0)))
         #expect(SummaryJobCenter.usesLLM(.retranscribing(.transcribing(0))))
         #expect(!SummaryJobCenter.usesLLM(.importing(.transcribing(0))))
+        // …except the cleanup phase, which actively generates on the 230M.
+        #expect(SummaryJobCenter.usesLLM(.importing(.cleaningUpTranscript(0))))
         #expect(!SummaryJobCenter.usesLLM(.queuedRetranscribe))
         #expect(!SummaryJobCenter.usesLLM(.pausedForBackground))
     }
