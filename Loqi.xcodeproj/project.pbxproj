@@ -67,6 +67,7 @@
 		35A88FB9079A64D6D0025B8D /* AttachmentViews.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3CAF26D3F419394C178FEF49 /* AttachmentViews.swift */; };
 		36BC0389EDC45E123530EFBD /* OnboardingView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B775D8A99BD5EDFB9C58627E /* OnboardingView.swift */; };
 		38239BD52C5F5F6CE79413E3 /* CaptionSegment.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3A62F1491022EA7B6A2E045E /* CaptionSegment.swift */; };
+		38FFBF9F9C39F5E5DCC1A099 /* OfflineTranscriptPolisher.swift in Sources */ = {isa = PBXBuildFile; fileRef = E009B95A2BA047DB2EB066B2 /* OfflineTranscriptPolisher.swift */; };
 		3A69D9B46D13CE35A0F5F3B0 /* ThermalMonitor.swift in Sources */ = {isa = PBXBuildFile; fileRef = 48FDD16E22D6D77877AAA024 /* ThermalMonitor.swift */; };
 		3C31C8D4B2BB669B982860A5 /* CaptionRow.swift in Sources */ = {isa = PBXBuildFile; fileRef = 84A9869205000B5A7CF4543B /* CaptionRow.swift */; };
 		3C5F47286EF9CD36670F68E4 /* ImportAudioSheet.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5B89049E570D066C1A1FB5BE /* ImportAudioSheet.swift */; };
@@ -110,6 +111,7 @@
 		6B7BEB66321F2B48B7C99F7A /* VADSegmentedTranscriber.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6DE834E0EBC2E0AB6B4C0FAD /* VADSegmentedTranscriber.swift */; };
 		6C512F3330142AE2DFCB5D8C /* SystemSettings.swift in Sources */ = {isa = PBXBuildFile; fileRef = 12F060901CD6DD99F76574D2 /* SystemSettings.swift */; };
 		6CB84A250A84843D61CCAEF4 /* RecordingIntents.swift in Sources */ = {isa = PBXBuildFile; fileRef = 88BBE5AEB632DEC409E18EB2 /* RecordingIntents.swift */; };
+		6EA9423EE8A8BE25F190216D /* OfflineTranscriptPolisherTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 15FCF220B973A1C2827DE2DA /* OfflineTranscriptPolisherTests.swift */; };
 		6F0E3C93DA80CCF9F5469C2D /* TranslationCoordinatorTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 17F62C0DB63AC43560AA296D /* TranslationCoordinatorTests.swift */; };
 		6F553D65482C8E7AA385086D /* ModelScopeDownloaderTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = FB5BEA9FC0F021743D36D187 /* ModelScopeDownloaderTests.swift */; };
 		6F7773E0A935F76488BAD00A /* SubtitleExporter.swift in Sources */ = {isa = PBXBuildFile; fileRef = B3DA0FB40FAE66505E9E047E /* SubtitleExporter.swift */; };
@@ -249,6 +251,7 @@
 		DF55E0EF22DDB742B77F2BB0 /* AttachmentNotes.swift in Sources */ = {isa = PBXBuildFile; fileRef = C1DE3A3884A6A2AAA3C94A44 /* AttachmentNotes.swift */; };
 		DFB0FAA46ACFE8FB9EE91CB7 /* AttachmentNotes.swift in Sources */ = {isa = PBXBuildFile; fileRef = C1DE3A3884A6A2AAA3C94A44 /* AttachmentNotes.swift */; };
 		E0F1CC4330B501B3DA644BB6 /* CaptionGroupingTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2ECEA6861224037B26FE050E /* CaptionGroupingTests.swift */; };
+		E224475CE320455C083B5679 /* OfflineTranscriptPolisher.swift in Sources */ = {isa = PBXBuildFile; fileRef = E009B95A2BA047DB2EB066B2 /* OfflineTranscriptPolisher.swift */; };
 		E26D6CA62DA94F61A7892475 /* OnboardingCatalog.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1E56B09BAF157581EA88D451 /* OnboardingCatalog.swift */; };
 		E309F92A7DA8DA2DE42FC40D /* TranscriptSegmenter.swift in Sources */ = {isa = PBXBuildFile; fileRef = 93D3F70883F657471EF9993C /* TranscriptSegmenter.swift */; };
 		E422AF3F439C76AD1CF9A1CE /* LoqiWidgetsBundle.swift in Sources */ = {isa = PBXBuildFile; fileRef = BDA1CD36A89434A0A5A35A0A /* LoqiWidgetsBundle.swift */; };
@@ -331,6 +334,7 @@
 		0F36E951E6BE5217E61D3C85 /* HotwordStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HotwordStore.swift; sourceTree = "<group>"; };
 		12F060901CD6DD99F76574D2 /* SystemSettings.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SystemSettings.swift; sourceTree = "<group>"; };
 		15EB74813A0CBD39EAC1EE4E /* SenseVoiceEngine.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SenseVoiceEngine.swift; sourceTree = "<group>"; };
+		15FCF220B973A1C2827DE2DA /* OfflineTranscriptPolisherTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OfflineTranscriptPolisherTests.swift; sourceTree = "<group>"; };
 		16C0D804BC71DE546C1CF405 /* sherpa-onnx.xcframework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.xcframework; name = "sherpa-onnx.xcframework"; path = "ThirdParty/sherpa-onnx/sherpa-onnx.xcframework"; sourceTree = "<group>"; };
 		17A5B6282BF76E5ABB60EE85 /* ModelFileDownloaderTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ModelFileDownloaderTests.swift; sourceTree = "<group>"; };
 		17F62C0DB63AC43560AA296D /* TranslationCoordinatorTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TranslationCoordinatorTests.swift; sourceTree = "<group>"; };
@@ -349,7 +353,7 @@
 		2ECEA6861224037B26FE050E /* CaptionGroupingTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CaptionGroupingTests.swift; sourceTree = "<group>"; };
 		2F15D4CC8A9D0C8CB792720C /* SegmentedDownloader.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SegmentedDownloader.swift; sourceTree = "<group>"; };
 		308CF87D0A6DEBCA2563777D /* LoqiApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LoqiApp.swift; sourceTree = "<group>"; };
-		34AC9A7613D511E8150919B5 /* Loqi.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Loqi.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		34AC9A7613D511E8150919B5 /* Loqi.app */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.application; path = Loqi.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		36FB5229822E5E8CB0DC8E9E /* SessionRecordTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SessionRecordTests.swift; sourceTree = "<group>"; };
 		3A62F1491022EA7B6A2E045E /* CaptionSegment.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CaptionSegment.swift; sourceTree = "<group>"; };
 		3B8D918D03E0B5D581637D93 /* SerialGateTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SerialGateTests.swift; sourceTree = "<group>"; };
@@ -407,14 +411,14 @@
 		7D83B9A9F2D6DDFB76A97062 /* RecordingIntentsTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RecordingIntentsTests.swift; sourceTree = "<group>"; };
 		7EA86A8D148594D720AA89C5 /* LLMService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LLMService.swift; sourceTree = "<group>"; };
 		81B61599D345E2280443286E /* HotwordStoreTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HotwordStoreTests.swift; sourceTree = "<group>"; };
-		83151922C2D16166DA013083 /* PrivacyInfo.xcprivacy */ = {isa = PBXFileReference; lastKnownFileType = text.xml; path = PrivacyInfo.xcprivacy; sourceTree = "<group>"; };
+		83151922C2D16166DA013083 /* PrivacyInfo.xcprivacy */ = {isa = PBXFileReference; path = PrivacyInfo.xcprivacy; sourceTree = "<group>"; };
 		84A9869205000B5A7CF4543B /* CaptionRow.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CaptionRow.swift; sourceTree = "<group>"; };
 		88123D19EBC3BED4C88427F0 /* SegmentedDownloaderTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SegmentedDownloaderTests.swift; sourceTree = "<group>"; };
 		88BBE5AEB632DEC409E18EB2 /* RecordingIntents.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RecordingIntents.swift; sourceTree = "<group>"; };
 		8BF01D386057BF389DB6A369 /* SessionSearchTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SessionSearchTests.swift; sourceTree = "<group>"; };
-		8C114D3DDBA6F981F1710E7E /* LoqiMac.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; name = LoqiMac.app; path = Loqi.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		8C114D3DDBA6F981F1710E7E /* LoqiMac.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = LoqiMac.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		8D6508556B6DEA9E8B08D2EF /* CameraCaptureView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CameraCaptureView.swift; sourceTree = "<group>"; };
-		8DCA245933F40873234335B1 /* LoqiWidgets.appex */ = {isa = PBXFileReference; explicitFileType = "wrapper.app-extension"; includeInIndex = 0; path = LoqiWidgets.appex; sourceTree = BUILT_PRODUCTS_DIR; };
+		8DCA245933F40873234335B1 /* LoqiWidgets.appex */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = "wrapper.app-extension"; path = LoqiWidgets.appex; sourceTree = BUILT_PRODUCTS_DIR; };
 		903F44B495B75E8BC20A4689 /* onnxruntime.xcframework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.xcframework; name = onnxruntime.xcframework; path = "ThirdParty/sherpa-onnx/onnxruntime.xcframework"; sourceTree = "<group>"; };
 		90994BD0FF81B6ACFC75C0B7 /* SessionSearch.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SessionSearch.swift; sourceTree = "<group>"; };
 		92289645D254D9B0D95AB3A2 /* CaptionEntry.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CaptionEntry.swift; sourceTree = "<group>"; };
@@ -461,6 +465,7 @@
 		DE5639C60818D4F8F6684DF3 /* VoiceprintService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VoiceprintService.swift; sourceTree = "<group>"; };
 		DF32F3690C32A89F59644816 /* OnboardingDownloadModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OnboardingDownloadModel.swift; sourceTree = "<group>"; };
 		DFDC30D345CC2E8B655F6F15 /* Qwen3ASRHotwordFormatTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Qwen3ASRHotwordFormatTests.swift; sourceTree = "<group>"; };
+		E009B95A2BA047DB2EB066B2 /* OfflineTranscriptPolisher.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OfflineTranscriptPolisher.swift; sourceTree = "<group>"; };
 		E109F7A7FCC2E09C756F04DC /* ImportEngineTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ImportEngineTests.swift; sourceTree = "<group>"; };
 		E4A5EBE017891987F4BA923D /* TranslationCoordinator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TranslationCoordinator.swift; sourceTree = "<group>"; };
 		E4DDAA896FC59D045AC14697 /* TranscriptionEngine.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TranscriptionEngine.swift; sourceTree = "<group>"; };
@@ -669,6 +674,7 @@
 			children = (
 				3CFBA5EC1674530CD930510D /* FileImportEngine.swift */,
 				40403C67E9DF5E3ABE6065FB /* OfflineTranscriber.swift */,
+				E009B95A2BA047DB2EB066B2 /* OfflineTranscriptPolisher.swift */,
 			);
 			path = Import;
 			sourceTree = "<group>";
@@ -830,6 +836,7 @@
 				B751EAA2E58353A71DA228C0 /* ModelCatalogTests.swift */,
 				17A5B6282BF76E5ABB60EE85 /* ModelFileDownloaderTests.swift */,
 				FB5BEA9FC0F021743D36D187 /* ModelScopeDownloaderTests.swift */,
+				15FCF220B973A1C2827DE2DA /* OfflineTranscriptPolisherTests.swift */,
 				2EBC0F258E149295E1DEF1DE /* OnboardingCatalogTests.swift */,
 				616CC06390818CE3942253FE /* ProcessingETATests.swift */,
 				0ACEA296BA140B6EF1EBC0C8 /* PromptBuilderTests.swift */,
@@ -1052,7 +1059,6 @@
 				E9C36079467A409333904AF2 /* XCRemoteSwiftPackageReference "swift-huggingface" */,
 				4C58B5B0631047FDC82CC11D /* XCRemoteSwiftPackageReference "mlx-swift-lm" */,
 				F3ECCE7CDC6FD4608DC17374 /* XCRemoteSwiftPackageReference "swift-transformers" */,
-				B71C0FF5EEA7DECADE000001 /* XCRemoteSwiftPackageReference "mlx-swift" */,
 			);
 			preferredProjectObjectVersion = 77;
 			productRefGroup = BE398FD914C1588F983EA2A7 /* Products */;
@@ -1123,6 +1129,7 @@
 				E4E396E7F38BDAE70D65742C /* ModelCatalogTests.swift in Sources */,
 				50AA78939C3DDF6CF72B1C23 /* ModelFileDownloaderTests.swift in Sources */,
 				6F553D65482C8E7AA385086D /* ModelScopeDownloaderTests.swift in Sources */,
+				6EA9423EE8A8BE25F190216D /* OfflineTranscriptPolisherTests.swift in Sources */,
 				6FCAF3CC72EBCC888CD25AAB /* OnboardingCatalogTests.swift in Sources */,
 				188B9743F5A77EA9DAD45C09 /* ProcessingETATests.swift in Sources */,
 				8B579DB1086216977E97EEFC /* PromptBuilderTests.swift in Sources */,
@@ -1195,6 +1202,7 @@
 				9021E130EE40022E18F1651B /* ModelFileDownloader.swift in Sources */,
 				DB207EB276C12DAE078254B1 /* ModelScopeDownloader.swift in Sources */,
 				76B18677054A117FF638FE38 /* OfflineTranscriber.swift in Sources */,
+				38FFBF9F9C39F5E5DCC1A099 /* OfflineTranscriptPolisher.swift in Sources */,
 				E26D6CA62DA94F61A7892475 /* OnboardingCatalog.swift in Sources */,
 				D76DBE77D6004AAB6317B2C3 /* OnboardingDownloadModel.swift in Sources */,
 				F381390B690161062975D189 /* OnboardingDownloadStep.swift in Sources */,
@@ -1313,6 +1321,7 @@
 				EEDF1933BFA8488C532F58EB /* ModelFileDownloader.swift in Sources */,
 				FF95D81A93DE863AE732BF4D /* ModelScopeDownloader.swift in Sources */,
 				87DFDEF6C2C92074C2D460CC /* OfflineTranscriber.swift in Sources */,
+				E224475CE320455C083B5679 /* OfflineTranscriptPolisher.swift in Sources */,
 				FA4CD89C53629861D433327D /* OnboardingCatalog.swift in Sources */,
 				0F90EB48FEF1903720AC2830 /* OnboardingDownloadModel.swift in Sources */,
 				92FA9FADB522CAB68350A60C /* OnboardingDownloadStep.swift in Sources */,
@@ -1487,7 +1496,6 @@
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				CODE_SIGN_ENTITLEMENTS = LoqiWidgets/LoqiWidgets.entitlements;
-				DEVELOPMENT_TEAM = K2WK8HQC4L;
 				INFOPLIST_FILE = LoqiWidgets/Info.plist;
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
@@ -1497,7 +1505,10 @@
 				PRODUCT_BUNDLE_IDENTIFIER = com.kunzhipeng.loqi.LoqiWidgets;
 				SDKROOT = iphoneos;
 				SKIP_INSTALL = YES;
-				SWIFT_ACTIVE_COMPILATION_CONDITIONS = "$(inherited) LOQI_WIDGET";
+				SWIFT_ACTIVE_COMPILATION_CONDITIONS = (
+					"$(inherited)",
+					LOQI_WIDGET,
+				);
 				TARGETED_DEVICE_FAMILY = "1,2";
 			};
 			name = Debug;
@@ -1507,7 +1518,9 @@
 			buildSettings = {
 				BUNDLE_LOADER = "$(TEST_HOST)";
 				GENERATE_INFOPLIST_FILE = YES;
-				HEADER_SEARCH_PATHS = "$(SRCROOT)/ThirdParty/sherpa-onnx/sherpa-onnx.xcframework/Headers";
+				HEADER_SEARCH_PATHS = (
+					"$(SRCROOT)/ThirdParty/sherpa-onnx/sherpa-onnx.xcframework/Headers",
+				);
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/Frameworks",
@@ -1525,7 +1538,9 @@
 			buildSettings = {
 				BUNDLE_LOADER = "$(TEST_HOST)";
 				GENERATE_INFOPLIST_FILE = YES;
-				HEADER_SEARCH_PATHS = "$(SRCROOT)/ThirdParty/sherpa-onnx/sherpa-onnx.xcframework/Headers";
+				HEADER_SEARCH_PATHS = (
+					"$(SRCROOT)/ThirdParty/sherpa-onnx/sherpa-onnx.xcframework/Headers",
+				);
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/Frameworks",
@@ -1629,18 +1644,21 @@
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
 				CODE_SIGN_ENTITLEMENTS = Loqi/Loqi.entitlements;
 				CODE_SIGN_IDENTITY = "iPhone Developer";
-				DEVELOPMENT_TEAM = K2WK8HQC4L;
 				FRAMEWORK_SEARCH_PATHS = (
 					"$(inherited)",
 					"\"ThirdParty/sherpa-onnx\"",
 				);
-				HEADER_SEARCH_PATHS = "$(SRCROOT)/ThirdParty/sherpa-onnx/sherpa-onnx.xcframework/Headers";
+				HEADER_SEARCH_PATHS = (
+					"$(SRCROOT)/ThirdParty/sherpa-onnx/sherpa-onnx.xcframework/Headers",
+				);
 				INFOPLIST_FILE = Loqi/Info.plist;
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/Frameworks",
 				);
-				OTHER_LDFLAGS = "-lc++";
+				OTHER_LDFLAGS = (
+					"-lc++",
+				);
 				PRODUCT_BUNDLE_IDENTIFIER = com.kunzhipeng.loqi;
 				SDKROOT = iphoneos;
 				SWIFT_OBJC_BRIDGING_HEADER = "Loqi/Pipeline/ASR/SherpaOnnx/SherpaOnnx-Bridging-Header.h";
@@ -1655,18 +1673,21 @@
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
 				CODE_SIGN_ENTITLEMENTS = Loqi/Loqi.entitlements;
 				CODE_SIGN_IDENTITY = "iPhone Developer";
-				DEVELOPMENT_TEAM = K2WK8HQC4L;
 				FRAMEWORK_SEARCH_PATHS = (
 					"$(inherited)",
 					"\"ThirdParty/sherpa-onnx\"",
 				);
-				HEADER_SEARCH_PATHS = "$(SRCROOT)/ThirdParty/sherpa-onnx/sherpa-onnx.xcframework/Headers";
+				HEADER_SEARCH_PATHS = (
+					"$(SRCROOT)/ThirdParty/sherpa-onnx/sherpa-onnx.xcframework/Headers",
+				);
 				INFOPLIST_FILE = Loqi/Info.plist;
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/Frameworks",
 				);
-				OTHER_LDFLAGS = "-lc++";
+				OTHER_LDFLAGS = (
+					"-lc++",
+				);
 				PRODUCT_BUNDLE_IDENTIFIER = com.kunzhipeng.loqi;
 				SDKROOT = iphoneos;
 				SWIFT_OBJC_BRIDGING_HEADER = "Loqi/Pipeline/ASR/SherpaOnnx/SherpaOnnx-Bridging-Header.h";
@@ -1715,7 +1736,6 @@
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				CODE_SIGN_ENTITLEMENTS = LoqiWidgets/LoqiWidgets.entitlements;
-				DEVELOPMENT_TEAM = K2WK8HQC4L;
 				INFOPLIST_FILE = LoqiWidgets/Info.plist;
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
@@ -1725,7 +1745,10 @@
 				PRODUCT_BUNDLE_IDENTIFIER = com.kunzhipeng.loqi.LoqiWidgets;
 				SDKROOT = iphoneos;
 				SKIP_INSTALL = YES;
-				SWIFT_ACTIVE_COMPILATION_CONDITIONS = "$(inherited) LOQI_WIDGET";
+				SWIFT_ACTIVE_COMPILATION_CONDITIONS = (
+					"$(inherited)",
+					LOQI_WIDGET,
+				);
 				TARGETED_DEVICE_FAMILY = "1,2";
 			};
 			name = Release;
@@ -1796,14 +1819,6 @@
 			requirement = {
 				kind = exactVersion;
 				version = 3.31.3;
-			};
-		};
-		B71C0FF5EEA7DECADE000001 /* XCRemoteSwiftPackageReference "mlx-swift" */ = {
-			isa = XCRemoteSwiftPackageReference;
-			repositoryURL = "https://github.com/DakePeng/mlx-swift";
-			requirement = {
-				branch = "loqi/0.31.4-poison-events";
-				kind = branch;
 			};
 		};
 		E74AA41DD45B411B56E3D345 /* XCRemoteSwiftPackageReference "FluidAudio" */ = {
