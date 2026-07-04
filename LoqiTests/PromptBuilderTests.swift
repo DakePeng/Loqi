@@ -113,6 +113,88 @@ struct PromptBuilderTests {
         #expect(prompt.contains("Glossary"))
     }
 
+    // MARK: Live sentence refinement (monolingual)
+
+    @Test func sentenceRefineSystemPromptDemandsSentenceOnly() {
+        let prompt = builder.sentenceRefineSystemPrompt(language: .chinese)
+        #expect(prompt.contains("Chinese"))
+        #expect(prompt.contains("Output ONLY"))
+        #expect(prompt.contains("Never translate"))
+    }
+
+    @Test func sentenceRefineUserPromptCarriesSentenceContextAndGlossary() {
+        let prompt = builder.sentenceRefineUserPrompt(
+            sentence: "我们和志朋开会",
+            language: .chinese,
+            context: ["先说说项目进度", "志鹏负责测试"],
+            glossary: ["志鹏 (person name)"])
+        #expect(prompt.contains("我们和志朋开会"))
+        #expect(prompt.contains("- 志鹏负责测试"))
+        #expect(prompt.contains("Earlier lines"))
+        #expect(prompt.contains("Vocabulary"))
+        #expect(prompt.contains("志鹏 (person name)"))
+
+        let bare = builder.sentenceRefineUserPrompt(
+            sentence: "你好", language: .chinese, context: [])
+        #expect(!bare.contains("Earlier lines"))
+        #expect(!bare.contains("Vocabulary"))
+    }
+
+    @Test func sentenceRefineContextCapsAtLimit() {
+        let context = (0..<10).map { "句子\($0)" }
+        let prompt = builder.sentenceRefineUserPrompt(
+            sentence: "你好", language: .chinese, context: context)
+        // refineContextLimit = 3: only the newest three ride along.
+        #expect(!prompt.contains("句子6"))
+        #expect(prompt.contains("句子7"))
+        #expect(prompt.contains("句子9"))
+    }
+
+    @Test func sentenceRefineContextTrimsToBudgetGlossarySurvives() {
+        let bigLine = String(repeating: "很长的句子", count: 200)
+        let prompt = builder.sentenceRefineUserPrompt(
+            sentence: "tell Zhipeng",
+            language: .english,
+            context: Array(repeating: bigLine, count: 3),
+            glossary: ["Zhipeng (person name)"])
+        #expect(prompt.count <= builder.maxPromptCharacters)
+        #expect(prompt.contains("tell Zhipeng"))
+        #expect(prompt.contains("Zhipeng (person name)"))
+    }
+
+    @Test func acceptableSentenceRefinementAcceptsSmallFixes() {
+        #expect(builder.isAcceptableSentenceRefinement(
+            "我们和志鹏开会", original: "我们和志朋开会"))
+        // Unchanged output is acceptable too (means "no errors found").
+        #expect(builder.isAcceptableSentenceRefinement(
+            "我们明天开会", original: "我们明天开会"))
+    }
+
+    @Test func acceptableSentenceRefinementRejectsRewritesEmptyAndRunaway() {
+        #expect(!builder.isAcceptableSentenceRefinement("", original: "我们明天开会"))
+        // A different sentence is a false record, not a fix.
+        #expect(!builder.isAcceptableSentenceRefinement(
+            "今天天气很好啊", original: "我们明天开会"))
+        // Length blowout (explanation glued on).
+        #expect(!builder.isAcceptableSentenceRefinement(
+            "我们明天开会" + String(repeating: "，这是因为", count: 10),
+            original: "我们明天开会"))
+        // Degenerate repetition loop.
+        #expect(!builder.isAcceptableSentenceRefinement(
+            String(repeating: "好的", count: 8), original: "好的好的，明白了你的意思"))
+    }
+
+    @Test func acceptableSentenceRefinementRejectsReplacementCharacters() {
+        #expect(!builder.isAcceptableSentenceRefinement(
+            "我们和志\u{FFFD}开会", original: "我们和志朋开会"))
+    }
+
+    @Test func parseRefinedSentenceToleratesTagAndUntagged() {
+        #expect(builder.parseRefinedSentence("S: 我们和志鹏开会") == "我们和志鹏开会")
+        #expect(builder.parseRefinedSentence("我们和志鹏开会") == "我们和志鹏开会")
+        #expect(builder.parseRefinedSentence("") == nil)
+    }
+
     // MARK: Decoration-tolerant tag parsing (format robustness)
 
     @Test func stripLineDecorationsRemovesKnownMarkersOnly() {

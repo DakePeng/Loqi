@@ -161,6 +161,69 @@ struct PromptBuilder: Sendable {
         String(text.lowercased().filter { $0.isLetter || $0.isNumber })
     }
 
+    // MARK: Live sentence refinement (monolingual)
+
+    /// How many recent source sentences ride along as context.
+    var refineContextLimit = 3
+
+    /// Live transcript cleanup: the LLM fixes recognition errors in the
+    /// source sentence; Apple's Translation framework re-translates the
+    /// result. Monolingual by design — a task even the 230M tier can do,
+    /// unlike translation refinement or structured output.
+    func sentenceRefineSystemPrompt(language: AppLanguage) -> String {
+        """
+        You correct speech-recognition errors in a live \(language.promptName) \
+        transcript. Fix only clear recognition mistakes in the sentence: misheard \
+        words, homophone errors, garbled fragments, and missing or wrong \
+        punctuation. Use the earlier lines and the vocabulary list to resolve \
+        names and terms. Never translate, never rephrase wording that is already \
+        correct, never add or remove information. If the sentence has no errors, \
+        output it unchanged. Output ONLY the corrected \(language.promptName) \
+        sentence, nothing else — no labels, no quotes, no explanation.
+        """
+    }
+
+    func sentenceRefineUserPrompt(
+        sentence: String,
+        language: AppLanguage,
+        context: [String],
+        glossary: [String] = []
+    ) -> String {
+        // Glossary outranks context: it never gets trimmed.
+        let glossaryBlock = glossary.isEmpty
+            ? ""
+            : "Vocabulary — the sentence may contain mis-transcriptions of these "
+                + "terms; use these exact spellings:\n"
+                + glossary.joined(separator: "\n") + "\n\n"
+        var contextLines = context.suffix(refineContextLimit).map { "- \($0)" }
+        let request = "Sentence (\(language.promptName)): \(sentence)"
+        func assembled() -> String {
+            let contextBlock = contextLines.isEmpty
+                ? ""
+                : "Earlier lines, for context only:\n"
+                    + contextLines.joined(separator: "\n") + "\n\n"
+            return glossaryBlock + contextBlock + request
+        }
+        while assembled().count > maxPromptCharacters, !contextLines.isEmpty {
+            contextLines.removeFirst()
+        }
+        return assembled()
+    }
+
+    /// Parse the cleaned sentence — same tolerance as the hotword restore
+    /// ("S:" tagged or whole output).
+    func parseRefinedSentence(_ raw: String) -> String? {
+        parseRestoredSentence(raw)
+    }
+
+    /// Fidelity gate: the hotword-restore checks (length ratio, similarity,
+    /// repetition) plus the broken-decode check the old translation gate
+    /// had. A rewrite is a false record — worse than a misheard true one.
+    func isAcceptableSentenceRefinement(_ cleaned: String, original: String) -> Bool {
+        guard cleaned.unicodeScalars.allSatisfy({ $0 != "\u{FFFD}" }) else { return false }
+        return isAcceptableHotwordRestore(cleaned, original: original)
+    }
+
     func userPrompt(
         source: String,
         draft: String,
