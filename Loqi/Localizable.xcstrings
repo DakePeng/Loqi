@@ -1936,6 +1936,22 @@
         }
       }
     },
+    "Experimental: Liquid LFM2.5 live-refine model" : {
+      "localizations" : {
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "実験的機能：ライブ精緻化にLiquid LFM2.5モデルを使用"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "实验性：实时精炼使用 Liquid LFM2.5 模型"
+          }
+        }
+      }
+    },
     "Export (%lld)" : {
       "extractionState" : "stale",
       "localizations" : {
@@ -2586,6 +2602,22 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "录制时始终使用快速的 Qwen3.5 0.8B 模型，让字幕和实时翻译保持流畅、低发热。录制结束后，总结、标题、生词和聊天会使用你在上方选择的总结模型。"
+          }
+        }
+      }
+    },
+    "Live recording uses the fast Qwen3.5 0.8B model by default — or the experimental Liquid LFM2.5 above — so captions and live translation stay responsive and cool. Live photo description needs the 0.8B model, so photos attached while LFM2.5 is active keep their OCR text until the recording ends. After a recording, summaries, titles, vocabulary and chat use the summary model you pick above." : {
+      "localizations" : {
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "録音中はデフォルトで高速なQwen3.5 0.8Bモデル(または上の実験的なLiquid LFM2.5)を使用し、字幕とリアルタイム翻訳を快適かつ低発熱に保ちます。ライブ写真の説明には0.8Bモデルが必要なため、LFM2.5が有効な間に追加された写真は、録音が終わるまでOCRテキストのままになります。録音後は、要約・タイトル・単語・チャットに上で選んだ要約モデルを使用します。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "录制时默认使用快速的 Qwen3.5 0.8B 模型（或上方的实验性 Liquid LFM2.5 模型），让字幕和实时翻译保持流畅、低发热。实时图片描述需要 0.8B 模型，因此在 LFM2.5 生效期间添加的照片会保留其文字识别结果，直到录制结束。录制结束后，总结、标题、生词和聊天会使用你在上方选择的总结模型。"
           }
         }
       }
