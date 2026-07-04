@@ -269,13 +269,23 @@ final class SummaryJobCenter {
         }
     }
 
-    /// A job is actively working right now (not queued or held). While one
+    /// A job that is actively USING (or about to use) the LLM. While one
     /// runs in the foreground, a memory warning sheds the MLX cache instead
     /// of unloading the weights — a full unload mid-job just forces an
     /// immediate self-heal reload, which costs more memory churn (and GPU
-    /// time) than it frees. Same case set as the background suspend.
+    /// time) than it frees. Imports are deliberately excluded: their decode
+    /// pipeline is ASR/translation only (the auto-summary afterwards is its
+    /// own job), so under memory pressure the resident weights are pure
+    /// reclaimable headroom there.
     var hasRunningLLMJob: Bool {
-        activities.values.contains(where: Self.shouldSuspendForBackground)
+        activities.values.contains(where: Self.usesLLM)
+    }
+
+    nonisolated static func usesLLM(_ activity: Activity) -> Bool {
+        switch activity {
+        case .downloadingModel, .summarizing, .retranscribing: true
+        default: false
+        }
     }
 
     nonisolated static func shouldResumeLLMJobsAfterRecording(isBackgrounded: Bool) -> Bool {
@@ -842,7 +852,10 @@ final class SummaryJobCenter {
     /// after `resumeUnfinishedImports` (an importing placeholder re-arms
     /// its auto-summary through the import resume itself).
     func resumeUnfinishedSummaries() {
-        guard !isRecording() else { return }
+        // Backgrounded covers the background-launch case too: iOS can
+        // relaunch the app in the background (background URLSession
+        // events), where the startup sweep must not start LLM work.
+        guard !isRecording(), !isBackgrounded else { return }
         for session in archive.sessions
         where session.pendingSummary != nil && session.importing != true
             && !isBusy(session.id) {
@@ -912,14 +925,23 @@ final class SummaryJobCenter {
                 // automatically once transcription lands.
                 self.autoSummarizeAfterImport(sessionID: sessionID)
             } catch is CancellationError {
-                if self.activities[sessionID] == .pausedForRecording
-                    || self.activities[sessionID] == .pausedForBackground {
+                let held = self.activities[sessionID] == .pausedForRecording
+                    || self.activities[sessionID] == .pausedForBackground
+                let checkpointed = self.archive.sessions
+                    .first(where: { $0.id == sessionID })?.importCheckpoint != nil
+                if held, checkpointed {
                     // Preempted by a recording or the scene backgrounding —
-                    // checkpoint (if any) stays; resumeAfterRecording()/
+                    // the checkpoint stays; resumeAfterRecording()/
                     // resumeBackgroundJobs() re-enqueues it.
                 } else {
+                    // User cancel, or a preempt BEFORE the durable audio +
+                    // checkpoint landed (e.g. still extracting a video's
+                    // audio) — nothing can resume this placeholder, and a
+                    // held one would sit "importing" with no job until a
+                    // relaunch sweep. Delete it, clearing the held badge.
                     self.hotwords.discardSuggestions(forSession: sessionID)
                     self.archive.delete(id: sessionID)
+                    self.activities[sessionID] = nil
                 }
             } catch {
                 self.errors[sessionID] = error.localizedDescription

@@ -208,6 +208,18 @@ struct PipelineResourceTests {
         #expect(SummaryJobCenter.shouldResumeLLMJobsAfterRecording(isBackgrounded: false))
     }
 
+    /// Memory warnings full-unload the LLM during import-only jobs (their
+    /// pipeline is ASR/translation; the auto-summary afterwards is its own
+    /// job) but only shed the cache while a job actually uses the model.
+    @Test func memoryWarningUnloadsLLMDuringImportOnlyJobs() {
+        #expect(SummaryJobCenter.usesLLM(.summarizing(done: 0, total: 1)))
+        #expect(SummaryJobCenter.usesLLM(.downloadingModel(0)))
+        #expect(SummaryJobCenter.usesLLM(.retranscribing(.transcribing(0))))
+        #expect(!SummaryJobCenter.usesLLM(.importing(.transcribing(0))))
+        #expect(!SummaryJobCenter.usesLLM(.queuedRetranscribe))
+        #expect(!SummaryJobCenter.usesLLM(.pausedForBackground))
+    }
+
     /// A background GPU abort must map to the suspend path even when the
     /// scene flag hasn't flipped yet (scenePhase delivery lag) — matched
     /// by error content. Anything else stays a real error.

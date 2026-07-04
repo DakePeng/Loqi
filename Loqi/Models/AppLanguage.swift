@@ -60,6 +60,14 @@ enum AppLanguage: String, CaseIterable, Identifiable, Codable, Sendable {
         if let language = AppUILanguage.current.readerLanguage {
             return language
         }
+        return speechPreferred
+    }
+
+    /// The device's spoken-language guess (system language list), WITHOUT
+    /// the app-UI override: Auto ASR must follow what the user likely
+    /// SPEAKS, not what they read Loqi in — a zh UI plus English speech
+    /// in Auto mode must not build a zh recognizer.
+    static var speechPreferred: AppLanguage? {
         for identifier in Locale.preferredLanguages {
             let code = Locale(identifier: identifier).language.languageCode?.identifier
             switch code {
@@ -156,9 +164,11 @@ enum RecognitionLanguageSelection: Hashable, Codable, Sendable {
 
     /// Fallback for APIs that still need a concrete locale before speech
     /// arrives, including the current Apple SpeechAnalyzer wrapper.
+    /// Deliberately `speechPreferred`, not `devicePreferred`: the reader-
+    /// language override must never steer which recognizer Auto builds.
     var fallbackLanguage: AppLanguage {
         switch self {
-        case .auto: AppLanguage.devicePreferred ?? .english
+        case .auto: AppLanguage.speechPreferred ?? .english
         case .language(let language): language
         }
     }

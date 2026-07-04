@@ -235,6 +235,12 @@ final class FileImportEngine {
                     entries[index].speaker = slots[index]
                 }
                 logger.info("import: \(Set(segments.map(\.slot)).count) speakers across \(segments.count) segments")
+            } catch is CancellationError {
+                // A background/yield preempt mid-diarization must stop the
+                // whole import (checkpointed, resumed on foreground) — not
+                // be swallowed as "labels failed" and keep Metal-backed
+                // work running past the scene exit.
+                throw CancellationError()
             } catch {
                 // Speaker labels are an enhancement: a failed model download
                 // or analysis must not cost the transcript. But surface it —

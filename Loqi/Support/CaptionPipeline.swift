@@ -289,6 +289,20 @@ final class CaptionPipeline {
             self?.isRunning ?? false
         }
 
+        #if os(iOS)
+        // iOS can relaunch the app IN THE BACKGROUND (e.g. to deliver
+        // background URLSession download events). scenePhase hasn't fired
+        // yet at init, so seed the scene state from UIApplication before
+        // the startup sweep below can start Metal work in a context that
+        // forbids it. The first real scenePhase change takes over via
+        // handleForeground()/handleBackground().
+        if UIApplication.shared.applicationState == .background {
+            isBackgrounded = true
+            jobs.setBackgrounded(true)
+            forwardLLMSceneState(backgrounded: true)
+        }
+        #endif
+
         // Load history before recovery/sweep. Sweeping an empty, unloaded
         // archive would delete every recording; recovery also dedupes
         // against loaded sessions.
@@ -297,6 +311,8 @@ final class CaptionPipeline {
             await self.archive.loadIfNeeded()
             self.recoverInterruptedSession()
             self.archive.sweepOrphans()
+            // Both sweeps no-op while backgrounded; the foreground
+            // transition re-runs them via resumeBackgroundJobs().
             self.jobs.resumeUnfinishedImports()
             self.jobs.resumeUnfinishedSummaries()
         }
