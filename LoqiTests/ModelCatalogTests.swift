@@ -87,6 +87,20 @@ struct ModelCatalogTests {
             < ModelCatalog.liveModel.requiredHeadroom)
     }
 
+    /// A model whose headroom sits below the memory-shed floor can be
+    /// admitted into the shed zone: it loads at ~350 MB free, the next
+    /// critical-pressure event unloads it, the next silence gap reloads
+    /// it — the exact thrash loop the pressure handler exists to prevent.
+    @Test @MainActor func everyTierClearsTheMemoryShedFloor() {
+        let tiers = [
+            ModelCatalog.qwen35_2b, ModelCatalog.qwen35_0_8b,
+            ModelCatalog.bonsai8b, ModelCatalog.lfm2_5_230m,
+        ]
+        for tier in tiers {
+            #expect(tier.requiredHeadroom > CaptionPipeline.memoryShedFloor)
+        }
+    }
+
     @Test func liveTiersNeverAppearInSummaryLineup() {
         let suite = "ModelCatalogTests.\(UUID().uuidString)"
         let defaults = UserDefaults(suiteName: suite)!

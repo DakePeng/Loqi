@@ -671,6 +671,22 @@
         }
       }
     },
+    "Bonsai 8B (ternary 2-bit)" : {
+      "localizations" : {
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Bonsai 8B（3値2ビット）"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Bonsai 8B（三值 2-bit）"
+          }
+        }
+      }
+    },
     "Bonsai 8B (ternary 2-bit) — experimental" : {
       "localizations" : {
         "ja" : {

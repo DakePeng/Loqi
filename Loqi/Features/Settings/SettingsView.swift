@@ -378,7 +378,7 @@ struct SettingsView: View {
         case ModelCatalog.qwen35_2b.id:
             localized("Qwen3.5 2B — recommended")
         case ModelCatalog.bonsai8b.id:
-            localized("Bonsai 8B (ternary 2-bit) — experimental")
+            localized("Bonsai 8B (ternary 2-bit)")
         default:
             option.displayName
         }

@@ -341,8 +341,10 @@ final class CaptionPipeline {
 
     /// Per-app free-memory floor under which a critical system-pressure
     /// event triggers model shedding. Above it, global pressure is someone
-    /// else's problem and our models keep working.
-    private static let memoryShedFloor: UInt64 = 400_000_000
+    /// else's problem and our models keep working. Internal (not private)
+    /// so ModelCatalogTests can assert every tier's requiredHeadroom stays
+    /// ABOVE this floor — a model admitted below it shed-thrashes.
+    static let memoryShedFloor: UInt64 = 400_000_000
 
     // MARK: Crash recovery
 

@@ -105,7 +105,7 @@ enum ModelCatalog {
     /// option since 2026-07 — validated on device.
     static let bonsai8b = ModelOption(
         id: "prism-ml/Ternary-Bonsai-8B-mlx-2bit",
-        displayName: "Bonsai 8B (ternary 2-bit) — experimental",
+        displayName: "Bonsai 8B (ternary 2-bit)",
         requiredHeadroom: 3_000_000_000,   // ~2.3 GB weights + cache; tune on device
         downloadBytes: 2_300_000_000,
         supportsVision: false)
@@ -130,7 +130,12 @@ enum ModelCatalog {
     static let lfm2_5_230m = ModelOption(
         id: "LiquidAI/LFM2.5-230M-MLX-4bit",
         displayName: "Liquid LFM2.5 230M — experimental",
-        requiredHeadroom: 300_000_000,   // ~151 MB weights; tune on device
+        // ~151 MB weights would fit in far less, but the headroom must stay
+        // ABOVE CaptionPipeline.memoryShedFloor (400 MB): a load admitted
+        // below the floor re-enables the shed-thrash loop the pressure
+        // handler exists to prevent (admit at ~350 MB free → critical event
+        // sheds → silence-gap reload → repeat).
+        requiredHeadroom: 500_000_000,
         downloadBytes: 151_000_000,
         supportsVision: false)
 
