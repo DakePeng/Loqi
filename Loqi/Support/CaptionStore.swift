@@ -156,6 +156,18 @@ final class CaptionStore {
         entries[index].state = .refined
     }
 
+    /// Live LLM transcript cleanup landed: swap in the cleaned sentence and
+    /// keep the raw ASR text recoverable — same storage pattern as the
+    /// post-hoc hotword restore (SummaryEngine.hygienePass), which also
+    /// makes that pass skip entries cleaned here.
+    func applyCleanedSource(_ cleaned: String, for id: UUID) {
+        guard let index = index(of: id), entries[index].state != .volatile else { return }
+        if entries[index].rawSourceText == nil {
+            entries[index].rawSourceText = entries[index].sourceText
+        }
+        entries[index].sourceText = cleaned
+    }
+
     // MARK: Refinement context
 
     /// Recent completed turns, oldest first, for the LLM prompt.
@@ -163,6 +175,22 @@ final class CaptionStore {
         entries
             .filter { $0.state != .volatile && $0.displayTranslation != nil }
             .suffix(limit)
+    }
+
+    /// Recent finalized source sentences in `language`, oldest first,
+    /// excluding the entry being refined — monolingual context for sentence
+    /// refinement. Unlike `recentHistory` it needs no translations, so it
+    /// works in transcribe-only sessions too.
+    func recentSourceTexts(
+        limit: Int, language: AppLanguage, excluding id: UUID
+    ) -> [String] {
+        entries
+            .filter {
+                $0.state != .volatile && $0.id != id
+                    && $0.direction.source == language
+            }
+            .suffix(limit)
+            .map(\.sourceText)
     }
 
     func entry(for id: UUID) -> CaptionEntry? {
