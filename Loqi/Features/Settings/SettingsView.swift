@@ -243,7 +243,7 @@ struct SettingsView: View {
                 } header: {
                     Text("On-device AI")
                 } footer: {
-                    Text("Live recording uses the fast Qwen3.5 0.8B model by default — or the experimental Liquid LFM2.5 above — so captions and live translation stay responsive and cool. Live photo description needs the 0.8B model, so photos attached while LFM2.5 is active keep their OCR text until the recording ends. After a recording, summaries, titles, vocabulary and chat use the summary model you pick above.")
+                    Text("During a recording, the on-device AI model cleans up the live transcript — fixing misheard words, names, and punctuation — while Apple's system translation produces the translation itself. The default live model is Qwen3.5 0.8B; the experimental Liquid LFM2.5 above replaces it when enabled, in which case live notes and photo descriptions wait until the recording ends. After a recording, summaries, titles, vocabulary and chat use the summary model you pick above.")
                 }
 
                 Section {
