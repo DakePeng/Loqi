@@ -6,6 +6,7 @@ struct SettingsView: View {
     @AppStorage(AppUILanguage.defaultsKey) private var appLanguageRaw = AppUILanguage.system.rawValue
     @AppStorage("model.id") private var modelID: String = ModelCatalog.default.id
     @AppStorage("model.bonsaiEnabled") private var bonsaiEnabled = false
+    @AppStorage("model.liveRefineLFM2Enabled") private var liveRefineLFM2Enabled = false
     @AppStorage("model.source") private var sourceRaw: String = ModelSource.huggingFace.rawValue
     @AppStorage("llm.enabled") private var llmEnabled = true
     @AppStorage(DiarizerSource.defaultsKey) private var diarizerSourceRaw = DiarizerSource.huggingFace.rawValue
@@ -156,24 +157,40 @@ struct SettingsView: View {
                         }
 
                     Group {
-                        // Live tier — fixed 0.8B, runs during recording.
-                        LabeledContent("Live model", value: "Qwen3.5 0.8B")
+                        // Live tier — runs during recording. Fixed 0.8B
+                        // unless the experimental toggle below is on.
+                        LabeledContent(
+                            "Live model",
+                            value: liveRefineLFM2Enabled
+                                ? "Liquid LFM2.5 230M" : "Qwen3.5 0.8B")
                         LabeledContent(
                             "Live model files",
                             value: liveDownloaded
                                 ? localized("Downloaded")
                                 : localized("Not downloaded"))
                         if !liveDownloaded {
-                            if downloadingModelID == ModelCatalog.liveModel.id {
+                            if downloadingModelID == ModelCatalog.liveRefineModel().id {
                                 DownloadProgressRow(
                                     speedometer: llmSpeedometer, onStop: stopDownload)
                             } else {
                                 Button("Download live model") {
-                                    startDownload(ModelCatalog.liveModel)
+                                    startDownload(ModelCatalog.liveRefineModel())
                                 }
                                 .disabled(downloadingModelID != nil)
                             }
                         }
+
+                        // Experimental: a smaller text-only model for the
+                        // live-refine tier (translation refinement + live
+                        // notes). No vision tower — photos attached live
+                        // fall back to OCR-only while this is on. Off by
+                        // default.
+                        Toggle(
+                            "Experimental: Liquid LFM2.5 live-refine model",
+                            isOn: $liveRefineLFM2Enabled)
+                            .onChange(of: liveRefineLFM2Enabled) {
+                                Task { await refreshStats() }
+                            }
 
                         // Experimental: a stronger text-only model for the
                         // summary tier. Needs the 1-bit-kernel mlx-swift fork
@@ -237,7 +254,7 @@ struct SettingsView: View {
                 } header: {
                     Text("On-device AI")
                 } footer: {
-                    Text("Live recording always uses the fast Qwen3.5 0.8B model so captions and live translation stay responsive and cool. After a recording, summaries, titles, vocabulary and chat use the summary model you pick above.")
+                    Text("Live recording uses the fast Qwen3.5 0.8B model by default — or the experimental Liquid LFM2.5 above — so captions and live translation stay responsive and cool. Live photo description needs the 0.8B model, so photos attached while LFM2.5 is active keep their OCR text until the recording ends. After a recording, summaries, titles, vocabulary and chat use the summary model you pick above.")
                 }
 
                 Section {
@@ -432,7 +449,7 @@ struct SettingsView: View {
         case .ready: llmState = localized("Ready")
         case .failed(let reason): llmState = localized("Failed: \(reason)")
         }
-        liveDownloaded = LLMService.isDownloaded(model: ModelCatalog.liveModel)
+        liveDownloaded = LLMService.isDownloaded(model: ModelCatalog.liveRefineModel())
         summaryDownloaded = LLMService.isDownloaded(
             model: ModelCatalog.option(for: modelID))
         let bytes = await pipeline.llm.available()
