@@ -151,6 +151,9 @@ final class CaptionPipeline {
     /// invalidates them.
     private var enginesKind = ""
     private var refinement: RefinementQueue?
+    /// In-flight Apple re-translations of LLM-cleaned sentences, keyed by
+    /// entry — cancelled at session end (see applySentenceRefinement).
+    private var refinementTranslateTasks: [UUID: Task<Void, Never>] = [:]
     private var feedTask: Task<Void, Never>?
     private var levelTask: Task<Void, Never>?
     private var eventsTask: Task<Void, Never>?
@@ -291,6 +294,7 @@ final class CaptionPipeline {
             // transition re-runs them via resumeBackgroundJobs().
             self.jobs.resumeUnfinishedImports()
             self.jobs.resumeUnfinishedSummaries()
+            self.migrateLiveRefineModelIfNeeded()
         }
 
         // UIKit's memory warning only arrives in the foreground; a
@@ -672,6 +676,11 @@ final class CaptionPipeline {
     private func endSession() async {
         guard phase != .idle else { return }
         await endTurn()
+        // In-flight re-translations of cleaned sentences are best-effort:
+        // cancel them so the archive below snapshots a store no task will
+        // mutate afterwards.
+        for task in refinementTranslateTasks.values { task.cancel() }
+        refinementTranslateTasks.removeAll()
         phase = .idle
         #if os(iOS)
         UIApplication.shared.isIdleTimerDisabled = false
@@ -1264,13 +1273,21 @@ final class CaptionPipeline {
             store.setRefined(nil, for: entryID)   // transcribe-only: done
             return
         }
-        Task { [translator, store] in
+        // Tracked (not fire-and-forget): endSession cancels stragglers so
+        // nothing mutates the store after the archive snapshot.
+        refinementTranslateTasks[entryID]?.cancel()
+        refinementTranslateTasks[entryID] = Task { [translator, store, weak self] in
             // Apple failing here keeps the draft (of the raw text) — a
             // slight mismatch with the cleaned transcript, accepted over
             // showing nothing.
             let refined = try? await translator.draft(
                 cleaned, direction: entry.direction)
+            guard !Task.isCancelled else { return }
             store.setRefined(refined, for: entryID)
+            self?.refinementTranslateTasks[entryID] = nil
+            // The journal must carry the translation the user saw — a crash
+            // after delivery would otherwise recover a session without it.
+            self?.writeJournal()
         }
     }
 
@@ -1401,6 +1418,45 @@ final class CaptionPipeline {
     private func llmIsReady() async -> Bool {
         if case .ready = await llm.loadState { return true }
         return false
+    }
+
+    /// One-shot upgrade migration: the live role is locked to LFM2.5, but
+    /// pre-redesign installs only ever downloaded the 0.8B live model —
+    /// having its weights on disk IS the user's standing consent to live-AI
+    /// downloads, so fetch the ~151MB replacement in the background instead
+    /// of silently showing "AI model not downloaded" every session until
+    /// the user finds the new Settings button.
+    private func migrateLiveRefineModelIfNeeded() {
+        let key = "migrate.liveRefineLFM2"
+        let defaults = UserDefaults.standard
+        guard !defaults.bool(forKey: key) else { return }
+        guard LLMService.isDownloaded(model: ModelCatalog.liveRefineModel) == false else {
+            defaults.set(true, forKey: key)   // already there (fresh installs)
+            return
+        }
+        guard llmEnabled, !isRunning,
+              LLMService.isDownloaded(model: ModelCatalog.liveModel)
+        else { return }   // no prior live-AI consent (or busy) — retry next launch
+        Task { [llm, logger, weak self] in
+            // The actor is idle at launch, so the setModel dance can't evict
+            // live work. A same-model load started mid-download joins this
+            // one; a job's different-model setModel cancels it and the
+            // unset flag retries next launch.
+            await llm.setModel(ModelCatalog.liveRefineModel)
+            do {
+                try await llm.load()
+                defaults.set(true, forKey: key)
+                logger.info("live-model migration: LFM2.5 downloaded")
+            } catch {
+                logger.warning("live-model migration deferred: \(error.localizedDescription)")
+            }
+            // Leave the resident slot the way the summary pipeline expects —
+            // unless a live session claimed the actor meanwhile (it owns
+            // the model choice then, and it IS the model we just set).
+            guard let self, !self.isRunning else { return }
+            await llm.setModel(ModelCatalog.option(
+                for: defaults.string(forKey: "model.id") ?? ModelCatalog.default.id))
+        }
     }
 
     /// User-facing switch for tier-2 refinement. Defaults to on; absence of

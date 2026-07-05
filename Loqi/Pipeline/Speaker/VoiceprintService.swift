@@ -103,12 +103,21 @@ actor VoiceprintService {
         guard let diarizer = SherpaOnnxOfflineSpeakerDiarizationWrapper(config: &config)
         else { throw DiarizationError.modelLoadFailed }
 
-        // One long synchronous C call: this actor's thread is blocked for
-        // the analysis — the same shape the FluidAudio pipeline had, and
-        // acceptable for an occasional post-process batch job.
-        let raw = diarizer.process(samples: samples) { done, total in
-            onProgress?(.analysis(Double(done) / Double(max(total, 1))))
+        // One long synchronous C call. Run it on a GCD utility thread via a
+        // continuation so it never parks a Swift cooperative-pool thread
+        // for minutes — the pool is core-count wide and shared with every
+        // actor in the app. Cancellation cannot interrupt the C call itself
+        // (sherpa documents the progress callback's return value as
+        // ignored), so the practical bound is checking before it starts.
+        try Task.checkCancellation()
+        let raw = await withCheckedContinuation { continuation in
+            DispatchQueue.global(qos: .utility).async {
+                continuation.resume(returning: diarizer.process(samples: samples) { done, total in
+                    onProgress?(.analysis(Double(done) / Double(max(total, 1))))
+                })
+            }
         }
+        try Task.checkCancellation()
 
         var slotByID: [Int: Int] = [:]
         return raw.map { segment in

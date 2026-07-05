@@ -739,7 +739,10 @@ struct SherpaOnnxDiarizationSegmentValue: Sendable {
   let speaker: Int
 }
 
-class SherpaOnnxOfflineSpeakerDiarizationWrapper {
+/// @unchecked Sendable: the wrapper is used serially — created, handed to
+/// one GCD closure for a single blocking `process` call, then discarded
+/// (see VoiceprintService.diarizeFile). No shared mutable state.
+final class SherpaOnnxOfflineSpeakerDiarizationWrapper: @unchecked Sendable {
   /// A pointer to the underlying counterpart in C
   private let impl: OpaquePointer
 
