@@ -62,7 +62,7 @@ struct ImportAudioSheet: View {
 
     /// Diarization is requested but the model isn't on disk yet.
     private var needsSpeakerModelConsent: Bool {
-        VoiceprintService.clusterCap(forPickerValue: speakerCount) != nil
+        VoiceprintService.separationEnabled(forPickerValue: speakerCount)
             && !VoiceprintService.isOfflineDiarizerDownloaded
     }
 

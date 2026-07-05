@@ -222,6 +222,11 @@ final class CaptionPipeline {
         let defaults = UserDefaults.standard
         // Selections pointing at removed tiers snap back to the default.
         ModelCatalog.normalizeStoredSelection(defaults)
+        // Pre-sherpa diarizer leftovers: retired source value + model caches.
+        DiarizerModelStore.migrateStoredSource(defaults: defaults)
+        Task.detached(priority: .utility) {
+            DiarizerModelStore.removeOrphanedFluidAudioCaches()
+        }
         let model = ModelCatalog.option(
             for: defaults.string(forKey: "model.id") ?? ModelCatalog.default.id)
         let source = ModelSource(

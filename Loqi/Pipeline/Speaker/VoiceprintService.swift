@@ -10,35 +10,28 @@ import os
 /// ONNX runtime. The ONLY diarizer — live recordings get their speaker
 /// labels from the post-process pass over the saved audio.
 actor VoiceprintService {
-    /// Speaker-picker ceiling for explicit counts; "Auto" (-1) discovers
-    /// up to `clusterCap`'s generous limit on its own.
-    nonisolated static let maxSupportedSpeakers = 4
-
     /// Bundle size for download speedometers and the onboarding total.
     nonisolated static var approximateDownloadBytes: Int64 {
         DiarizerModelStore.totalExpectedBytes
     }
 
-    /// Map the speaker-picker value to a clustering cap: 2+ = hard cap,
-    /// -1 ("Auto") = discover the count under a generous ceiling, 0/1 = nil
-    /// (diarization off).
-    static func clusterCap(forPickerValue value: Int) -> Int? {
-        switch value {
-        case -1: 8
-        case 2...: value
-        default: nil
-        }
+    /// Whether a speaker-picker value turns separation on: -1 ("Auto") or
+    /// an explicit count of 2+. 0/1 = single voice, separation off.
+    nonisolated static func separationEnabled(forPickerValue value: Int) -> Bool {
+        value == -1 || value >= 2
     }
 
-    /// Explicit picks force that cluster count (sherpa's fast clustering
-    /// bypasses the threshold when the count is known — strongly preferred
-    /// per its docs). "Auto" arrives as a cap above the picker ceiling and
-    /// discovers the count by distance threshold instead. Pure for testing.
+    /// Clustering config straight from the picker's intent. An explicit
+    /// pick forces that EXACT cluster count — sherpa's fast clustering
+    /// strongly prefers a known count, and "N speakers" in the import sheet
+    /// means exactly N (unlike the old FluidAudio VBx path, this is not an
+    /// upper cap). "Auto" (-1) discovers the count by distance threshold.
+    /// Pure for testing.
     nonisolated static func clustering(
-        maxSpeakers: Int
+        forPickerValue value: Int
     ) -> (numClusters: Int, threshold: Float) {
-        maxSpeakers <= maxSupportedSpeakers
-            ? (numClusters: maxSpeakers, threshold: 0)
+        value >= 2
+            ? (numClusters: value, threshold: 0)
             // ponytail: 0.5 is sherpa's reference default; tune on device
             // if Auto over/under-splits.
             : (numClusters: -1, threshold: 0.5)
@@ -78,12 +71,13 @@ actor VoiceprintService {
         try await DiarizerModelStore.download(from: source, onProgress: onProgress)
     }
 
-    /// Diarize a complete audio file. Missing models download on first use
-    /// (honoring the persisted source choice). Returns segments with dense
-    /// slot numbers by first appearance, sorted by start time.
+    /// Diarize a complete audio file. `speakerCount` carries the picker's
+    /// intent (-1 = Auto, 2+ = exact count). Missing models download on
+    /// first use (honoring the persisted source choice). Returns segments
+    /// with dense slot numbers by first appearance, sorted by start time.
     func diarizeFile(
         url: URL,
-        maxSpeakers: Int,
+        speakerCount: Int,
         source: ASRModelSource = DiarizerModelStore.currentSource,
         onProgress: (@Sendable (FileDiarizationProgress) -> Void)? = nil
     ) async throws -> [SpeakerAttribution.Segment] {
@@ -96,7 +90,7 @@ actor VoiceprintService {
         let audioFile = try AVAudioFile(forReading: url)
         let samples = try await OfflineTranscriber.decodeMono16k(audioFile)
 
-        let clustering = Self.clustering(maxSpeakers: maxSpeakers)
+        let clustering = Self.clustering(forPickerValue: speakerCount)
         var config = sherpaOnnxOfflineSpeakerDiarizationConfig(
             segmentation: sherpaOnnxOfflineSpeakerSegmentationModelConfig(
                 pyannote: sherpaOnnxOfflineSpeakerSegmentationPyannoteModelConfig(

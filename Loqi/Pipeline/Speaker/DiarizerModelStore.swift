@@ -79,6 +79,27 @@ enum DiarizerModelStore {
         ) ?? .huggingFace
     }
 
+    /// Launch-time migration: the retired DiarizerSource value "hfMirror"
+    /// (pre-sherpa China-mainland onboarding) maps to ModelScope — same
+    /// unreachable-Hugging-Face motivation, and without this the fallback
+    /// would quietly send those users to huggingface.co AND leave the
+    /// Settings picker with no matching selection.
+    static func migrateStoredSource(defaults: UserDefaults = .standard) {
+        if defaults.string(forKey: sourceDefaultsKey) == "hfMirror" {
+            defaults.set(ASRModelSource.modelScope.rawValue, forKey: sourceDefaultsKey)
+        }
+    }
+
+    /// Reclaim the pre-sherpa diarizer's orphaned model caches (Sortformer
+    /// + the FluidAudio Pyannote bundle, ~100+ MB) — nothing reads them
+    /// anymore. Safe to call every launch; a missing directory is a no-op.
+    static func removeOrphanedFluidAudioCaches() {
+        let fluidAudio = URL.applicationSupportDirectory.appending(
+            path: "FluidAudio", directoryHint: .isDirectory)
+        guard FileManager.default.fileExists(atPath: fluidAudio.path) else { return }
+        try? FileManager.default.removeItem(at: fluidAudio)
+    }
+
     /// Download any missing files, sequentially, with size-weighted
     /// progress. Completed files are skipped, so this doubles as a resume.
     static func download(

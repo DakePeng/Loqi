@@ -40,15 +40,34 @@ struct DiarizerModelStoreTests {
         }
     }
 
+    @Test func legacyHFMirrorSourceMigratesToModelScope() {
+        let suite = "DiarizerModelStoreTests.\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suite)!
+        defer { defaults.removePersistentDomain(forName: suite) }
+
+        // Pre-sherpa China-mainland onboarding wrote the retired value.
+        defaults.set("hfMirror", forKey: DiarizerModelStore.sourceDefaultsKey)
+        DiarizerModelStore.migrateStoredSource(defaults: defaults)
+        #expect(defaults.string(forKey: DiarizerModelStore.sourceDefaultsKey)
+            == ASRModelSource.modelScope.rawValue)
+
+        // Valid values pass through untouched.
+        defaults.set(ASRModelSource.huggingFace.rawValue,
+                     forKey: DiarizerModelStore.sourceDefaultsKey)
+        DiarizerModelStore.migrateStoredSource(defaults: defaults)
+        #expect(defaults.string(forKey: DiarizerModelStore.sourceDefaultsKey)
+            == ASRModelSource.huggingFace.rawValue)
+    }
+
     @Test func clusteringSplitsAutoFromExplicitCounts() {
-        for count in 2...VoiceprintService.maxSupportedSpeakers {
-            let config = VoiceprintService.clustering(maxSpeakers: count)
+        // Every explicit pick the import sheet offers (2...6) forces that
+        // exact cluster count — sherpa's preferred known-count mode.
+        for count in 2...6 {
+            let config = VoiceprintService.clustering(forPickerValue: count)
             #expect(config.numClusters == count)
         }
-        // "Auto" arrives as clusterCap(-1) == 8, above the explicit picker
-        // ceiling: discover the count by distance threshold instead of
-        // forcing eight clusters.
-        let auto = VoiceprintService.clustering(maxSpeakers: 8)
+        // "Auto" (-1) discovers the count by distance threshold.
+        let auto = VoiceprintService.clustering(forPickerValue: -1)
         #expect(auto.numClusters == -1)
         #expect(auto.threshold > 0)
     }

@@ -228,7 +228,7 @@ final class FileImportEngine {
         if needsTranslation { await translator.addDirection(direction) }
 
         var speakerSeparationFailed = false
-        if let speakerCap = VoiceprintService.clusterCap(forPickerValue: speakerCount) {
+        if VoiceprintService.separationEnabled(forPickerValue: speakerCount) {
             // Snapshot the entries (a `let`) so the concurrent draft pass and
             // the diarization speaker-writes below don't contend for `entries`.
             let entriesSnapshot = entries
@@ -239,7 +239,7 @@ final class FileImportEngine {
             onPhase(.identifyingSpeakers(0))
             do {
                 let segments = try await voiceprint.diarizeFile(
-                    url: recordingURL, maxSpeakers: speakerCap
+                    url: recordingURL, speakerCount: speakerCount
                 ) { progress in
                     Task { @MainActor in
                         switch progress {

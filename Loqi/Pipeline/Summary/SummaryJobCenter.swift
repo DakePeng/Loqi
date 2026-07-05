@@ -533,9 +533,9 @@ final class SummaryJobCenter {
               let fileName = session.audioFileName
         else { return }
         let url = SessionArchive.recordingURL(fileName: fileName)
+        let speakerCount = session.recordingSpeakerCount ?? -1
         guard FileManager.default.fileExists(atPath: url.path),
-              let speakerCap = VoiceprintService.clusterCap(
-                forPickerValue: session.recordingSpeakerCount ?? -1)
+              VoiceprintService.separationEnabled(forPickerValue: speakerCount)
         else { return }
 
         errors[sessionID] = nil
@@ -547,7 +547,7 @@ final class SummaryJobCenter {
             defer { heavyGate.release() }
             do {
                 let segments = try await voiceprint.diarizeFile(
-                    url: url, maxSpeakers: speakerCap
+                    url: url, speakerCount: speakerCount
                 ) { [weak self] progress in
                     Task { @MainActor in
                         guard let self, self.activities[sessionID] != nil else { return }
@@ -594,7 +594,7 @@ final class SummaryJobCenter {
         let speakerCount: Int?
         if VoiceprintService.isOfflineDiarizerDownloaded,
            let count = session.recordingSpeakerCount,
-           VoiceprintService.clusterCap(forPickerValue: count) != nil {
+           VoiceprintService.separationEnabled(forPickerValue: count) {
             speakerCount = count
         } else {
             speakerCount = nil

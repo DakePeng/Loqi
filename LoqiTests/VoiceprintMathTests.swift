@@ -4,12 +4,12 @@ import Testing
 struct VoiceprintMathTests {
     /// Speaker-picker mapping: 0/1 = off, -1 = Auto (generous ceiling,
     /// count discovered by clustering), 2+ = hard cap.
-    @Test func clusterCapForPickerValues() {
-        #expect(VoiceprintService.clusterCap(forPickerValue: 0) == nil)
-        #expect(VoiceprintService.clusterCap(forPickerValue: 1) == nil)
-        #expect(VoiceprintService.clusterCap(forPickerValue: -1) == 8)
-        #expect(VoiceprintService.clusterCap(forPickerValue: 2) == 2)
-        #expect(VoiceprintService.clusterCap(forPickerValue: 6) == 6)
+    @Test func separationEnabledForPickerValues() {
+        #expect(!VoiceprintService.separationEnabled(forPickerValue: 0))
+        #expect(!VoiceprintService.separationEnabled(forPickerValue: 1))
+        #expect(VoiceprintService.separationEnabled(forPickerValue: -1))
+        #expect(VoiceprintService.separationEnabled(forPickerValue: 2))
+        #expect(VoiceprintService.separationEnabled(forPickerValue: 6))
     }
 
     @Test func cosineSimilarityBasics() {

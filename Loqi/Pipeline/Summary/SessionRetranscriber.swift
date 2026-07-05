@@ -164,7 +164,7 @@ struct SessionRetranscriber {
 
         guard VoiceprintService.isOfflineDiarizerDownloaded,
               let speakerCount,
-              let speakerCap = VoiceprintService.clusterCap(forPickerValue: speakerCount),
+              VoiceprintService.separationEnabled(forPickerValue: speakerCount),
               let fileName = updated.audioFileName
         else { return updated }
         let url = SessionArchive.recordingURL(fileName: fileName)
@@ -173,7 +173,7 @@ struct SessionRetranscriber {
         do {
             onPhase(.identifyingSpeakers(0))
             let segments = try await voiceprint.diarizeFile(
-                url: url, maxSpeakers: speakerCap
+                url: url, speakerCount: speakerCount
             ) { progress in
                 Task { @MainActor in
                     if case .analysis(let fraction) = progress {
