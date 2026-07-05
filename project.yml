@@ -10,6 +10,17 @@ options:
   createIntermediateGroups: true
 
 packages:
+  # Transitive-dependency override, NOT a direct API dependency: mlx-swift-lm
+  # depends on ml-explore/mlx-swift, but LLMService relies on the
+  # poison-events fork (background GPU aborts surface as catchable MLXError
+  # instead of terminating the process — see LLMService's scene-exit notes).
+  # Declaring the fork here (same package identity, "mlx-swift") forces SPM
+  # to resolve the whole graph against it; a product link below keeps
+  # xcodegen from pruning the reference. Drop when mlx-swift vendors
+  # mlx >= a025496c.
+  MLX:
+    url: https://github.com/DakePeng/mlx-swift
+    branch: loqi/0.31.4-poison-events
   MLXLM:
     url: https://github.com/ml-explore/mlx-swift-lm
     exactVersion: 3.31.3
@@ -80,6 +91,8 @@ targets:
               - public.audio
               - public.movie
     dependencies:
+      - package: MLX
+        product: MLX
       - package: MLXLM
         product: MLXLLM
       # Vision-LLM tier (Qwen3-VL): linking MLXVLM is all the load path
@@ -127,6 +140,8 @@ targets:
         NSSpeechRecognitionUsageDescription: "Loqi transcribes speech entirely on-device to show live translated captions."
         NSCameraUsageDescription: "Loqi uses the camera to attach photos of slides and whiteboards to a session. Images never leave your device."
     dependencies:
+      - package: MLX
+        product: MLX
       - package: MLXLM
         product: MLXLLM
       - package: MLXLM
