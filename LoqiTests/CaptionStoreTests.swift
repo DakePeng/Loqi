@@ -207,23 +207,6 @@ struct CaptionStoreTests {
         #expect(store.entry(for: entry.id)?.speaker == 2)
     }
 
-    @Test func splitEntriesPreserveRelativeTimestamps() throws {
-        let store = CaptionStore()
-        store.applyVolatile(text: "hello no", direction: enToZh)
-
-        let entries = store.finalizeActiveSplit(
-            parts: [
-                (text: "hello", speaker: 0, offset: 0),
-                (text: "no", speaker: 1, offset: 2.5),
-            ],
-            direction: enToZh)
-
-        #expect(entries.count == 2)
-        let first = try #require(entries.first)
-        let second = try #require(entries.last)
-        #expect(abs(second.createdAt.timeIntervalSince(first.createdAt) - 2.5) < 0.01)
-    }
-
     @Test func segmentsGroupAndRecomputeAfterMutation() {
         let store = CaptionStore()
         let direction = LanguagePair(source: .english, target: .english)

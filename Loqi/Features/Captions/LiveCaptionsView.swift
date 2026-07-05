@@ -28,10 +28,10 @@ struct LiveCaptionsView: View {
     @AppStorage("captions.source") private var sourceRaw = RecognitionLanguageSelection.autoRawValue
     /// Translation is opt-in: empty = off (plain transcription, the default).
     @AppStorage("captions.translation") private var translationRaw = ""
-    // 0/1 = single speaker (no diarization), -1 = Auto, 2+ = hard cap.
-    // Default off so first recording never downloads the speaker model silently.
-    @AppStorage("captions.speakerCount") private var speakerCount
-        = VoiceprintService.defaultLiveSpeakerPickerValue()
+    // 0/1 = single speaker (no separation), -1 = Auto, 2+ = hard cap.
+    // Applied by the offline post-process pass after the recording ends.
+    // Default off so nothing ever downloads the speaker model silently.
+    @AppStorage("captions.speakerCount") private var speakerCount = 0
     @AppStorage(MicSensitivity.defaultsKey) private var sensitivityRaw
         = MicSensitivity.far.rawValue
     @State private var errorMessage: String?
@@ -539,7 +539,7 @@ struct LiveCaptionsView: View {
             Picker("Speakers", selection: $speakerCount) {
                 Label("One voice", systemImage: "person").tag(0)
                 Label("Auto", systemImage: "person.2.wave.2").tag(-1)
-                ForEach(2...StreamingDiarizer.maxSupportedSpeakers, id: \.self) { count in
+                ForEach(2...VoiceprintService.maxSupportedSpeakers, id: \.self) { count in
                     Label("\(count) speakers", systemImage: "person.2").tag(count)
                 }
             }
@@ -564,7 +564,7 @@ struct LiveCaptionsView: View {
             Picker("Speakers", selection: $speakerCount) {
                 Label("One voice", systemImage: "person").tag(0)
                 Label("Auto", systemImage: "person.2.wave.2").tag(-1)
-                ForEach(2...StreamingDiarizer.maxSupportedSpeakers, id: \.self) { count in
+                ForEach(2...VoiceprintService.maxSupportedSpeakers, id: \.self) { count in
                     Label("\(count) speakers", systemImage: "person.2").tag(count)
                 }
             }

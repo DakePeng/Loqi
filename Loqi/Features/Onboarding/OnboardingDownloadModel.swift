@@ -355,13 +355,11 @@ final class OnboardingDownloadModel {
     }
 
     private func downloadDiarizer(_ item: Item) async {
-        item.speedometer.start(totalBytes: StreamingDiarizer.approximateDownloadBytes)
+        item.speedometer.start(totalBytes: VoiceprintService.approximateDownloadBytes)
         do {
-            try await pipeline.streamingDiarizer.loadIfNeeded(source: region.diarizerSource) { fraction in
+            try await VoiceprintService.downloadModels(source: region.diarizerSource) { fraction in
                 Task { @MainActor in item.speedometer.update(fraction) }
             }
-            // Loaded as a side effect — small (CoreML), leave it warm like
-            // Settings does.
             item.status = .done
         } catch is CancellationError {
             item.status = .skipped

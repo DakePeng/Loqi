@@ -164,31 +164,13 @@ struct PipelineResourceTests {
             .llm: "Warming up the AI model...",
             .thermal: "AI features off (device hot)",
             .memory: "AI features paused (low memory)",
-            .diarizer: "Preparing speaker separation...",
+            .asr: "SenseVoice unavailable...",
         ]
 
         #expect(CaptionPipeline.visibleStatusMessages(from: messages) == [
             "AI features paused (low memory)",
-            "Preparing speaker separation...",
+            "SenseVoice unavailable...",
         ])
-    }
-
-    @Test func memoryWarningKeepsVoiceprintForActiveDiarization() {
-        #expect(!CaptionPipeline.shouldUnloadVoiceprintOnMemoryWarning(
-            isRunning: true, diarizationActive: true))
-        #expect(CaptionPipeline.shouldUnloadVoiceprintOnMemoryWarning(
-            isRunning: true, diarizationActive: false))
-        #expect(CaptionPipeline.shouldUnloadVoiceprintOnMemoryWarning(
-            isRunning: false, diarizationActive: true))
-    }
-
-    @Test func liveDiarizationStopsWhenBackgrounded() {
-        #expect(CaptionPipeline.shouldRunLiveDiarization(
-            diarizationActive: true, isBackgrounded: false))
-        #expect(!CaptionPipeline.shouldRunLiveDiarization(
-            diarizationActive: true, isBackgrounded: true))
-        #expect(!CaptionPipeline.shouldRunLiveDiarization(
-            diarizationActive: false, isBackgrounded: false))
     }
 
     @Test func backgroundSuspendsPostHocWorkThatCanReachMetal() {

@@ -71,37 +71,6 @@ final class CaptionStore {
         return entries[index]
     }
 
-    /// Finalize the active volatile entry as the first part of a speaker
-    /// split, then append finalized entries for the remaining parts — one ASR
-    /// utterance whose speaker changed midway becomes several captions. The
-    /// UI already groups consecutive entries by speaker, so the parts render
-    /// as distinct bubbles. Returns the parts in order (for the pipeline's
-    /// per-entry translation/refinement/notes).
-    @discardableResult
-    func finalizeActiveSplit(
-        parts: [(text: String, speaker: Int?, offset: TimeInterval)],
-        direction: LanguagePair
-    ) -> [CaptionEntry] {
-        guard let firstPart = parts.first,
-              let first = finalizeActive(text: firstPart.text, direction: direction)
-        else { return [] }
-        if let speaker = firstPart.speaker { setSpeaker(speaker, for: first.id) }
-        var result = [entry(for: first.id) ?? first]
-        let baseDate = first.createdAt
-        for part in parts.dropFirst() {
-            var entry = CaptionEntry(
-                sourceText: part.text,
-                direction: direction,
-                state: .finalized,
-                createdAt: baseDate.addingTimeInterval(part.offset))
-            entry.speaker = part.speaker
-            entries.append(entry)
-            result.append(entry)
-        }
-        prune()
-        return result
-    }
-
     /// Drop an empty in-flight entry (e.g. turn ended with no speech).
     func discardActiveIfEmpty() {
         guard let id = activeEntryID, let index = index(of: id),

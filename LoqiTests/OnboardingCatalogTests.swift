@@ -140,7 +140,7 @@ struct OnboardingCatalogTests {
             for: [.translationPacks, .senseVoice, .diarizer, .liveLLM, .summaryLLM],
             installed: [])
         let expected = SenseVoiceModelStore.totalExpectedBytes
-            + StreamingDiarizer.approximateDownloadBytes
+            + VoiceprintService.approximateDownloadBytes
             + ModelCatalog.liveRefineModel.downloadBytes
             + ModelCatalog.qwen35_2b.downloadBytes
         #expect(total == expected)

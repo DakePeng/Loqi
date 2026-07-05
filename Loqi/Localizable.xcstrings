@@ -873,22 +873,6 @@
         }
       }
     },
-    "Cleaning up transcript…" : {
-      "localizations" : {
-        "ja" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "文字起こしを整理中…"
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "正在整理转写…"
-          }
-        }
-      }
-    },
     "Choose a summary style" : {
       "extractionState" : "stale",
       "localizations" : {
@@ -935,6 +919,22 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "选择要下载的内容"
+          }
+        }
+      }
+    },
+    "Cleaning up transcript…" : {
+      "localizations" : {
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "文字起こしを整理中…"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "正在整理转写…"
           }
         }
       }
@@ -1769,6 +1769,7 @@
       }
     },
     "During a recording, the on-device AI model cleans up the live transcript — fixing misheard words, names, and punctuation — while Apple's system translation produces the translation itself. The default live model is Qwen3.5 0.8B; the experimental Liquid LFM2.5 above replaces it when enabled, in which case live notes and photo descriptions wait until the recording ends. After a recording, summaries, titles, vocabulary and chat use the summary model you pick above." : {
+      "extractionState" : "stale",
       "localizations" : {
         "ja" : {
           "stringUnit" : {
@@ -2003,6 +2004,7 @@
       }
     },
     "Experimental: Liquid LFM2.5 live-refine model" : {
+      "extractionState" : "stale",
       "localizations" : {
         "ja" : {
           "stringUnit" : {
@@ -2098,22 +2100,6 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "用于实时翻译和笔记的快速设备端模型"
-          }
-        }
-      }
-    },
-    "Tiny on-device model that cleans up the live transcript" : {
-      "localizations" : {
-        "ja" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "ライブ文字起こしを整える超小型オンデバイスモデル"
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "用于整理实时转写的超小型设备端模型"
           }
         }
       }
@@ -5596,6 +5582,22 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "时间线"
+          }
+        }
+      }
+    },
+    "Tiny on-device model that cleans up the live transcript" : {
+      "localizations" : {
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "ライブ文字起こしを整える超小型オンデバイスモデル"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "用于整理实时转写的超小型设备端模型"
           }
         }
       }

@@ -119,7 +119,7 @@ enum OnboardingItemKind: String, CaseIterable, Identifiable {
         switch self {
         case .appleSpeech, .translationPacks: nil
         case .senseVoice: SenseVoiceModelStore.totalExpectedBytes
-        case .diarizer: StreamingDiarizer.approximateDownloadBytes
+        case .diarizer: VoiceprintService.approximateDownloadBytes
         case .liveLLM: ModelCatalog.liveRefineModel.downloadBytes
         case .summaryLLM: ModelCatalog.qwen35_2b.downloadBytes
         case .qwen3ASR: Qwen3ASRModelStore.totalExpectedBytes
@@ -160,7 +160,7 @@ enum OnboardingItemKind: String, CaseIterable, Identifiable {
         switch self {
         case .appleSpeech, .translationPacks: false
         case .senseVoice: SenseVoiceModelStore.isInstalled
-        case .diarizer: StreamingDiarizer.isModelCached
+        case .diarizer: VoiceprintService.isOfflineDiarizerDownloaded
         case .liveLLM: LLMService.isDownloaded(model: ModelCatalog.liveRefineModel)
         case .summaryLLM: LLMService.isDownloaded(model: ModelCatalog.qwen35_2b)
         case .qwen3ASR: Qwen3ASRModelStore.isInstalled

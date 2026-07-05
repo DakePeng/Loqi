@@ -21,7 +21,7 @@ struct SettingsView: View {
     @State private var qwen3Installed = Qwen3ASRModelStore.isInstalled
     @State private var qwen3Speedometer = DownloadSpeedometer()
     @State private var diarizerState = "—"
-    @State private var diarizerInstalled = StreamingDiarizer.isModelCached
+    @State private var diarizerInstalled = VoiceprintService.isOfflineDiarizerDownloaded
     @State private var diarizerDownloading = false
     @State private var diarizerError: String?
     @State private var diarizerSpeedometer = DownloadSpeedometer()
@@ -373,11 +373,11 @@ struct SettingsView: View {
     private func downloadSpeakerModel() {
         diarizerError = nil
         diarizerDownloading = true
-        diarizerSpeedometer.start(totalBytes: StreamingDiarizer.approximateDownloadBytes)
+        diarizerSpeedometer.start(totalBytes: VoiceprintService.approximateDownloadBytes)
         Task {
             let source = DiarizerSource(rawValue: diarizerSourceRaw) ?? .huggingFace
             do {
-                try await pipeline.streamingDiarizer.loadIfNeeded(source: source) { progress in
+                try await VoiceprintService.downloadModels(source: source) { progress in
                     Task { @MainActor in diarizerSpeedometer.update(progress) }
                 }
             } catch {
@@ -436,16 +436,11 @@ struct SettingsView: View {
         senseVoiceInstalled = SenseVoiceModelStore.isInstalled
         qwen3Installed = Qwen3ASRModelStore.isInstalled
 
-        diarizerInstalled = StreamingDiarizer.isModelCached
-        switch await pipeline.streamingDiarizer.state {
-        case .unloaded:
-            diarizerState = diarizerInstalled
-                ? localized("Downloaded (not loaded)")
-                : localized("Not downloaded")
-        case .downloading(let p): diarizerState = localized("Downloading \(Int(p * 100))%")
-        case .loading: diarizerState = localized("Loading")
-        case .ready: diarizerState = localized("Ready")
-        case .failed(let reason): diarizerState = localized("Failed: \(reason)")
-        }
+        diarizerInstalled = VoiceprintService.isOfflineDiarizerDownloaded
+        // Stateless offline pipeline: downloaded or not is the whole story
+        // (each post-process/import run loads and releases its own manager).
+        diarizerState = diarizerInstalled
+            ? localized("Downloaded")
+            : localized("Not downloaded")
     }
 }
