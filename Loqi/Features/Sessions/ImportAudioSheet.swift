@@ -16,9 +16,10 @@ struct ImportAudioSheet: View {
     @State private var sourceRaw: String
     /// Shared with the Record screen: empty = transcribe only (default).
     @AppStorage("captions.translation") private var translationRaw = ""
-    // -1 = Auto (diarize). Default on so imports get speaker labels. Its own
-    // key (not the live "captions.speakerCount") so import and Record keep
-    // independent defaults and don't inherit each other's last choice.
+    // -1 = Auto (diarize). Default on so imports get speaker labels.
+    // Recordings have no picker anymore — their post-process always runs
+    // Auto when the model is downloaded — but imports keep this control
+    // because a file's speaker count is often known up front.
     @AppStorage("import.speakerCount") private var speakerCount = -1
     @AppStorage("import.sensitivity") private var sensitivityRaw
         = MicSensitivity.balanced.rawValue

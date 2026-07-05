@@ -28,10 +28,6 @@ struct LiveCaptionsView: View {
     @AppStorage("captions.source") private var sourceRaw = RecognitionLanguageSelection.autoRawValue
     /// Translation is opt-in: empty = off (plain transcription, the default).
     @AppStorage("captions.translation") private var translationRaw = ""
-    // 0/1 = single speaker (no separation), -1 = Auto, 2+ = hard cap.
-    // Applied by the offline post-process pass after the recording ends.
-    // Default off so nothing ever downloads the speaker model silently.
-    @AppStorage("captions.speakerCount") private var speakerCount = 0
     @AppStorage(MicSensitivity.defaultsKey) private var sensitivityRaw
         = MicSensitivity.far.rawValue
     @State private var errorMessage: String?
@@ -371,7 +367,6 @@ struct LiveCaptionsView: View {
                 ScrollView(.horizontal) {
                     HStack(spacing: 10) {
                         languageChip
-                        speakersChip
                         pickupChip
                         translationChip
                     }
@@ -464,7 +459,6 @@ struct LiveCaptionsView: View {
             HStack(spacing: 2) {
                 addPhotoButton
                 pickupBarButton
-                speakersBarButton
                 translationBarButton
             }
             .background(.regularMaterial, in: Capsule())
@@ -522,66 +516,6 @@ struct LiveCaptionsView: View {
             if sourceSelection != .auto, translationRaw == sourceSelection.rawValue {
                 translationRaw = ""
             }
-        }
-    }
-
-    /// Diarization is on whenever the picker value maps to a cluster cap
-    /// (explicit 2+ or Auto) — same rule the service uses, so the UI and the
-    /// pipeline can't disagree about the sentinel values.
-    private var diarizationOn: Bool {
-        VoiceprintService.clusterCap(forPickerValue: speakerCount) != nil
-    }
-
-    /// Speaker count is adjustable mid-session: the transcript re-clusters
-    /// and relabels live. "Auto" lets clustering discover the count.
-    private var speakersChip: some View {
-        Menu {
-            Picker("Speakers", selection: $speakerCount) {
-                Label("One voice", systemImage: "person").tag(0)
-                Label("Auto", systemImage: "person.2.wave.2").tag(-1)
-                ForEach(2...VoiceprintService.maxSupportedSpeakers, id: \.self) { count in
-                    Label("\(count) speakers", systemImage: "person.2").tag(count)
-                }
-            }
-        } label: {
-            chip(
-                icon: diarizationOn ? "person.2" : "person",
-                text: speakerCount == -1
-                    ? String(localized: "Auto")
-                    : speakerCount >= 2 ? "\(speakerCount)" : "1",
-                active: diarizationOn)
-        }
-        .onChange(of: speakerCount) {
-            pipeline.updateSpeakerCount(speakerCount)
-        }
-    }
-
-    /// Same picker, icon-only — matches the other slim-bar toggles. The
-    /// glyph carries the mode (one voice / auto / fixed count); the exact
-    /// number lives in the menu.
-    private var speakersBarButton: some View {
-        Menu {
-            Picker("Speakers", selection: $speakerCount) {
-                Label("One voice", systemImage: "person").tag(0)
-                Label("Auto", systemImage: "person.2.wave.2").tag(-1)
-                ForEach(2...VoiceprintService.maxSupportedSpeakers, id: \.self) { count in
-                    Label("\(count) speakers", systemImage: "person.2").tag(count)
-                }
-            }
-        } label: {
-            Image(systemName: speakerCount == -1
-                ? "person.2.wave.2" : diarizationOn ? "person.2" : "person")
-                .font(.body)
-                .foregroundStyle(diarizationOn
-                    ? AnyShapeStyle(.tint) : AnyShapeStyle(.primary))
-                .contentTransition(.symbolEffect(.replace))
-                .animation(.default, value: speakerCount)
-                .frame(minWidth: 44, minHeight: 44)
-                .contentShape(Rectangle())
-        }
-        .accessibilityLabel("Speakers")
-        .onChange(of: speakerCount) {
-            pipeline.updateSpeakerCount(speakerCount)
         }
     }
 
@@ -703,7 +637,9 @@ struct LiveCaptionsView: View {
             Self.speakerColors[$0 % Self.speakerColors.count]
         }
         return VStack(alignment: .leading, spacing: 2) {
-            if diarizationOn {
+            // Speaker labels only exist after the offline post-process pass;
+            // during recording this never renders.
+            if segment.speaker != nil {
                 Button {
                     if let slot = segment.speaker {
                         renameText = pipeline.speakerNames[slot] ?? ""

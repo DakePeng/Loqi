@@ -209,13 +209,12 @@ final class CaptionPipeline {
             : UserDefaults.standard.bool(forKey: "audio.saveRecordings")
     }
 
-    /// Captions-mode speaker picker value; 0/1 = speaker separation off,
-    /// -1 = Auto, 2+ = hard cap (see VoiceprintService.clusterCap). Feeds
-    /// `recordingSpeakerCount` on the archived record, which the offline
-    /// post-process pass uses to label speakers after the recording ends.
-    var captionSpeakerCount: Int {
-        (UserDefaults.standard.object(forKey: "captions.speakerCount") as? Int) ?? 0
-    }
+    /// Speaker separation for recordings is configuration-free: the offline
+    /// post-process pass runs in Auto mode (discovers the speaker count)
+    /// whenever the speaker model is downloaded — downloading it IS the
+    /// opt-in, same rule as Qwen3-ASR. The old live speaker picker is gone
+    /// with live diarization.
+    static let postProcessSpeakerCount = -1
 
     init(llm: LLMService? = nil) {
         // Honor persisted Settings choices even if that screen was never
@@ -657,7 +656,7 @@ final class CaptionPipeline {
             live: store.entries,
             timeline: audioAnchors.isEmpty ? nil : AudioTimeline(anchors: audioAnchors),
             speakerNames: speakerNames,
-            recordingSpeakerCount: captionSpeakerCount,
+            recordingSpeakerCount: Self.postProcessSpeakerCount,
             audioFileName: recorder != nil ? SessionRecorder.fileName(for: sessionID) : nil,
             chunkNotes: liveNotes,
             notesEndEntryID: notesEndEntryID,
@@ -701,7 +700,7 @@ final class CaptionPipeline {
                     audioFileName: audioFileName,
                     chunkNotes: liveNotes,
                     notesEndEntryID: notesEndEntryID,
-                    speakerCount: captionSpeakerCount,
+                    speakerCount: Self.postProcessSpeakerCount,
                     timeline: audioFileName != nil && !audioAnchors.isEmpty
                         ? AudioTimeline(anchors: audioAnchors) : nil,
                     attachments: liveAttachments))
@@ -1356,13 +1355,6 @@ final class CaptionPipeline {
             return String(format: "%02d:%02d", total / 60, total % 60)
         }
         return "\(clock(start))-\(clock(end))"
-    }
-
-    /// Change the speaker count. Purely a preference now: it rides along on
-    /// the archived record (`recordingSpeakerCount`) and gates the offline
-    /// post-process diarization after the recording ends.
-    func updateSpeakerCount(_ count: Int) {
-        UserDefaults.standard.set(count, forKey: "captions.speakerCount")
     }
 
     /// Apply a changed mic-pickup preset. Every knob it tunes lives in
