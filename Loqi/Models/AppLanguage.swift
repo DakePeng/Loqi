@@ -82,7 +82,14 @@ enum AppLanguage: String, CaseIterable, Identifiable, Codable, Sendable {
     }
 
     init?(speechRecognitionCode: String) {
-        switch speechRecognitionCode {
+        // sherpa-onnx SenseVoice reports the detected language as its raw
+        // token ("<|zh|>"), not a bare code. Without stripping it, Auto
+        // mode never detects anything: every utterance falls back to the
+        // device language and live translation silently never triggers.
+        var code = speechRecognitionCode
+        if code.hasPrefix("<|") { code = String(code.dropFirst(2)) }
+        if code.hasSuffix("|>") { code = String(code.dropLast(2)) }
+        switch code {
         case "en": self = .english
         case "zh", "yue": self = .chinese
         case "ja": self = .japanese

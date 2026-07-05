@@ -4,6 +4,22 @@ import Testing
 @testable import Loqi
 
 struct SenseVoiceTuningTests {
+    /// sherpa-onnx SenseVoice reports the detected language as its raw
+    /// token ("<|zh|>"), not a bare code — the mapper must accept both or
+    /// Auto-mode language detection silently dies (every utterance falls
+    /// back to the device language and translation never triggers).
+    @Test func detectedLanguageTokenParses() {
+        #expect(AppLanguage(speechRecognitionCode: "<|en|>") == .english)
+        #expect(AppLanguage(speechRecognitionCode: "<|zh|>") == .chinese)
+        #expect(AppLanguage(speechRecognitionCode: "<|yue|>") == .chinese)
+        #expect(AppLanguage(speechRecognitionCode: "<|ja|>") == .japanese)
+        #expect(AppLanguage(speechRecognitionCode: "<|ko|>") == .korean)
+        // Bare codes keep working; junk stays nil.
+        #expect(AppLanguage(speechRecognitionCode: "en") == .english)
+        #expect(AppLanguage(speechRecognitionCode: "<|nospeech|>") == nil)
+        #expect(AppLanguage(speechRecognitionCode: "") == nil)
+    }
+
     @Test func micSensitivityDefaultsToFarWhenUnset() {
         let old = UserDefaults.standard.string(forKey: MicSensitivity.defaultsKey)
         defer {
