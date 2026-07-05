@@ -51,10 +51,10 @@ struct OnboardingCatalogTests {
         #expect(DownloadRegion.global.diarizerSource == .huggingFace)
     }
 
-    @Test func chinaMainlandUsesModelScopeAndHFMirror() {
+    @Test func chinaMainlandUsesModelScopeEverywhere() {
         #expect(DownloadRegion.chinaMainland.llmSource == .modelScope)
         #expect(DownloadRegion.chinaMainland.asrSource == .modelScope)
-        #expect(DownloadRegion.chinaMainland.diarizerSource == .hfMirror)
+        #expect(DownloadRegion.chinaMainland.diarizerSource == .modelScope)
     }
 
     @Test func persistWritesTheSettingsKeys() {
@@ -65,12 +65,12 @@ struct OnboardingCatalogTests {
         DownloadRegion.chinaMainland.persistSources(to: defaults)
         #expect(defaults.string(forKey: "model.source") == ModelSource.modelScope.rawValue)
         #expect(defaults.string(forKey: "asr.source") == ASRModelSource.modelScope.rawValue)
-        #expect(defaults.string(forKey: "diarizer.source") == DiarizerSource.hfMirror.rawValue)
+        #expect(defaults.string(forKey: "diarizer.source") == ASRModelSource.modelScope.rawValue)
 
         DownloadRegion.global.persistSources(to: defaults)
         #expect(defaults.string(forKey: "model.source") == ModelSource.huggingFace.rawValue)
         #expect(defaults.string(forKey: "asr.source") == ASRModelSource.huggingFace.rawValue)
-        #expect(defaults.string(forKey: "diarizer.source") == DiarizerSource.huggingFace.rawValue)
+        #expect(defaults.string(forKey: "diarizer.source") == ASRModelSource.huggingFace.rawValue)
     }
 
     // MARK: Item lineup

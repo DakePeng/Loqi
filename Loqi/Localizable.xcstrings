@@ -3634,6 +3634,54 @@
         }
       }
     },
+    "The speaker model couldn't be loaded — try re-downloading it." : {
+      "localizations" : {
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "話者モデルを読み込めませんでした。再ダウンロードをお試しください。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "无法加载说话人模型——请尝试重新下载。"
+          }
+        }
+      }
+    },
+    "Speaker separation isn't available on this platform." : {
+      "localizations" : {
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "このプラットフォームでは話者分離を利用できません。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "此平台不支持说话人分离。"
+          }
+        }
+      }
+    },
+    "Powers speaker separation for recordings and imported audio. Voice data never leaves this iPhone. Use ModelScope if Hugging Face is unreachable." : {
+      "localizations" : {
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "録音や読み込んだ音声の話者分離に使われます。音声データがこの iPhone の外に出ることはありません。Hugging Face に接続できない場合は ModelScope をご利用ください。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "为录音和导入的音频提供说话人分离。语音数据绝不会离开这台 iPhone。如果无法访问 Hugging Face，请使用 ModelScope。"
+          }
+        }
+      }
+    },
     "Preferred form per language" : {
       "localizations" : {
         "ja" : {

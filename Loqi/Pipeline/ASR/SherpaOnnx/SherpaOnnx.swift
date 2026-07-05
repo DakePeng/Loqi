@@ -673,3 +673,134 @@ class SherpaOnnxVoiceActivityDetectorWrapper {
     SherpaOnnxVoiceActivityDetectorFlush(vad)
   }
 }
+
+// MARK: - Offline speaker diarization
+
+func sherpaOnnxOfflineSpeakerSegmentationPyannoteModelConfig(
+  model: String = ""
+) -> SherpaOnnxOfflineSpeakerSegmentationPyannoteModelConfig {
+  SherpaOnnxOfflineSpeakerSegmentationPyannoteModelConfig(model: toCPointer(model))
+}
+
+func sherpaOnnxOfflineSpeakerSegmentationModelConfig(
+  pyannote: SherpaOnnxOfflineSpeakerSegmentationPyannoteModelConfig =
+    sherpaOnnxOfflineSpeakerSegmentationPyannoteModelConfig(),
+  numThreads: Int = 1,
+  debug: Int = 0,
+  provider: String = "cpu"
+) -> SherpaOnnxOfflineSpeakerSegmentationModelConfig {
+  SherpaOnnxOfflineSpeakerSegmentationModelConfig(
+    pyannote: pyannote,
+    num_threads: Int32(numThreads),
+    debug: Int32(debug),
+    provider: toCPointer(provider))
+}
+
+func sherpaOnnxSpeakerEmbeddingExtractorConfig(
+  model: String = "",
+  numThreads: Int = 1,
+  debug: Int = 0,
+  provider: String = "cpu"
+) -> SherpaOnnxSpeakerEmbeddingExtractorConfig {
+  SherpaOnnxSpeakerEmbeddingExtractorConfig(
+    model: toCPointer(model),
+    num_threads: Int32(numThreads),
+    debug: Int32(debug),
+    provider: toCPointer(provider))
+}
+
+func sherpaOnnxFastClusteringConfig(
+  numClusters: Int = -1,
+  threshold: Float = 0.5
+) -> SherpaOnnxFastClusteringConfig {
+  SherpaOnnxFastClusteringConfig(
+    num_clusters: Int32(numClusters),
+    threshold: threshold)
+}
+
+func sherpaOnnxOfflineSpeakerDiarizationConfig(
+  segmentation: SherpaOnnxOfflineSpeakerSegmentationModelConfig,
+  embedding: SherpaOnnxSpeakerEmbeddingExtractorConfig,
+  clustering: SherpaOnnxFastClusteringConfig,
+  minDurationOn: Float = 0.3,
+  minDurationOff: Float = 0.5
+) -> SherpaOnnxOfflineSpeakerDiarizationConfig {
+  SherpaOnnxOfflineSpeakerDiarizationConfig(
+    segmentation: segmentation,
+    embedding: embedding,
+    clustering: clustering,
+    min_duration_on: minDurationOn,
+    min_duration_off: minDurationOff)
+}
+
+struct SherpaOnnxDiarizationSegmentValue: Sendable {
+  let start: Float
+  let end: Float
+  let speaker: Int
+}
+
+class SherpaOnnxOfflineSpeakerDiarizationWrapper {
+  /// A pointer to the underlying counterpart in C
+  private let impl: OpaquePointer
+
+  init?(config: UnsafePointer<SherpaOnnxOfflineSpeakerDiarizationConfig>) {
+    guard let ptr = SherpaOnnxCreateOfflineSpeakerDiarization(config) else {
+      return nil
+    }
+    self.impl = ptr
+  }
+
+  deinit {
+    SherpaOnnxDestroyOfflineSpeakerDiarization(impl)
+  }
+
+  var sampleRate: Int {
+    Int(SherpaOnnxOfflineSpeakerDiarizationGetSampleRate(impl))
+  }
+
+  /// Diarize mono samples normalized to [-1, 1] at `sampleRate`. One long
+  /// synchronous C call; `onProgress` fires on the calling thread with
+  /// (processedChunks, totalChunks). Segments come back sorted by start.
+  func process(
+    samples: [Float],
+    onProgress: (@Sendable (Int, Int) -> Void)? = nil
+  ) -> [SherpaOnnxDiarizationSegmentValue] {
+    final class ProgressBox {
+      let report: @Sendable (Int, Int) -> Void
+      init(_ report: @escaping @Sendable (Int, Int) -> Void) { self.report = report }
+    }
+
+    let result: OpaquePointer?
+    if let onProgress {
+      let box = ProgressBox(onProgress)
+      let arg = Unmanaged.passRetained(box).toOpaque()
+      defer { Unmanaged<ProgressBox>.fromOpaque(arg).release() }
+      result = SherpaOnnxOfflineSpeakerDiarizationProcessWithCallback(
+        impl, samples, Int32(samples.count),
+        { done, total, arg in
+          guard let arg else { return 0 }
+          Unmanaged<ProgressBox>.fromOpaque(arg)
+            .takeUnretainedValue().report(Int(done), Int(total))
+          return 0
+        }, arg)
+    } else {
+      result = SherpaOnnxOfflineSpeakerDiarizationProcess(
+        impl, samples, Int32(samples.count))
+    }
+    guard let result else { return [] }
+    defer { SherpaOnnxOfflineSpeakerDiarizationDestroyResult(result) }
+
+    let count = Int(SherpaOnnxOfflineSpeakerDiarizationResultGetNumSegments(result))
+    guard count > 0,
+      let segments = SherpaOnnxOfflineSpeakerDiarizationResultSortByStartTime(result)
+    else { return [] }
+    defer { SherpaOnnxOfflineSpeakerDiarizationDestroySegment(segments) }
+
+    return (0..<count).map { index in
+      SherpaOnnxDiarizationSegmentValue(
+        start: segments[index].start,
+        end: segments[index].end,
+        speaker: Int(segments[index].speaker))
+    }
+  }
+}

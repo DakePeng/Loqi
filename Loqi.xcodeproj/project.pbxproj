@@ -88,6 +88,7 @@
 		5341E1DBFC0407DA458DCA42 /* LoqiWave.swift in Sources */ = {isa = PBXBuildFile; fileRef = 70DEE8ABDA18358DBA64673E /* LoqiWave.swift */; };
 		546E4D8BD25310D70137E072 /* HotwordMatcherTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4FDF38E07F78ADF1861D66B4 /* HotwordMatcherTests.swift */; };
 		5575BBCF3A42796B3BB2FD80 /* PercentProgressRow.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2D414A8AF4C08540C3AB876A /* PercentProgressRow.swift */; };
+		5698F66E330378EA1B5046F2 /* DiarizerModelStoreTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C06CF9C3E1D64D07530A6F38 /* DiarizerModelStoreTests.swift */; };
 		56B92E07588550FC42F61E67 /* LoqiApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 308CF87D0A6DEBCA2563777D /* LoqiApp.swift */; };
 		5715BE4C7911ADF4EE9AEAE0 /* Tokenizers in Frameworks */ = {isa = PBXBuildFile; productRef = 863B46B7F31153A7009DAB85 /* Tokenizers */; };
 		578E0172094202A677835A8D /* SessionArchiveLoadTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5310C2535354F241E2B8E669 /* SessionArchiveLoadTests.swift */; };
@@ -105,6 +106,7 @@
 		67C70966AD29B5FB28C53A9A /* SenseVoiceModelStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7824B48A263CDF5726F3954B /* SenseVoiceModelStore.swift */; };
 		68B3C6BECF43E96E422F93D7 /* ChunkNoteQueue.swift in Sources */ = {isa = PBXBuildFile; fileRef = D8283AB78817C5825FDA683A /* ChunkNoteQueue.swift */; };
 		692E23D58EE06BE8F3D929E0 /* MicButton.swift in Sources */ = {isa = PBXBuildFile; fileRef = 459B21EDB59DE33FFB14ADD4 /* MicButton.swift */; };
+		69527F0AECEA61917C9EED5D /* DiarizerModelStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = BD628B791AB470052C24BA7B /* DiarizerModelStore.swift */; };
 		69695E4861255B1641EFB575 /* SenseVoiceEngine.swift in Sources */ = {isa = PBXBuildFile; fileRef = 15EB74813A0CBD39EAC1EE4E /* SenseVoiceEngine.swift */; };
 		69B40E55E5A937C78AD5F4C3 /* SherpaOnnx.swift in Sources */ = {isa = PBXBuildFile; fileRef = D65EB9D02508517B806EBCBD /* SherpaOnnx.swift */; };
 		6A157AEE0E77B028E15B6757 /* OnboardingView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B775D8A99BD5EDFB9C58627E /* OnboardingView.swift */; };
@@ -142,7 +144,6 @@
 		85E0B5C06FAB5E56621E472C /* LLMServicing.swift in Sources */ = {isa = PBXBuildFile; fileRef = 74857CF912BBE5432C719DB1 /* LLMServicing.swift */; };
 		8679C8E82460E01D51495D3D /* BackgroundTaskGrace.swift in Sources */ = {isa = PBXBuildFile; fileRef = 48522C67B0AB868109327858 /* BackgroundTaskGrace.swift */; };
 		8679CA972AAF91EC0EC9D9FC /* FileImportEngine.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3CFBA5EC1674530CD930510D /* FileImportEngine.swift */; };
-		86C522859BAD867BF67CA44F /* FluidAudio in Frameworks */ = {isa = PBXBuildFile; productRef = 70624DD41B414B4E78CE0718 /* FluidAudio */; };
 		87DFDEF6C2C92074C2D460CC /* OfflineTranscriber.swift in Sources */ = {isa = PBXBuildFile; fileRef = 40403C67E9DF5E3ABE6065FB /* OfflineTranscriber.swift */; };
 		87EBEF38A1F6A34A48411734 /* TranscriptionEngine.swift in Sources */ = {isa = PBXBuildFile; fileRef = E4DDAA896FC59D045AC14697 /* TranscriptionEngine.swift */; };
 		87F89488779D7E86E399F924 /* Info.plist in Resources */ = {isa = PBXBuildFile; fileRef = 7BE8B320A9AAA77A65E9D219 /* Info.plist */; };
@@ -232,6 +233,7 @@
 		CE7C559396E50F7170C7E944 /* SessionDetailView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 98386B7DD38C7EEB2DCEDDE4 /* SessionDetailView.swift */; };
 		CF95DD8173CB363029B9ECEB /* SummaryEngineTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6EBED47EB0DC58C812D88707 /* SummaryEngineTests.swift */; };
 		D190C697B5BC3B172A94A3BF /* CameraCaptureView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8D6508556B6DEA9E8B08D2EF /* CameraCaptureView.swift */; };
+		D22102912357815E7B9B5845 /* DiarizerModelStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = BD628B791AB470052C24BA7B /* DiarizerModelStore.swift */; };
 		D278CE504E9AF0F7ADB5E8F5 /* TranscriptionEvent.swift in Sources */ = {isa = PBXBuildFile; fileRef = 69BCFECCC82D5100F692C098 /* TranscriptionEvent.swift */; };
 		D2849917D0A2977D4C016449 /* RecordingActivityAttributes.swift in Sources */ = {isa = PBXBuildFile; fileRef = 41E9D4764DBB6C40E9D6A323 /* RecordingActivityAttributes.swift */; };
 		D537023F520C5241269807CA /* ChatEngine.swift in Sources */ = {isa = PBXBuildFile; fileRef = 55EE28A2F9E530CB188D3845 /* ChatEngine.swift */; };
@@ -257,7 +259,6 @@
 		E422AF3F439C76AD1CF9A1CE /* LoqiWidgetsBundle.swift in Sources */ = {isa = PBXBuildFile; fileRef = BDA1CD36A89434A0A5A35A0A /* LoqiWidgetsBundle.swift */; };
 		E4AE5FD3008D3C9DE3B05210 /* HotwordStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0F36E951E6BE5217E61D3C85 /* HotwordStore.swift */; };
 		E4E396E7F38BDAE70D65742C /* ModelCatalogTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B751EAA2E58353A71DA228C0 /* ModelCatalogTests.swift */; };
-		E5A5CB61607AB32C88271A6E /* FluidAudio in Frameworks */ = {isa = PBXBuildFile; productRef = 06F3D45545BCAA5332736FB3 /* FluidAudio */; };
 		E93E53BC385EB1DB63B1F865 /* Localizable.xcstrings in Resources */ = {isa = PBXBuildFile; fileRef = FD121032C39383987EFCB95D /* Localizable.xcstrings */; };
 		EA356E99E4D0DA74462A9C00 /* MicSensitivity.swift in Sources */ = {isa = PBXBuildFile; fileRef = F391045510B4B61C4A6D5411 /* MicSensitivity.swift */; };
 		EA5696BC1FF63AB53E056A97 /* RefinementGate.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6C5CE305017DEB10EFF246C3 /* RefinementGate.swift */; };
@@ -353,7 +354,7 @@
 		2ECEA6861224037B26FE050E /* CaptionGroupingTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CaptionGroupingTests.swift; sourceTree = "<group>"; };
 		2F15D4CC8A9D0C8CB792720C /* SegmentedDownloader.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SegmentedDownloader.swift; sourceTree = "<group>"; };
 		308CF87D0A6DEBCA2563777D /* LoqiApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LoqiApp.swift; sourceTree = "<group>"; };
-		34AC9A7613D511E8150919B5 /* Loqi.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Loqi.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		34AC9A7613D511E8150919B5 /* Loqi.app */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.application; path = Loqi.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		36FB5229822E5E8CB0DC8E9E /* SessionRecordTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SessionRecordTests.swift; sourceTree = "<group>"; };
 		3A62F1491022EA7B6A2E045E /* CaptionSegment.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CaptionSegment.swift; sourceTree = "<group>"; };
 		3B8D918D03E0B5D581637D93 /* SerialGateTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SerialGateTests.swift; sourceTree = "<group>"; };
@@ -411,14 +412,14 @@
 		7D83B9A9F2D6DDFB76A97062 /* RecordingIntentsTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RecordingIntentsTests.swift; sourceTree = "<group>"; };
 		7EA86A8D148594D720AA89C5 /* LLMService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LLMService.swift; sourceTree = "<group>"; };
 		81B61599D345E2280443286E /* HotwordStoreTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HotwordStoreTests.swift; sourceTree = "<group>"; };
-		83151922C2D16166DA013083 /* PrivacyInfo.xcprivacy */ = {isa = PBXFileReference; lastKnownFileType = text.xml; path = PrivacyInfo.xcprivacy; sourceTree = "<group>"; };
+		83151922C2D16166DA013083 /* PrivacyInfo.xcprivacy */ = {isa = PBXFileReference; path = PrivacyInfo.xcprivacy; sourceTree = "<group>"; };
 		84A9869205000B5A7CF4543B /* CaptionRow.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CaptionRow.swift; sourceTree = "<group>"; };
 		88123D19EBC3BED4C88427F0 /* SegmentedDownloaderTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SegmentedDownloaderTests.swift; sourceTree = "<group>"; };
 		88BBE5AEB632DEC409E18EB2 /* RecordingIntents.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RecordingIntents.swift; sourceTree = "<group>"; };
 		8BF01D386057BF389DB6A369 /* SessionSearchTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SessionSearchTests.swift; sourceTree = "<group>"; };
-		8C114D3DDBA6F981F1710E7E /* LoqiMac.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; name = LoqiMac.app; path = Loqi.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		8C114D3DDBA6F981F1710E7E /* LoqiMac.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = LoqiMac.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		8D6508556B6DEA9E8B08D2EF /* CameraCaptureView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CameraCaptureView.swift; sourceTree = "<group>"; };
-		8DCA245933F40873234335B1 /* LoqiWidgets.appex */ = {isa = PBXFileReference; explicitFileType = "wrapper.app-extension"; includeInIndex = 0; path = LoqiWidgets.appex; sourceTree = BUILT_PRODUCTS_DIR; };
+		8DCA245933F40873234335B1 /* LoqiWidgets.appex */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = "wrapper.app-extension"; path = LoqiWidgets.appex; sourceTree = BUILT_PRODUCTS_DIR; };
 		903F44B495B75E8BC20A4689 /* onnxruntime.xcframework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.xcframework; name = onnxruntime.xcframework; path = "ThirdParty/sherpa-onnx/onnxruntime.xcframework"; sourceTree = "<group>"; };
 		90994BD0FF81B6ACFC75C0B7 /* SessionSearch.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SessionSearch.swift; sourceTree = "<group>"; };
 		92289645D254D9B0D95AB3A2 /* CaptionEntry.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CaptionEntry.swift; sourceTree = "<group>"; };
@@ -443,9 +444,11 @@
 		B775D8A99BD5EDFB9C58627E /* OnboardingView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OnboardingView.swift; sourceTree = "<group>"; };
 		B7A7F7259D2B71EFB7420853 /* PromptBuilder.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PromptBuilder.swift; sourceTree = "<group>"; };
 		BC58383D810B647A699435AE /* HotwordTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HotwordTests.swift; sourceTree = "<group>"; };
+		BD628B791AB470052C24BA7B /* DiarizerModelStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DiarizerModelStore.swift; sourceTree = "<group>"; };
 		BDA1CD36A89434A0A5A35A0A /* LoqiWidgetsBundle.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LoqiWidgetsBundle.swift; sourceTree = "<group>"; };
 		BFEE2AA6C548E6EB86BB0AEE /* AudioCaptureService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AudioCaptureService.swift; sourceTree = "<group>"; };
 		C0016187ADD9AD781E091E55 /* ModelFileDownloader.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ModelFileDownloader.swift; sourceTree = "<group>"; };
+		C06CF9C3E1D64D07530A6F38 /* DiarizerModelStoreTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DiarizerModelStoreTests.swift; sourceTree = "<group>"; };
 		C1DE3A3884A6A2AAA3C94A44 /* AttachmentNotes.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AttachmentNotes.swift; sourceTree = "<group>"; };
 		C99399D197B5F121BD811467 /* TranscriptSegmenterTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TranscriptSegmenterTests.swift; sourceTree = "<group>"; };
 		CDA8400D7A274167576020D3 /* Backoff.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Backoff.swift; sourceTree = "<group>"; };
@@ -500,7 +503,6 @@
 				D7383FDD49AF2FA90DCC3BB3 /* MLXHuggingFace in Frameworks */,
 				51C34F0ADC46C9ABC8DAF3B6 /* HuggingFace in Frameworks */,
 				1A8F1142C759BA3B5CAB489E /* Tokenizers in Frameworks */,
-				86C522859BAD867BF67CA44F /* FluidAudio in Frameworks */,
 				8E6E321BC6001FD2AF364959 /* sherpa-onnx.xcframework in Frameworks */,
 				EE4BEDE2EF7CB092D027EB05 /* onnxruntime.xcframework in Frameworks */,
 			);
@@ -516,7 +518,6 @@
 				D5D6559E4106A78C90ABE621 /* MLXHuggingFace in Frameworks */,
 				76B02505A6DBE5E52753FD9D /* HuggingFace in Frameworks */,
 				5715BE4C7911ADF4EE9AEAE0 /* Tokenizers in Frameworks */,
-				E5A5CB61607AB32C88271A6E /* FluidAudio in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -582,6 +583,7 @@
 		31511152746BD9E09BA3AEE6 /* Speaker */ = {
 			isa = PBXGroup;
 			children = (
+				BD628B791AB470052C24BA7B /* DiarizerModelStore.swift */,
 				AB756D1AD72B9110877F866A /* SpeakerAttribution.swift */,
 				FA6A7D6ACF15BA8E2C9D5850 /* VoiceprintMath.swift */,
 				DE5639C60818D4F8F6684DF3 /* VoiceprintService.swift */,
@@ -824,6 +826,7 @@
 				0907F9CE73EB9804413F755E /* CaptionStoreTests.swift */,
 				61C17F682960008E1A811CA7 /* ChatEngineTests.swift */,
 				9E472A5856116620E6D8A6F6 /* ChunkNoteQueueTests.swift */,
+				C06CF9C3E1D64D07530A6F38 /* DiarizerModelStoreTests.swift */,
 				218261B7B0EEF7B8B3A37CB5 /* FarFieldGainTests.swift */,
 				4FDF38E07F78ADF1861D66B4 /* HotwordMatcherTests.swift */,
 				81B61599D345E2280443286E /* HotwordStoreTests.swift */,
@@ -941,7 +944,6 @@
 				2133AEEEEACEF071C871856B /* MLXHuggingFace */,
 				DF72EB512EA9B5229EBB0055 /* HuggingFace */,
 				863B46B7F31153A7009DAB85 /* Tokenizers */,
-				06F3D45545BCAA5332736FB3 /* FluidAudio */,
 			);
 			productName = LoqiMac;
 			productReference = 8C114D3DDBA6F981F1710E7E /* LoqiMac.app */;
@@ -987,7 +989,6 @@
 				498E0C233025E1760370F46F /* MLXHuggingFace */,
 				0C7A84442EAB2F31D600E761 /* HuggingFace */,
 				27B5E8C08761462A51084323 /* Tokenizers */,
-				70624DD41B414B4E78CE0718 /* FluidAudio */,
 			);
 			productName = Loqi;
 			productReference = 34AC9A7613D511E8150919B5 /* Loqi.app */;
@@ -1055,7 +1056,6 @@
 			mainGroup = 110B51C889CCDAAE03EE2C49;
 			minimizedProjectReferenceProxies = 1;
 			packageReferences = (
-				E74AA41DD45B411B56E3D345 /* XCRemoteSwiftPackageReference "FluidAudio" */,
 				E9C36079467A409333904AF2 /* XCRemoteSwiftPackageReference "swift-huggingface" */,
 				4C58B5B0631047FDC82CC11D /* XCRemoteSwiftPackageReference "mlx-swift-lm" */,
 				F3ECCE7CDC6FD4608DC17374 /* XCRemoteSwiftPackageReference "swift-transformers" */,
@@ -1117,6 +1117,7 @@
 				1A99E3E770EEEE9758682B79 /* CaptionStoreTests.swift in Sources */,
 				C2F391AC6F3AB18718438665 /* ChatEngineTests.swift in Sources */,
 				BCF91A42611A9DE608141C06 /* ChunkNoteQueueTests.swift in Sources */,
+				5698F66E330378EA1B5046F2 /* DiarizerModelStoreTests.swift in Sources */,
 				DCE3AD828BCAD92A94A6612F /* FarFieldGainTests.swift in Sources */,
 				546E4D8BD25310D70137E072 /* HotwordMatcherTests.swift in Sources */,
 				B732EDB2511D7263E43BE10A /* HotwordStoreTests.swift in Sources */,
@@ -1180,6 +1181,7 @@
 				C488532EEEC5D82F81FFE8FB /* CaptionStore.swift in Sources */,
 				C878C5A648A9E9C386CE5DE2 /* ChatEngine.swift in Sources */,
 				68B3C6BECF43E96E422F93D7 /* ChunkNoteQueue.swift in Sources */,
+				69527F0AECEA61917C9EED5D /* DiarizerModelStore.swift in Sources */,
 				133A89F75A8B586B06CDF755 /* DownloadProgressRow.swift in Sources */,
 				8679CA972AAF91EC0EC9D9FC /* FileImportEngine.swift in Sources */,
 				B644F1BB77FAE48FD7A7BC44 /* HorizontalCaptionView.swift in Sources */,
@@ -1300,6 +1302,7 @@
 				6195C838E569B782C70CFC89 /* CaptionStore.swift in Sources */,
 				D537023F520C5241269807CA /* ChatEngine.swift in Sources */,
 				58F2F69AB7F8735F7BDE71B3 /* ChunkNoteQueue.swift in Sources */,
+				D22102912357815E7B9B5845 /* DiarizerModelStore.swift in Sources */,
 				274EF482C3591566996FFF53 /* DownloadProgressRow.swift in Sources */,
 				AEA6079175BF368C286A39F8 /* FileImportEngine.swift in Sources */,
 				1AC88BF1ED94B757357F3B8E /* HorizontalCaptionView.swift in Sources */,
@@ -1496,7 +1499,6 @@
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				CODE_SIGN_ENTITLEMENTS = LoqiWidgets/LoqiWidgets.entitlements;
-				DEVELOPMENT_TEAM = K2WK8HQC4L;
 				INFOPLIST_FILE = LoqiWidgets/Info.plist;
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
@@ -1506,7 +1508,10 @@
 				PRODUCT_BUNDLE_IDENTIFIER = com.kunzhipeng.loqi.LoqiWidgets;
 				SDKROOT = iphoneos;
 				SKIP_INSTALL = YES;
-				SWIFT_ACTIVE_COMPILATION_CONDITIONS = "$(inherited) LOQI_WIDGET";
+				SWIFT_ACTIVE_COMPILATION_CONDITIONS = (
+					"$(inherited)",
+					LOQI_WIDGET,
+				);
 				TARGETED_DEVICE_FAMILY = "1,2";
 			};
 			name = Debug;
@@ -1516,7 +1521,9 @@
 			buildSettings = {
 				BUNDLE_LOADER = "$(TEST_HOST)";
 				GENERATE_INFOPLIST_FILE = YES;
-				HEADER_SEARCH_PATHS = "$(SRCROOT)/ThirdParty/sherpa-onnx/sherpa-onnx.xcframework/Headers";
+				HEADER_SEARCH_PATHS = (
+					"$(SRCROOT)/ThirdParty/sherpa-onnx/sherpa-onnx.xcframework/Headers",
+				);
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/Frameworks",
@@ -1534,7 +1541,9 @@
 			buildSettings = {
 				BUNDLE_LOADER = "$(TEST_HOST)";
 				GENERATE_INFOPLIST_FILE = YES;
-				HEADER_SEARCH_PATHS = "$(SRCROOT)/ThirdParty/sherpa-onnx/sherpa-onnx.xcframework/Headers";
+				HEADER_SEARCH_PATHS = (
+					"$(SRCROOT)/ThirdParty/sherpa-onnx/sherpa-onnx.xcframework/Headers",
+				);
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/Frameworks",
@@ -1638,18 +1647,21 @@
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
 				CODE_SIGN_ENTITLEMENTS = Loqi/Loqi.entitlements;
 				CODE_SIGN_IDENTITY = "iPhone Developer";
-				DEVELOPMENT_TEAM = K2WK8HQC4L;
 				FRAMEWORK_SEARCH_PATHS = (
 					"$(inherited)",
 					"\"ThirdParty/sherpa-onnx\"",
 				);
-				HEADER_SEARCH_PATHS = "$(SRCROOT)/ThirdParty/sherpa-onnx/sherpa-onnx.xcframework/Headers";
+				HEADER_SEARCH_PATHS = (
+					"$(SRCROOT)/ThirdParty/sherpa-onnx/sherpa-onnx.xcframework/Headers",
+				);
 				INFOPLIST_FILE = Loqi/Info.plist;
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/Frameworks",
 				);
-				OTHER_LDFLAGS = "-lc++";
+				OTHER_LDFLAGS = (
+					"-lc++",
+				);
 				PRODUCT_BUNDLE_IDENTIFIER = com.kunzhipeng.loqi;
 				SDKROOT = iphoneos;
 				SWIFT_OBJC_BRIDGING_HEADER = "Loqi/Pipeline/ASR/SherpaOnnx/SherpaOnnx-Bridging-Header.h";
@@ -1664,18 +1676,21 @@
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
 				CODE_SIGN_ENTITLEMENTS = Loqi/Loqi.entitlements;
 				CODE_SIGN_IDENTITY = "iPhone Developer";
-				DEVELOPMENT_TEAM = K2WK8HQC4L;
 				FRAMEWORK_SEARCH_PATHS = (
 					"$(inherited)",
 					"\"ThirdParty/sherpa-onnx\"",
 				);
-				HEADER_SEARCH_PATHS = "$(SRCROOT)/ThirdParty/sherpa-onnx/sherpa-onnx.xcframework/Headers";
+				HEADER_SEARCH_PATHS = (
+					"$(SRCROOT)/ThirdParty/sherpa-onnx/sherpa-onnx.xcframework/Headers",
+				);
 				INFOPLIST_FILE = Loqi/Info.plist;
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/Frameworks",
 				);
-				OTHER_LDFLAGS = "-lc++";
+				OTHER_LDFLAGS = (
+					"-lc++",
+				);
 				PRODUCT_BUNDLE_IDENTIFIER = com.kunzhipeng.loqi;
 				SDKROOT = iphoneos;
 				SWIFT_OBJC_BRIDGING_HEADER = "Loqi/Pipeline/ASR/SherpaOnnx/SherpaOnnx-Bridging-Header.h";
@@ -1724,7 +1739,6 @@
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				CODE_SIGN_ENTITLEMENTS = LoqiWidgets/LoqiWidgets.entitlements;
-				DEVELOPMENT_TEAM = K2WK8HQC4L;
 				INFOPLIST_FILE = LoqiWidgets/Info.plist;
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
@@ -1734,7 +1748,10 @@
 				PRODUCT_BUNDLE_IDENTIFIER = com.kunzhipeng.loqi.LoqiWidgets;
 				SDKROOT = iphoneos;
 				SKIP_INSTALL = YES;
-				SWIFT_ACTIVE_COMPILATION_CONDITIONS = "$(inherited) LOQI_WIDGET";
+				SWIFT_ACTIVE_COMPILATION_CONDITIONS = (
+					"$(inherited)",
+					LOQI_WIDGET,
+				);
 				TARGETED_DEVICE_FAMILY = "1,2";
 			};
 			name = Release;
@@ -1807,14 +1824,6 @@
 				version = 3.31.3;
 			};
 		};
-		E74AA41DD45B411B56E3D345 /* XCRemoteSwiftPackageReference "FluidAudio" */ = {
-			isa = XCRemoteSwiftPackageReference;
-			repositoryURL = "https://github.com/FluidInference/FluidAudio";
-			requirement = {
-				kind = exactVersion;
-				version = 0.15.2;
-			};
-		};
 		E9C36079467A409333904AF2 /* XCRemoteSwiftPackageReference "swift-huggingface" */ = {
 			isa = XCRemoteSwiftPackageReference;
 			repositoryURL = "https://github.com/huggingface/swift-huggingface";
@@ -1834,11 +1843,6 @@
 /* End XCRemoteSwiftPackageReference section */
 
 /* Begin XCSwiftPackageProductDependency section */
-		06F3D45545BCAA5332736FB3 /* FluidAudio */ = {
-			isa = XCSwiftPackageProductDependency;
-			package = E74AA41DD45B411B56E3D345 /* XCRemoteSwiftPackageReference "FluidAudio" */;
-			productName = FluidAudio;
-		};
 		0C7A84442EAB2F31D600E761 /* HuggingFace */ = {
 			isa = XCSwiftPackageProductDependency;
 			package = E9C36079467A409333904AF2 /* XCRemoteSwiftPackageReference "swift-huggingface" */;
@@ -1868,11 +1872,6 @@
 			isa = XCSwiftPackageProductDependency;
 			package = 4C58B5B0631047FDC82CC11D /* XCRemoteSwiftPackageReference "mlx-swift-lm" */;
 			productName = MLXHuggingFace;
-		};
-		70624DD41B414B4E78CE0718 /* FluidAudio */ = {
-			isa = XCSwiftPackageProductDependency;
-			package = E74AA41DD45B411B56E3D345 /* XCRemoteSwiftPackageReference "FluidAudio" */;
-			productName = FluidAudio;
 		};
 		863B46B7F31153A7009DAB85 /* Tokenizers */ = {
 			isa = XCSwiftPackageProductDependency;

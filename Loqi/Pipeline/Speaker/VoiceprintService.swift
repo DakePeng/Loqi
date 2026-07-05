@@ -1,25 +1,23 @@
 import AVFoundation
-import FluidAudio
 import Foundation
 import os
 
-/// Whole-file (offline) speaker diarization: FluidAudio's Pyannote
-/// Community-1 pipeline (powerset segmentation + WeSpeaker + VBx)
-/// processes a complete recording at once, far more accurately than any
-/// streaming pass. The ONLY diarizer — live recordings get their speaker
-/// labels from the post-process pass over the saved audio (the old live
-/// Sortformer cost more heat next to ASR + the LLM than it was worth).
-///
-/// Stateless: each call builds and tears down its own CoreML manager —
-/// imports are occasional and CoreML keeps the compiled models on disk.
+/// Whole-file (offline) speaker diarization on sherpa-onnx: pyannote
+/// segmentation-3.0 (overlap-aware frame-level activity) + 3D-Speaker's
+/// bilingual zh/en CAM++ embedding, fast-clustered. Replaced the
+/// FluidAudio Pyannote bundle so the models mirror to ModelScope
+/// (see DiarizerModelStore) and all audio ML runs on the one vendored
+/// ONNX runtime. The ONLY diarizer — live recordings get their speaker
+/// labels from the post-process pass over the saved audio.
 actor VoiceprintService {
     /// Speaker-picker ceiling for explicit counts; "Auto" (-1) discovers
     /// up to `clusterCap`'s generous limit on its own.
     nonisolated static let maxSupportedSpeakers = 4
 
-    /// Rough bundle size for download speedometers only — an approximation
-    /// skews the MB/s readout, never progress.
-    nonisolated static let approximateDownloadBytes: Int64 = 80_000_000
+    /// Bundle size for download speedometers and the onboarding total.
+    nonisolated static var approximateDownloadBytes: Int64 {
+        DiarizerModelStore.totalExpectedBytes
+    }
 
     /// Map the speaker-picker value to a clustering cap: 2+ = hard cap,
     /// -1 ("Auto") = discover the count under a generous ceiling, 0/1 = nil
@@ -32,31 +30,24 @@ actor VoiceprintService {
         }
     }
 
-    /// Pre-download the offline model bundle (Settings / onboarding), so
-    /// the first post-process or import needs no network.
-    static func downloadModels(
-        source: DiarizerSource,
-        onProgress: (@Sendable (Double) -> Void)? = nil
-    ) async throws {
-        ModelRegistry.baseURL = source.baseURL
-        _ = try await withExponentialBackoff(attempts: 3) {
-            try await OfflineDiarizerModels.load { progress in
-                onProgress?(progress.fractionCompleted)
-            }
-        }
+    /// Explicit picks force that cluster count (sherpa's fast clustering
+    /// bypasses the threshold when the count is known — strongly preferred
+    /// per its docs). "Auto" arrives as a cap above the picker ceiling and
+    /// discovers the count by distance threshold instead. Pure for testing.
+    nonisolated static func clustering(
+        maxSpeakers: Int
+    ) -> (numClusters: Int, threshold: Float) {
+        maxSpeakers <= maxSupportedSpeakers
+            ? (numClusters: maxSpeakers, threshold: 0)
+            // ponytail: 0.5 is sherpa's reference default; tune on device
+            // if Auto over/under-splits.
+            : (numClusters: -1, threshold: 0.5)
     }
 
-    /// Whether the offline file-diarization model bundle is already cached on
-    /// disk. Derives the path exactly as FluidAudio's loader does so it can't
-    /// drift from where `diarizeFile` looks. Lets the import flow ask consent
-    /// before a first-use network download instead of fetching silently.
+    /// Whether both model files are already on disk. Lets the import flow
+    /// ask consent before a first-use network download.
     nonisolated static var isOfflineDiarizerDownloaded: Bool {
-        let repoDir = OfflineDiarizerModels.defaultModelsDirectory()
-            .appendingPathComponent(Repo.diarizer.folderName)
-        return ModelNames.OfflineDiarizer.requiredModels.allSatisfy {
-            FileManager.default.fileExists(
-                atPath: repoDir.appendingPathComponent($0).path)
-        }
+        DiarizerModelStore.isInstalled
     }
 
     enum FileDiarizationProgress: Sendable {
@@ -64,49 +55,80 @@ actor VoiceprintService {
         case analysis(Double)
     }
 
-    /// Diarize a complete audio file with FluidAudio's offline pipeline.
-    /// The model bundle downloads on first use (honoring the chosen mirror).
-    /// Returns segments with dense slot numbers by first appearance.
+    enum DiarizationError: LocalizedError {
+        case unsupportedPlatform
+        case modelLoadFailed
+
+        var errorDescription: String? {
+            switch self {
+            case .unsupportedPlatform:
+                String(localized: "Speaker separation isn't available on this platform.")
+            case .modelLoadFailed:
+                String(localized: "The speaker model couldn't be loaded — try re-downloading it.")
+            }
+        }
+    }
+
+    /// Pre-download the model bundle (Settings / onboarding), so the first
+    /// post-process or import needs no network.
+    static func downloadModels(
+        source: ASRModelSource,
+        onProgress: (@Sendable (Double) -> Void)? = nil
+    ) async throws {
+        try await DiarizerModelStore.download(from: source, onProgress: onProgress)
+    }
+
+    /// Diarize a complete audio file. Missing models download on first use
+    /// (honoring the persisted source choice). Returns segments with dense
+    /// slot numbers by first appearance, sorted by start time.
     func diarizeFile(
         url: URL,
         maxSpeakers: Int,
-        source: DiarizerSource = .huggingFace,
+        source: ASRModelSource = DiarizerModelStore.currentSource,
         onProgress: (@Sendable (FileDiarizationProgress) -> Void)? = nil
     ) async throws -> [SpeakerAttribution.Segment] {
-        ModelRegistry.baseURL = source.baseURL
-        var clustering = OfflineDiarizerConfig.Clustering.community
-        clustering.maxSpeakers = max(2, maxSpeakers)
-        let manager = OfflineDiarizerManager(
-            config: OfflineDiarizerConfig(clustering: clustering))
-
-        // A cache hit still drives this callback while CoreML compiles the
-        // models from disk — surface the download phase only when a real
-        // network fetch will happen.
-        let needsDownload = !Self.isOfflineDiarizerDownloaded
-        let models = try await withExponentialBackoff(attempts: 3) {
-            try await OfflineDiarizerModels.load { progress in
-                guard needsDownload else { return }
-                onProgress?(.download(progress.fractionCompleted))
+        #if os(iOS)
+        if !DiarizerModelStore.isInstalled {
+            try await DiarizerModelStore.download(from: source) {
+                onProgress?(.download($0))
             }
         }
-        manager.initialize(models: models)
+        let audioFile = try AVAudioFile(forReading: url)
+        let samples = try await OfflineTranscriber.decodeMono16k(audioFile)
 
-        let result = try await manager.process(url) { done, total in
+        let clustering = Self.clustering(maxSpeakers: maxSpeakers)
+        var config = sherpaOnnxOfflineSpeakerDiarizationConfig(
+            segmentation: sherpaOnnxOfflineSpeakerSegmentationModelConfig(
+                pyannote: sherpaOnnxOfflineSpeakerSegmentationPyannoteModelConfig(
+                    model: DiarizerModelStore.segmentationModelURL.path)),
+            embedding: sherpaOnnxSpeakerEmbeddingExtractorConfig(
+                model: DiarizerModelStore.embeddingModelURL.path),
+            clustering: sherpaOnnxFastClusteringConfig(
+                numClusters: clustering.numClusters,
+                threshold: clustering.threshold))
+        guard let diarizer = SherpaOnnxOfflineSpeakerDiarizationWrapper(config: &config)
+        else { throw DiarizationError.modelLoadFailed }
+
+        // One long synchronous C call: this actor's thread is blocked for
+        // the analysis — the same shape the FluidAudio pipeline had, and
+        // acceptable for an occasional post-process batch job.
+        let raw = diarizer.process(samples: samples) { done, total in
             onProgress?(.analysis(Double(done) / Double(max(total, 1))))
         }
 
-        let ordered = result.segments.sorted {
-            $0.startTimeSeconds < $1.startTimeSeconds
-        }
-        var slotByID: [String: Int] = [:]
-        return ordered.map { segment in
-            let slot = slotByID[
-                segment.speakerId, default: slotByID.count]
-            slotByID[segment.speakerId] = slot
+        var slotByID: [Int: Int] = [:]
+        return raw.map { segment in
+            let slot = slotByID[segment.speaker, default: slotByID.count]
+            slotByID[segment.speaker] = slot
             return SpeakerAttribution.Segment(
                 slot: slot,
-                start: TimeInterval(segment.startTimeSeconds),
-                end: TimeInterval(segment.endTimeSeconds))
+                start: TimeInterval(segment.start),
+                end: TimeInterval(segment.end))
         }
+        #else
+        // No sherpa runtime in the macOS target; diarization is gated off
+        // upstream (postProcessBackend and the import sheet).
+        throw DiarizationError.unsupportedPlatform
+        #endif
     }
 }

@@ -7,7 +7,7 @@ struct SettingsView: View {
     @AppStorage("model.id") private var modelID: String = ModelCatalog.default.id
     @AppStorage("model.source") private var sourceRaw: String = ModelSource.huggingFace.rawValue
     @AppStorage("llm.enabled") private var llmEnabled = true
-    @AppStorage(DiarizerSource.defaultsKey) private var diarizerSourceRaw = DiarizerSource.huggingFace.rawValue
+    @AppStorage(DiarizerModelStore.sourceDefaultsKey) private var diarizerSourceRaw = ASRModelSource.huggingFace.rawValue
     @AppStorage("audio.saveRecordings") private var saveRecordings = true
     @AppStorage("display.keepScreenOn") private var keepScreenOn = true
     @AppStorage("perf.reduceHeat") private var reduceHeat = false
@@ -235,7 +235,7 @@ struct SettingsView: View {
                 Section {
                     if !diarizerInstalled {
                         Picker("Download from", selection: $diarizerSourceRaw) {
-                            ForEach(DiarizerSource.allCases) { source in
+                            ForEach(ASRModelSource.allCases) { source in
                                 Text(source.displayName).tag(source.rawValue)
                             }
                         }
@@ -258,7 +258,7 @@ struct SettingsView: View {
                 } header: {
                     Text("Speaker recognition")
                 } footer: {
-                    Text("Powers speaker separation for recordings and imported audio. Voice data never leaves this iPhone. Use HF-Mirror if Hugging Face is unreachable — this model is not available on ModelScope.")
+                    Text("Powers speaker separation for recordings and imported audio. Voice data never leaves this iPhone. Use ModelScope if Hugging Face is unreachable.")
                 }
 
                 Section {
@@ -375,7 +375,7 @@ struct SettingsView: View {
         diarizerDownloading = true
         diarizerSpeedometer.start(totalBytes: VoiceprintService.approximateDownloadBytes)
         Task {
-            let source = DiarizerSource(rawValue: diarizerSourceRaw) ?? .huggingFace
+            let source = ASRModelSource(rawValue: diarizerSourceRaw) ?? .huggingFace
             do {
                 try await VoiceprintService.downloadModels(source: source) { progress in
                     Task { @MainActor in diarizerSpeedometer.update(progress) }

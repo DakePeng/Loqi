@@ -547,7 +547,7 @@ final class SummaryJobCenter {
             defer { heavyGate.release() }
             do {
                 let segments = try await voiceprint.diarizeFile(
-                    url: url, maxSpeakers: speakerCap, source: .current
+                    url: url, maxSpeakers: speakerCap
                 ) { [weak self] progress in
                     Task { @MainActor in
                         guard let self, self.activities[sessionID] != nil else { return }

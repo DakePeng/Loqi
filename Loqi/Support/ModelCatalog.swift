@@ -16,41 +16,6 @@ enum ModelSource: String, CaseIterable, Identifiable, Sendable {
     }
 }
 
-/// Where the speaker-recognition (diarization) models download from.
-/// ModelScope is not an option here: the FluidInference CoreML repos are
-/// not mirrored there (verified — "record not found"). HF-Mirror proxies
-/// all of Hugging Face with identical URL paths and works where
-/// huggingface.co is blocked.
-enum DiarizerSource: String, CaseIterable, Identifiable, Sendable {
-    case huggingFace
-    case hfMirror
-
-    var id: String { rawValue }
-
-    static let defaultsKey = "diarizer.source"
-
-    /// Persisted choice; absence of the key = .huggingFace.
-    static var current: DiarizerSource {
-        DiarizerSource(
-            rawValue: UserDefaults.standard.string(forKey: defaultsKey) ?? ""
-        ) ?? .huggingFace
-    }
-
-    var displayName: String {
-        switch self {
-        case .huggingFace: "Hugging Face"
-        case .hfMirror: "HF-Mirror 镜像"
-        }
-    }
-
-    var baseURL: String {
-        switch self {
-        case .huggingFace: "https://huggingface.co"
-        case .hfMirror: "https://hf-mirror.com"
-        }
-    }
-}
-
 /// Refinement models the app offers. Qwen3.5-2B is small enough for every
 /// supported device (iPhone 15+), so there is no per-device tier.
 struct ModelOption: Identifiable, Sendable, Equatable {

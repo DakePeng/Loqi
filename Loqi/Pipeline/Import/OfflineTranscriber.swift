@@ -186,8 +186,9 @@ enum OfflineTranscriber {
         return utterances.map { ($0.text, $0.start, $0.end) }
     }
 
-    /// Decode an audio file to a flat 16 kHz mono float buffer for SenseVoice.
-    private static func decodeMono16k(_ file: AVAudioFile) async throws -> [Float] {
+    /// Decode an audio file to a flat 16 kHz mono float buffer — shared by
+    /// the sherpa backends here and VoiceprintService's diarizer.
+    static func decodeMono16k(_ file: AVAudioFile) async throws -> [Float] {
         guard let target = AVAudioFormat(
             commonFormat: .pcmFormatFloat32,
             sampleRate: 16_000, channels: 1, interleaved: false),

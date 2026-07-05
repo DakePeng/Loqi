@@ -2,8 +2,8 @@ import Foundation
 
 /// The one region choice onboarding asks for: it fans out into the three
 /// per-model source settings Settings manages individually. China mainland
-/// maps the diarizer to HF-Mirror, not ModelScope — the FluidInference
-/// CoreML repos are not mirrored there (see DiarizerSource).
+/// maps everything to ModelScope, including the diarizer (its ONNX files
+/// are mirrored there — see DiarizerModelStore).
 enum DownloadRegion: String, CaseIterable, Identifiable {
     case global
     case chinaMainland
@@ -24,10 +24,10 @@ enum DownloadRegion: String, CaseIterable, Identifiable {
         }
     }
 
-    var diarizerSource: DiarizerSource {
+    var diarizerSource: ASRModelSource {
         switch self {
         case .global: .huggingFace
-        case .chinaMainland: .hfMirror
+        case .chinaMainland: .modelScope
         }
     }
 
@@ -64,7 +64,7 @@ enum DownloadRegion: String, CaseIterable, Identifiable {
     func persistSources(to defaults: UserDefaults = .standard) {
         defaults.set(llmSource.rawValue, forKey: "model.source")
         defaults.set(asrSource.rawValue, forKey: "asr.source")
-        defaults.set(diarizerSource.rawValue, forKey: DiarizerSource.defaultsKey)
+        defaults.set(diarizerSource.rawValue, forKey: DiarizerModelStore.sourceDefaultsKey)
     }
 }
 

@@ -21,12 +21,6 @@ packages:
   Transformers:
     url: https://github.com/huggingface/swift-transformers
     from: 1.3.0
-  # Speaker embeddings (voiceprint) on CoreML/ANE. Pinned exactly: loose
-  # ranges resolved differently on different machines (0.9.1 vs 0.15.2).
-  FluidAudio:
-    url: https://github.com/FluidInference/FluidAudio
-    exactVersion: 0.15.2
-
 settings:
   base:
     SWIFT_VERSION: "6.0"
@@ -101,8 +95,6 @@ targets:
         product: HuggingFace
       - package: Transformers
         product: Tokenizers
-      - package: FluidAudio
-        product: FluidAudio
       - framework: ThirdParty/sherpa-onnx/sherpa-onnx.xcframework
         embed: false
       - framework: ThirdParty/sherpa-onnx/onnxruntime.xcframework
@@ -147,8 +139,6 @@ targets:
         product: HuggingFace
       - package: Transformers
         product: Tokenizers
-      - package: FluidAudio
-        product: FluidAudio
 
   # Live Activity UI + Control Center toggle. Deliberately lean: no
   # packages, no bridging header, none of the heavyweight ML deps — only

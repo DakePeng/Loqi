@@ -173,7 +173,7 @@ struct SessionRetranscriber {
         do {
             onPhase(.identifyingSpeakers(0))
             let segments = try await voiceprint.diarizeFile(
-                url: url, maxSpeakers: speakerCap, source: .current
+                url: url, maxSpeakers: speakerCap
             ) { progress in
                 Task { @MainActor in
                     if case .analysis(let fraction) = progress {

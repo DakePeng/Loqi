@@ -239,7 +239,7 @@ final class FileImportEngine {
             onPhase(.identifyingSpeakers(0))
             do {
                 let segments = try await voiceprint.diarizeFile(
-                    url: recordingURL, maxSpeakers: speakerCap, source: .current
+                    url: recordingURL, maxSpeakers: speakerCap
                 ) { progress in
                     Task { @MainActor in
                         switch progress {
