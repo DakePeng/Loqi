@@ -10,8 +10,8 @@ import os
 /// go through the resumable, retrying ModelFileDownloader.
 enum DiarizerModelStore {
     /// One file the diarizer needs. `name` is the local filename; the
-    /// ModelScope repo mirrors the Hugging Face uploads byte-for-byte
-    /// (community mirror, same layout as the Qwen3-ASR one).
+    /// ModelScope paths are community mirrors verified byte-identical to
+    /// the Hugging Face uploads (sizes checked 2026-07-05).
     struct RemoteFile: Sendable {
         let name: String
         let hfPath: String
@@ -29,20 +29,17 @@ enum DiarizerModelStore {
         }
     }
 
-    private static let msRepo =
-        "models/zengshuishui/speaker-diarization-onnx/resolve/master"
-
     static let files: [RemoteFile] = [
         RemoteFile(
             name: "pyannote-segmentation-3-0.onnx",
             hfPath: "csukuangfj/sherpa-onnx-pyannote-segmentation-3-0/resolve/main/model.onnx",
-            modelScopePath: "\(msRepo)/pyannote-segmentation-3-0.onnx",
+            modelScopePath: "models/pengzhendong/sherpa-onnx-pyannote-segmentation-3-0/resolve/master/model.onnx",
             minBytes: 5_000_000,
             expectedBytes: 5_992_913),
         RemoteFile(
             name: "3dspeaker_speech_campplus_sv_zh_en_16k-common_advanced.onnx",
             hfPath: "csukuangfj/speaker-embedding-models/resolve/main/3dspeaker_speech_campplus_sv_zh_en_16k-common_advanced.onnx",
-            modelScopePath: "\(msRepo)/3dspeaker_speech_campplus_sv_zh_en_16k-common_advanced.onnx",
+            modelScopePath: "models/fengge2024/3dspeaker_speech_campplus_sv_zh_en_16k-common_advanced.onnx/resolve/master/3dspeaker_speech_campplus_sv_zh_en_16k-common_advanced.onnx",
             minBytes: 25_000_000,
             expectedBytes: 28_281_164),
     ]

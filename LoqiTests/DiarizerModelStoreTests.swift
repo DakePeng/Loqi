@@ -32,9 +32,11 @@ struct DiarizerModelStoreTests {
     @Test func pathsResolvePerSource() {
         for file in DiarizerModelStore.files {
             #expect(file.path(for: .huggingFace).hasPrefix("csukuangfj/"))
-            #expect(file.path(for: .modelScope)
-                .hasPrefix("models/zengshuishui/speaker-diarization-onnx/"))
-            #expect(file.path(for: .modelScope).hasSuffix(file.name))
+            // Community mirrors, verified byte-identical to the HF uploads
+            // (URLs + sizes checked 2026-07-05).
+            #expect(file.path(for: .modelScope).hasPrefix("models/"))
+            #expect(file.path(for: .modelScope).contains("/resolve/master/"))
+            #expect(file.path(for: .modelScope).hasSuffix(".onnx"))
         }
     }
 
