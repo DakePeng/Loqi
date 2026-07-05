@@ -100,15 +100,18 @@ struct PromptBuilder: Sendable {
     }
 
     /// Parse the restored sentence ("S:" tagged, fullwidth colon tolerated;
-    /// untagged output is taken whole).
+    /// untagged output is taken whole). Uses the sentence-safe cleaner:
+    /// transcripts legitimately contain markup ("use the <title> tag") and
+    /// the fidelity gate would accept its deletion, so only KNOWN model
+    /// wrapper tags are stripped here — unlike `cleanResponse`.
     func parseRestoredSentence(_ raw: String) -> String? {
-        for line in cleanResponse(raw).split(separator: "\n") {
+        for line in cleanSentenceResponse(raw).split(separator: "\n") {
             let trimmed = line.trimmingCharacters(in: .whitespaces)
             if let value = tagged(trimmed, "S") {
                 return value
             }
         }
-        let whole = cleanResponse(raw)
+        let whole = cleanSentenceResponse(raw)
         return whole.isEmpty ? nil : whole
     }
 
@@ -211,9 +214,22 @@ struct PromptBuilder: Sendable {
     }
 
     /// Parse the cleaned sentence — same tolerance as the hotword restore
-    /// ("S:" tagged or whole output).
+    /// ("S:" tagged or whole output), plus stripping the user-prompt label
+    /// the model sometimes echoes ("Sentence (English): …"); on long
+    /// inputs the echoed label would otherwise pass the fidelity gate and
+    /// pollute the saved transcript.
     func parseRefinedSentence(_ raw: String) -> String? {
-        parseRestoredSentence(raw)
+        guard let value = parseRestoredSentence(raw) else { return nil }
+        let stripped = Self.strippedPromptLabelEcho(value)
+        return stripped.isEmpty ? nil : stripped
+    }
+
+    static func strippedPromptLabelEcho(_ text: String) -> String {
+        guard let regex = try? NSRegularExpression(
+            pattern: #"^Sentence \([A-Za-z]+\)\s*[:：]\s*"#) else { return text }
+        let range = NSRange(text.startIndex..<text.endIndex, in: text)
+        return regex.stringByReplacingMatches(
+            in: text, range: range, withTemplate: "")
     }
 
     /// Fidelity gate: the hotword-restore checks (length ratio, similarity,
@@ -227,6 +243,20 @@ struct PromptBuilder: Sendable {
     /// Defensive cleanup: strip any thinking block the chat template let
     /// through, surrounding quotes, and label prefixes the model might add.
     func cleanResponse(_ raw: String) -> String {
+        cleaned(raw, strippingTags: Self.stripModelTags)
+    }
+
+    /// Sentence-safe variant for source-transcript output: strips only
+    /// KNOWN model wrapper tags, because spoken content can legitimately
+    /// contain markup ("use the <title> tag") that `stripModelTags`'s
+    /// any-tag regex would silently delete.
+    func cleanSentenceResponse(_ raw: String) -> String {
+        cleaned(raw, strippingTags: Self.stripKnownWrapperTags)
+    }
+
+    private func cleaned(
+        _ raw: String, strippingTags: (String) -> String
+    ) -> String {
         var text = raw
         while let start = text.range(
             of: "<think>", options: [.caseInsensitive]
@@ -245,12 +275,23 @@ struct PromptBuilder: Sendable {
         if let junk = text.range(of: "<|") {
             text = String(text[..<junk.lowerBound])
         }
-        text = Self.stripModelTags(text)
+        text = strippingTags(text)
         text = text.trimmingCharacters(in: .whitespacesAndNewlines)
         if text.hasPrefix("\"") && text.hasSuffix("\"") && text.count > 1 {
             text = String(text.dropFirst().dropLast())
         }
         return text.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    /// The wrapper tags small models actually leak around sentence output.
+    private static let knownWrapperTags = #"</?(?:think|thinking|answer|response|summary|output|result)>"#
+
+    static func stripKnownWrapperTags(_ text: String) -> String {
+        guard let regex = try? NSRegularExpression(
+            pattern: knownWrapperTags, options: [.caseInsensitive]) else { return text }
+        let range = NSRange(text.startIndex..<text.endIndex, in: text)
+        return regex.stringByReplacingMatches(
+            in: text, range: range, withTemplate: "")
     }
 
     /// Content fields must read as prose: the model copies its source-id

@@ -93,7 +93,12 @@ struct LiveCaptionsView: View {
                         pipeline: pipeline,
                         sessionID: finishedID,
                         onProceed: { style, length in
-                            pipeline.jobs.summarize(
+                            // Post-process first (offline ASR polish +
+                            // speaker labels from the saved audio), then
+                            // summarize — recordings have no live labels
+                            // anymore, so plain summarize here would ship
+                            // every stop-flow session unlabeled.
+                            pipeline.jobs.postProcessAndSummarizeNewSession(
                                 sessionID: finishedID,
                                 style: style,
                                 length: length,

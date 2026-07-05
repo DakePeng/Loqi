@@ -2673,6 +2673,38 @@
         }
       }
     },
+    "Photo AI model files" : {
+      "localizations" : {
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "写真AIモデルのファイル"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "照片 AI 模型文件"
+          }
+        }
+      }
+    },
+    "Download photo model (0.8B)" : {
+      "localizations" : {
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "写真モデルをダウンロード（0.8B）"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "下载照片模型（0.8B）"
+          }
+        }
+      }
+    },
     "Live recording always uses the fast Qwen3.5 0.8B model so captions and live translation stay responsive and cool. After a recording, summaries, titles, vocabulary and chat use the summary model you pick above." : {
       "extractionState" : "manual",
       "localizations" : {

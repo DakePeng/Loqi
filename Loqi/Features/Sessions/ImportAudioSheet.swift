@@ -67,6 +67,12 @@ struct ImportAudioSheet: View {
     }
 
     private func startImport(speakerCount: Int) {
+        // No sherpa runtime in the macOS target: diarizeFile throws
+        // unsupportedPlatform there, so force separation off (the picker
+        // is also hidden below).
+        #if os(macOS)
+        let speakerCount = 0
+        #endif
         pipeline.jobs.startImport(
             url: url,
             direction: LanguagePair(
@@ -97,11 +103,13 @@ struct ImportAudioSheet: View {
                             Text($0.displayName).tag($0.rawValue)
                         }
                     }
+                    #if os(iOS)
                     Picker("Speakers", selection: $speakerCount) {
                         Text("One voice").tag(0)
                         Text("Auto").tag(-1)
                         ForEach(2...6, id: \.self) { Text("\($0) speakers").tag($0) }
                     }
+                    #endif
                     if importEngine != "apple" {
                         Picker("Speech pickup", selection: $sensitivityRaw) {
                             ForEach(MicSensitivity.allCases) { preset in

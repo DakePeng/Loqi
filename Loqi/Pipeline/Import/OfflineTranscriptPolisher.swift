@@ -116,13 +116,22 @@ struct OfflineTranscriptPolisher {
                 case .unchanged:
                     break   // the model found no errors
                 case .rejected(let raw):
+                    // .private: the output derives from the user's speech;
+                    // Xcode's console still shows it while debugging, but
+                    // it stays out of sysdiagnoses and Console.app.
                     logger.warning(
-                        "offline cleanup rejected, fixed sentence kept: \(raw, privacy: .public)")
+                        "offline cleanup rejected, fixed sentence kept: \(raw, privacy: .private)")
                 }
             } catch is CancellationError {
                 throw CancellationError()
             } catch LLMServiceError.modelNotDownloaded {
                 logger.info("offline cleanup skipped: LFM2.5 not downloaded")
+                break
+            } catch LLMServiceError.insufficientMemory {
+                // Load-level failure: generate would re-run the whole
+                // admission retry for EVERY remaining utterance. Give up on
+                // the pass; the fixed sentences stand.
+                logger.info("offline cleanup aborted: not enough memory to load")
                 break
             } catch {
                 logger.warning(

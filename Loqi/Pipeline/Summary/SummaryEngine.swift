@@ -186,10 +186,14 @@ struct SummaryEngine {
         for index in updated.entries.indices {
             guard restored < Self.hygieneRestoreCap else { break }
             let entry = updated.entries[index]
-            // rawSourceText set means an earlier pass already restored it.
-            guard entry.rawSourceText == nil,
-                  matcher.shouldForceRefine(
-                    entry.sourceText, language: entry.direction.source)
+            // Restore only where a fuzzy near-miss is still present:
+            // exact-match mentions need no LLM, and entries the live
+            // cleanup already fixed stop matching. Deliberately NOT gated
+            // on rawSourceText — the live cleanup sets it for any accepted
+            // edit, and vocabulary added after the recording must still
+            // get its restore chance here.
+            guard matcher.hasUnresolvedNearMiss(
+                entry.sourceText, language: entry.direction.source)
             else { continue }
             let vocabulary = matcher.noteGlossaryLines(
                 language: entry.direction.source, text: entry.sourceText)

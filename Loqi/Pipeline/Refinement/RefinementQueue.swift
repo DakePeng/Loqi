@@ -113,13 +113,15 @@ actor RefinementQueue {
                     // Raw sentence stays; log the output so a model whose
                     // cleanups keep getting discarded (repetition, rewrite,
                     // garbled decode) is distinguishable from one that
-                    // never generated at all.
+                    // never generated at all. .private: it derives from the
+                    // user's speech — visible while debugging in Xcode,
+                    // redacted in sysdiagnoses and Console.app.
                     logger.warning(
-                        "refinement rejected, raw sentence kept: \(raw, privacy: .public)")
+                        "refinement rejected, raw sentence kept: \(raw, privacy: .private)")
                 }
             } catch {
                 logger.warning(
-                    "refinement generate failed, raw sentence kept: \(error.localizedDescription, privacy: .public)")
+                    "refinement generate failed, raw sentence kept: \(error.localizedDescription, privacy: .private)")
                 outcome = Outcome()
             }
             let entryID = job.entryID

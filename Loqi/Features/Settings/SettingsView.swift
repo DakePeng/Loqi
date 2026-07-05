@@ -21,6 +21,7 @@ struct SettingsView: View {
     @State private var qwen3Installed = Qwen3ASRModelStore.isInstalled
     @State private var qwen3Speedometer = DownloadSpeedometer()
     @State private var diarizerState = "—"
+    @State private var visionDownloaded = false
     @State private var diarizerInstalled = VoiceprintService.isOfflineDiarizerDownloaded
     @State private var diarizerDownloading = false
     @State private var diarizerError: String?
@@ -177,6 +178,28 @@ struct SettingsView: View {
                             }
                         }
 
+                        // Vision fallback — describes attached photos when
+                        // the summary pick is text-only (Bonsai). It left
+                        // the summary lineup, so it needs its own download
+                        // affordance or Bonsai-with-photos silently stays
+                        // OCR-only.
+                        LabeledContent(
+                            "Photo AI model files",
+                            value: visionDownloaded
+                                ? localized("Downloaded")
+                                : localized("Not downloaded"))
+                        if !visionDownloaded {
+                            if downloadingModelID == ModelCatalog.liveModel.id {
+                                DownloadProgressRow(
+                                    speedometer: llmSpeedometer, onStop: stopDownload)
+                            } else {
+                                Button("Download photo model (0.8B)") {
+                                    startDownload(ModelCatalog.liveModel)
+                                }
+                                .disabled(downloadingModelID != nil)
+                            }
+                        }
+
                         // Summary tier — user's pick, runs after recording.
                         Picker("Summary model", selection: $modelID) {
                             ForEach(ModelCatalog.all) { option in
@@ -232,6 +255,10 @@ struct SettingsView: View {
                     Text("During a recording, the tiny on-device Liquid LFM2.5 model cleans up the live transcript — fixing misheard words, names, and punctuation — while Apple's system translation produces the translation itself. Live notes and photo descriptions are generated after the recording ends. After a recording, summaries, titles, vocabulary and chat use the summary model you pick above.")
                 }
 
+                // No sherpa runtime in the macOS target — diarization is
+                // unavailable there, so don't offer a download that could
+                // never be used.
+                #if os(iOS)
                 Section {
                     if !diarizerInstalled {
                         Picker("Download from", selection: $diarizerSourceRaw) {
@@ -260,6 +287,7 @@ struct SettingsView: View {
                 } footer: {
                     Text("Powers speaker separation for recordings and imported audio. Voice data never leaves this iPhone. Use ModelScope if Hugging Face is unreachable.")
                 }
+                #endif
 
                 Section {
                     Toggle("Save audio recordings", isOn: $saveRecordings)
@@ -423,6 +451,7 @@ struct SettingsView: View {
         case .failed(let reason): llmState = localized("Failed: \(reason)")
         }
         liveDownloaded = LLMService.isDownloaded(model: ModelCatalog.liveRefineModel)
+        visionDownloaded = LLMService.isDownloaded(model: ModelCatalog.liveModel)
         summaryDownloaded = LLMService.isDownloaded(
             model: ModelCatalog.option(for: modelID))
         let bytes = await pipeline.llm.available()

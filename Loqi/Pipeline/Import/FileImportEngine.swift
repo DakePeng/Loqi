@@ -181,18 +181,26 @@ final class FileImportEngine {
     ) async throws -> SessionRecord {
         // Polish before the translation drafts so Apple translates the
         // cleaned text: hotword fixup for every backend, LFM2.5 cleanup
-        // for the non-accuracy-pass ones.
-        let (polished, ranCleanup) = try await OfflineTranscriptPolisher.run(
-            texts: utterances.map(\.text),
-            language: direction.source,
-            backend: backend,
-            llm: llm,
-            llmEnabled: llmCleanupEnabled,
-            matcher: hotwords?.matcher,
-            onProgress: { onPhase(.cleaningUpTranscript($0)) })
-        // Imports keep no resident LLM outside the cleanup phase; the
-        // auto-summary afterwards reloads what it needs itself.
-        if ranCleanup { await llm?.unload() }
+        // for the non-accuracy-pass ones. Imports keep no resident LLM
+        // outside the cleanup phase — including when the phase throws
+        // (cancelled, backgrounded, yielded to a recording) — so the
+        // unload also runs on the error path.
+        let polished: OfflineTranscriptPolisher.Output
+        do {
+            let (output, ranCleanup) = try await OfflineTranscriptPolisher.run(
+                texts: utterances.map(\.text),
+                language: direction.source,
+                backend: backend,
+                llm: llm,
+                llmEnabled: llmCleanupEnabled,
+                matcher: hotwords?.matcher,
+                onProgress: { onPhase(.cleaningUpTranscript($0)) })
+            if ranCleanup { await llm?.unload() }
+            polished = output
+        } catch {
+            await llm?.unload()
+            throw error
+        }
 
         var entries = utterances.enumerated().map { index, utterance in
             SessionRecord.Entry(

@@ -280,8 +280,15 @@ actor LLMService {
             MLX.Memory.cacheLimit = cacheLimit
             self.container = container
             loadState = .ready
+            // Keep set = summary lineup PLUS the live roles: the live-refine
+            // tier and the vision fallback are deliberately not in
+            // `ModelCatalog.all` anymore, and pruning their just-downloaded
+            // ModelScope snapshots would strand `.requireDownloaded` loads
+            // behind a stale downloaded-marker.
             ModelScopeDownloader.removeSnapshots(
-                notIn: Set(ModelCatalog.all.map(\.id)))
+                notIn: Set((ModelCatalog.all
+                    + [ModelCatalog.liveModel, ModelCatalog.liveRefineModel])
+                    .map(\.id)))
         } catch is CancellationError {
             // User stopped the download — back to a clean idle state, not an
             // error. Checkpointed files remain for a later resume.

@@ -1217,11 +1217,12 @@ final class CaptionPipeline {
         }
 
         // Instant feedback: Apple's draft translation of the raw ASR text.
-        // Sentence refinement no longer depends on translation being on —
-        // it cleans the transcript itself, and a translating session gets a
-        // second Apple pass over the cleaned sentence when it lands.
+        // Sentence refinement doesn't depend on translation being on OR
+        // succeeding — a failed draft (missing pack, session not mounted)
+        // marks the entry but the transcript still deserves its cleanup;
+        // the accepted cleanup's re-translate gets its own retry anyway.
         if direction.source != direction.target {
-            guard await produceDraft(for: entry) != nil else { return }
+            _ = await produceDraft(for: entry)
         }
 
         let matcher = hotwords.matcher
@@ -1435,7 +1436,10 @@ final class CaptionPipeline {
             defaults.set(true, forKey: key)   // already there (fresh installs)
             return
         }
-        guard llmEnabled, !isRunning,
+        // jobs.hasActiveWork: a resumed import/summary owns the shared LLM
+        // actor; interleaving setModel/load with its own would cancel one
+        // of the two. Skip and retry next launch.
+        guard llmEnabled, !isRunning, !jobs.hasActiveWork,
               LLMService.isDownloaded(model: ModelCatalog.liveModel)
         else { return }   // no prior live-AI consent (or busy) — retry next launch
         Task { [llm, logger, weak self] in

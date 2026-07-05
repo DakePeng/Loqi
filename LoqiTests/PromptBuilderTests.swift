@@ -122,6 +122,32 @@ struct PromptBuilderTests {
         #expect(builder.parseRefinedSentence("") == nil)
     }
 
+    @Test func parseRefinedSentenceStripsPromptLabelEcho() {
+        // The model echoing the user-prompt label must not pollute the
+        // saved transcript.
+        #expect(builder.parseRefinedSentence(
+            "Sentence (English): We meet with Zhipeng tomorrow.")
+            == "We meet with Zhipeng tomorrow.")
+        #expect(builder.parseRefinedSentence("Sentence (Chinese)：我们明天开会")
+            == "我们明天开会")
+        // A sentence merely starting with the word survives.
+        #expect(builder.parseRefinedSentence("Sentence structure matters here")
+            == "Sentence structure matters here")
+    }
+
+    @Test func sentenceParsingKeepsSpokenMarkup() {
+        // Transcripts about markup legitimately contain tags; only KNOWN
+        // model wrappers are stripped from sentence output.
+        #expect(builder.parseRefinedSentence("use the <title> tag in the header")
+            == "use the <title> tag in the header")
+        #expect(builder.parseRefinedSentence(
+            "<answer>use the <title> tag</answer>")
+            == "use the <title> tag")
+        #expect(builder.parseRefinedSentence(
+            "<think>hmm</think>use the <title> tag")
+            == "use the <title> tag")
+    }
+
     // MARK: Decoration-tolerant tag parsing (format robustness)
 
     @Test func stripLineDecorationsRemovesKnownMarkersOnly() {
