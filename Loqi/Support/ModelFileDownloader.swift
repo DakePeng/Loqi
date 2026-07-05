@@ -582,3 +582,86 @@ final class BackgroundModelDownloader: NSObject, URLSessionDownloadDelegate, @un
     }
 }
 #endif
+
+// MARK: - Shared model-file manifests
+
+/// One remote model file with a per-source path — the manifest shape shared
+/// by the SenseVoice, Qwen3-ASR, and diarizer stores. The HF and ModelScope
+/// repos hold the same bytes but differ in owner/revision, so each source
+/// carries its own full path.
+struct ModelRemoteFile: Sendable {
+    /// Path relative to the store's directory — doubles as the local layout
+    /// (subdirectories like `tokenizer/…` are created as needed).
+    let name: String
+    let hfPath: String
+    let modelScopePath: String
+    /// Sanity floor — a finished file smaller than this is corrupt.
+    let minBytes: Int64
+    /// Real download size, for progress weighting and size readouts.
+    let expectedBytes: Int64
+
+    func path(for source: ASRModelSource) -> String {
+        switch source {
+        case .huggingFace: hfPath
+        case .modelScope: modelScopePath
+        }
+    }
+}
+
+extension ModelFileDownloader {
+    static func installedSize(of url: URL) -> Int64 {
+        Int64((try? url.resourceValues(forKeys: [.fileSizeKey]).fileSize) ?? 0)
+    }
+
+    /// All manifest files present and plausibly sized under `directory`.
+    static func allInstalled(_ files: [ModelRemoteFile], in directory: URL) -> Bool {
+        files.allSatisfy {
+            installedSize(of: directory.appending(path: $0.name)) >= $0.minBytes
+        }
+    }
+
+    /// Sequential, size-weighted download of a whole manifest: completed
+    /// files are skipped (so this doubles as resume), each finished file is
+    /// verified against its `minBytes` floor (corrupt → delete + throw),
+    /// and `onProgress` reports the blended 0…1 across all files. Per-file
+    /// retries, .part checkpointing, and cross-launch resume live in
+    /// `download(url:to:…)`.
+    static func downloadAll(
+        _ files: [ModelRemoteFile],
+        to directory: URL,
+        from source: ASRModelSource,
+        onProgress: @escaping @Sendable (Double) -> Void
+    ) async throws {
+        try FileManager.default.createDirectory(
+            at: directory, withIntermediateDirectories: true)
+        let totalWeight = max(files.reduce(0) { $0 + $1.expectedBytes }, 1)
+        var doneWeight: Int64 = 0
+        for file in files {
+            try Task.checkCancellation()
+            let final = directory.appending(path: file.name)
+            if installedSize(of: final) >= file.minBytes {
+                doneWeight += file.expectedBytes
+                onProgress(Double(doneWeight) / Double(totalWeight))
+                continue
+            }
+            try FileManager.default.createDirectory(
+                at: final.deletingLastPathComponent(),
+                withIntermediateDirectories: true)
+            let base = doneWeight
+            let url = URL(string: "https://\(source.host)/\(file.path(for: source))")!
+            try await download(
+                url: url, to: final, expectedBytes: file.expectedBytes
+            ) { bytes in
+                let fraction = min(1, Double(bytes) / Double(file.expectedBytes))
+                onProgress((Double(base) + fraction * Double(file.expectedBytes))
+                    / Double(totalWeight))
+            }
+            guard installedSize(of: final) >= file.minBytes else {
+                try? FileManager.default.removeItem(at: final)
+                throw URLError(.cannotParseResponse)
+            }
+            doneWeight += file.expectedBytes
+            onProgress(Double(doneWeight) / Double(totalWeight))
+        }
+    }
+}
