@@ -86,28 +86,16 @@ struct SessionRetranscriber {
         // Polish before translation drafting so Apple translates the
         // cleaned text: deterministic hotword fixup for every backend,
         // plus LFM2.5 sentence cleanup for the non-accuracy-pass ones
-        // (Qwen3-ASR already had decoder hotword priming).
-        let runCleanup = OfflineTranscriptPolisher.shouldRunLLMCleanup(
-            backend: backend,
-            llmEnabled: llmCleanupEnabled,
-            refineModelDownloaded: LLMService.isDownloaded(
-                model: ModelCatalog.liveRefineModel))
-        if runCleanup {
-            onPhase(.cleaningUpTranscript(0))
-            // The ASR pass unloaded the LLM; generate self-heals with a
-            // requireDownloaded load of the 230M (admitLoad absorbs ONNX
-            // arena release lag). The summarize that follows swaps to the
-            // summary model itself, so no unload is needed here.
-            await llm.setModel(ModelCatalog.liveRefineModel)
-        }
-        let polisher = OfflineTranscriptPolisher(matcher: hotwords?.matcher)
-        let polished = try await polisher.polish(
-            utterances.map(\.text),
+        // (Qwen3-ASR already had decoder hotword priming). The LLM stays
+        // loaded afterwards — the summarize that follows swaps models
+        // itself.
+        let (polished, _) = try await OfflineTranscriptPolisher.run(
+            texts: utterances.map(\.text),
             language: direction.source,
-            runLLMCleanup: runCleanup,
-            generate: { [llm] in
-                try await llm.generate(system: $0, user: $1, maxTokens: $2)
-            },
+            backend: backend,
+            llm: llm,
+            llmEnabled: llmCleanupEnabled,
+            matcher: hotwords?.matcher,
             onProgress: { onPhase(.cleaningUpTranscript($0)) })
 
         let speakers = Self.inheritSpeakers(

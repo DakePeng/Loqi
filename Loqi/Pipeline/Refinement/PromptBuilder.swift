@@ -128,8 +128,43 @@ struct PromptBuilder: Sendable {
 
     // MARK: Live sentence refinement (monolingual)
 
-    /// How many recent source sentences ride along as context.
-    var refineContextLimit = 3
+    /// The ONE context-window knob for sentence cleanup — the live queue,
+    /// the offline polisher, and the prompt trimming all read this.
+    static let refineContextLimit = 3
+    /// Output ≈ input sentence; 160 gives long CJK sentences headroom
+    /// (the fidelity gate rejects truncation anyway).
+    static let refineMaxTokens = 160
+
+    /// One sentence through the full cleanup contract — prompt, generate,
+    /// parse, fidelity gate — shared by the live RefinementQueue and the
+    /// offline polisher so the two paths can't drift.
+    enum SentenceRefinement: Sendable, Equatable {
+        /// Accepted AND different from the input.
+        case cleaned(String)
+        /// The model says the sentence has no errors.
+        case unchanged
+        /// Parse or fidelity-gate failure; raw output for the caller's log.
+        case rejected(raw: String)
+    }
+
+    func refineSentence(
+        _ sentence: String,
+        language: AppLanguage,
+        context: [String],
+        glossary: [String],
+        generate: @Sendable (_ system: String, _ user: String, _ maxTokens: Int) async throws -> String
+    ) async throws -> SentenceRefinement {
+        let raw = try await generate(
+            sentenceRefineSystemPrompt(language: language),
+            sentenceRefineUserPrompt(
+                sentence: sentence, language: language,
+                context: context, glossary: glossary),
+            Self.refineMaxTokens)
+        guard let cleaned = parseRefinedSentence(raw),
+              isAcceptableSentenceRefinement(cleaned, original: sentence)
+        else { return .rejected(raw: raw) }
+        return cleaned == sentence ? .unchanged : .cleaned(cleaned)
+    }
 
     /// Live transcript cleanup: the LLM fixes recognition errors in the
     /// source sentence; Apple's Translation framework re-translates the
@@ -160,7 +195,7 @@ struct PromptBuilder: Sendable {
             : "Vocabulary — the sentence may contain mis-transcriptions of these "
                 + "terms; use these exact spellings:\n"
                 + glossary.joined(separator: "\n") + "\n\n"
-        var contextLines = context.suffix(refineContextLimit).map { "- \($0)" }
+        var contextLines = context.suffix(Self.refineContextLimit).map { "- \($0)" }
         let request = "Sentence (\(language.promptName)): \(sentence)"
         func assembled() -> String {
             let contextBlock = contextLines.isEmpty

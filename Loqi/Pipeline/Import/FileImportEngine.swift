@@ -182,27 +182,17 @@ final class FileImportEngine {
         // Polish before the translation drafts so Apple translates the
         // cleaned text: hotword fixup for every backend, LFM2.5 cleanup
         // for the non-accuracy-pass ones.
-        let runCleanup = llm != nil && OfflineTranscriptPolisher.shouldRunLLMCleanup(
-            backend: backend,
-            llmEnabled: llmCleanupEnabled,
-            refineModelDownloaded: LLMService.isDownloaded(
-                model: ModelCatalog.liveRefineModel))
-        if runCleanup {
-            onPhase(.cleaningUpTranscript(0))
-            await llm?.setModel(ModelCatalog.liveRefineModel)
-        }
-        let polished = try await OfflineTranscriptPolisher(matcher: hotwords?.matcher).polish(
-            utterances.map(\.text),
+        let (polished, ranCleanup) = try await OfflineTranscriptPolisher.run(
+            texts: utterances.map(\.text),
             language: direction.source,
-            runLLMCleanup: runCleanup,
-            generate: { [llm] in
-                guard let llm else { throw LLMServiceError.modelNotLoaded }
-                return try await llm.generate(system: $0, user: $1, maxTokens: $2)
-            },
+            backend: backend,
+            llm: llm,
+            llmEnabled: llmCleanupEnabled,
+            matcher: hotwords?.matcher,
             onProgress: { onPhase(.cleaningUpTranscript($0)) })
         // Imports keep no resident LLM outside the cleanup phase; the
         // auto-summary afterwards reloads what it needs itself.
-        if runCleanup { await llm?.unload() }
+        if ranCleanup { await llm?.unload() }
 
         var entries = utterances.enumerated().map { index, utterance in
             SessionRecord.Entry(

@@ -100,20 +100,16 @@ actor RefinementQueue {
 
             var outcome = Outcome()
             do {
-                // Output ≈ input sentence; 160 gives long CJK sentences
-                // headroom (the fidelity gate rejects truncation anyway).
-                let raw = try await llm.generate(
-                    system: prompts.sentenceRefineSystemPrompt(language: job.language),
-                    user: prompts.sentenceRefineUserPrompt(
-                        sentence: job.source,
-                        language: job.language,
-                        context: job.context,
-                        glossary: job.glossary),
-                    maxTokens: 160)
-                if let cleaned = prompts.parseRefinedSentence(raw),
-                   prompts.isAcceptableSentenceRefinement(cleaned, original: job.source) {
+                switch try await prompts.refineSentence(
+                    job.source, language: job.language,
+                    context: job.context, glossary: job.glossary,
+                    generate: { try await llm.generate(
+                        system: $0, user: $1, maxTokens: $2) }) {
+                case .cleaned(let cleaned):
                     outcome.cleanedSource = cleaned
-                } else {
+                case .unchanged:
+                    break   // the model found no errors — draft stands
+                case .rejected(let raw):
                     // Raw sentence stays; log the output so a model whose
                     // cleanups keep getting discarded (repetition, rewrite,
                     // garbled decode) is distinguishable from one that

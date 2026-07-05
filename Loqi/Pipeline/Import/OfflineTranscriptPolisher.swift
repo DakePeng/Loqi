@@ -27,9 +27,6 @@ struct OfflineTranscriptPolisher {
 
     /// nil or empty → the fixup passes are no-ops.
     let matcher: HotwordMatcher?
-    /// Same context/output budgets as the live RefinementQueue.
-    var contextLimit = 3
-    var maxTokens = 160
     private let prompts = PromptBuilder()
     private let logger = Logger(
         subsystem: "com.kunzhipeng.loqi", category: "offlinePolish")
@@ -43,6 +40,42 @@ struct OfflineTranscriptPolisher {
         refineModelDownloaded: Bool
     ) -> Bool {
         backend != .qwen3ASR && llmEnabled && refineModelDownloaded
+    }
+
+    /// The whole offline polish phase in one call — gate, live-refine model
+    /// swap, and the shared generate closure — so the re-transcribe and
+    /// import paths can't drift. Callers keep only entry construction and
+    /// their site policies (imports unload the LLM afterwards via
+    /// `ranLLMCleanup`; re-transcribe leaves it loaded for the summarize
+    /// that follows). The ASR pass unloaded the LLM; generate self-heals
+    /// with a requireDownloaded load of the 230M (admitLoad absorbs ONNX
+    /// arena release lag).
+    static func run(
+        texts: [String],
+        language: AppLanguage,
+        backend: OfflineTranscriber.Backend,
+        llm: LLMService?,
+        llmEnabled: Bool,
+        matcher: HotwordMatcher?,
+        onProgress: (Double) -> Void
+    ) async throws -> (output: Output, ranLLMCleanup: Bool) {
+        let runCleanup = llm != nil && shouldRunLLMCleanup(
+            backend: backend,
+            llmEnabled: llmEnabled,
+            refineModelDownloaded: LLMService.isDownloaded(
+                model: ModelCatalog.liveRefineModel))
+        if runCleanup {
+            onProgress(0)
+            await llm?.setModel(ModelCatalog.liveRefineModel)
+        }
+        let output = try await OfflineTranscriptPolisher(matcher: matcher).polish(
+            texts, language: language, runLLMCleanup: runCleanup,
+            generate: { [llm] in
+                guard let llm else { throw LLMServiceError.modelNotLoaded }
+                return try await llm.generate(system: $0, user: $1, maxTokens: $2)
+            },
+            onProgress: onProgress)
+        return (output, runCleanup)
     }
 
     /// Polish every utterance. Throws only `CancellationError`; generation
@@ -65,18 +98,14 @@ struct OfflineTranscriptPolisher {
             let sentence = fixed[index]
             guard sentence.hasSpeechContent else { continue }
             do {
-                let raw = try await generate(
-                    prompts.sentenceRefineSystemPrompt(language: language),
-                    prompts.sentenceRefineUserPrompt(
-                        sentence: sentence,
-                        language: language,
-                        context: Array(output.texts[..<index].suffix(contextLimit)),
-                        glossary: matcher?.noteGlossaryLines(
-                            language: language, text: sentence) ?? []),
-                    maxTokens)
-                if let cleaned = prompts.parseRefinedSentence(raw),
-                   prompts.isAcceptableSentenceRefinement(cleaned, original: sentence),
-                   cleaned != sentence {
+                switch try await prompts.refineSentence(
+                    sentence, language: language,
+                    context: Array(output.texts[..<index]
+                        .suffix(PromptBuilder.refineContextLimit)),
+                    glossary: matcher?.noteGlossaryLines(
+                        language: language, text: sentence) ?? [],
+                    generate: generate) {
+                case .cleaned(let cleaned):
                     // Second fixup pass: the cleanup can drift a term the
                     // deterministic matcher knows how to spell.
                     let final = fixup(cleaned, language: language)
@@ -84,7 +113,9 @@ struct OfflineTranscriptPolisher {
                         output.texts[index] = final
                         output.originals[index] = sentence
                     }
-                } else {
+                case .unchanged:
+                    break   // the model found no errors
+                case .rejected(let raw):
                     logger.warning(
                         "offline cleanup rejected, fixed sentence kept: \(raw, privacy: .public)")
                 }

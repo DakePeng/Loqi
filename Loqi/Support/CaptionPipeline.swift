@@ -1245,7 +1245,8 @@ final class CaptionPipeline {
                 source: text,
                 language: direction.source,
                 context: store.recentSourceTexts(
-                    limit: 3, language: direction.source, excluding: entry.id),
+                    limit: PromptBuilder.refineContextLimit,
+                    language: direction.source, excluding: entry.id),
                 glossary: matcher.noteGlossaryLines(
                     language: direction.source, text: text)))
         } else {
