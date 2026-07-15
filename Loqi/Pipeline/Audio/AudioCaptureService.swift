@@ -94,6 +94,10 @@ final class AudioCaptureService: @unchecked Sendable {
 
             var consumed = false
             var error: NSError?
+            // The input block runs synchronously inside convert() on this
+            // thread; the buffer never actually crosses an isolation
+            // boundary — the annotation just records that fact.
+            nonisolated(unsafe) let tapBuffer = buffer
             converter.convert(to: converted, error: &error) { _, status in
                 if consumed {
                     status.pointee = .noDataNow
@@ -101,7 +105,7 @@ final class AudioCaptureService: @unchecked Sendable {
                 }
                 consumed = true
                 status.pointee = .haveData
-                return buffer
+                return tapBuffer
             }
             if error == nil, converted.frameLength > 0 {
                 let rms = self.farFieldGain.apply(to: converted)

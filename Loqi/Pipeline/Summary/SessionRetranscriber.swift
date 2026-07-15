@@ -78,7 +78,6 @@ struct SessionRetranscriber {
         guard FileManager.default.fileExists(atPath: url.path) else {
             throw RetranscribeError.noAudio
         }
-        let audioFile = try AVAudioFile(forReading: url)
 
         // Free the LLM before ASR; the summarize that follows reloads it
         // (its admission re-poll absorbs ONNX arena release lag). Required
@@ -87,7 +86,7 @@ struct SessionRetranscriber {
 
         onPhase(.transcribing(0))
         let utterances = try await OfflineTranscriber.transcribe(
-            audioFile,
+            contentsOf: url,
             language: direction.source,
             backend: backend,
             hotwords: hotwords?.biasStrings(for: direction.source) ?? [],

@@ -140,10 +140,9 @@ struct ImportEngineTests {
         buffer.frameLength = 16_000
         try writer.write(from: buffer)
 
-        let reader = try AVAudioFile(forReading: url)
         let task = Task { @MainActor in
             try await OfflineTranscriber.transcribe(
-                reader,
+                contentsOf: url,
                 language: .english,
                 backend: .senseVoice
             ) { _ in }

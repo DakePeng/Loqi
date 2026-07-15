@@ -45,6 +45,13 @@ final class FileImportEngine {
         self.llmCleanupEnabled = llmCleanupEnabled
     }
 
+    /// FileManager.copyItem off the main actor — an import's source file
+    /// can be hundreds of MB and the engine is @MainActor (ISSUES.md:
+    /// large imports blocked the UI).
+    nonisolated private static func copyFile(from source: URL, to destination: URL) async throws {
+        try FileManager.default.copyItem(at: source, to: destination)
+    }
+
     func importAudio(
         url: URL,
         sessionID: UUID = UUID(),
@@ -59,13 +66,15 @@ final class FileImportEngine {
         onPhase: @escaping @MainActor @Sendable (Phase) -> Void
     ) async throws -> SessionRecord {
         // Files-picker URLs are security-scoped; copy into our container so
-        // long processing never races the scope.
+        // long processing never races the scope. The copy runs off the
+        // main actor — a multi-hundred-MB file used to hang the UI here
+        // (ISSUES.md).
         let scoped = url.startAccessingSecurityScopedResource()
         defer { if scoped { url.stopAccessingSecurityScopedResource() } }
         let localURL = FileManager.default.temporaryDirectory
             .appending(path: UUID().uuidString)
             .appendingPathExtension(url.pathExtension.isEmpty ? "m4a" : url.pathExtension)
-        try FileManager.default.copyItem(at: url, to: localURL)
+        try await Self.copyFile(from: url, to: localURL)
         defer { try? FileManager.default.removeItem(at: localURL) }
 
         // Video files: pull the audio track into a temp .m4a so the rest of
@@ -89,7 +98,7 @@ final class FileImportEngine {
         let recordingURL = SessionArchive.recordingURL(fileName: recordingName)
         try FileManager.default.createDirectory(
             at: SessionArchive.recordingsDirectory, withIntermediateDirectories: true)
-        try FileManager.default.copyItem(at: workingURL, to: recordingURL)
+        try await Self.copyFile(from: workingURL, to: recordingURL)
         onAudioReady(recordingName, duration, recordedAt)
 
         // MARK: Transcribe (finals only, each carrying a time range)
@@ -102,7 +111,7 @@ final class FileImportEngine {
             dolphinInstalled: DolphinModelStore.isInstalled)
         await llm?.unload()
         let rawUtterances = try await OfflineTranscriber.transcribe(
-            audioFile,
+            contentsOf: workingURL,
             language: direction.source,
             backend: backend,
             sensitivity: sensitivity,
@@ -133,8 +142,7 @@ final class FileImportEngine {
         onSegmentComplete: (@MainActor @Sendable (SessionRecord.ImportCheckpoint.Segment) -> Void)? = nil,
         onPhase: @escaping @MainActor @Sendable (Phase) -> Void
     ) async throws -> SessionRecord {
-        let audioFile = try AVAudioFile(
-            forReading: SessionArchive.recordingURL(fileName: audioFileName))
+        let recordingURL = SessionArchive.recordingURL(fileName: audioFileName)
         let direction = checkpoint.direction
         let sensitivity = MicSensitivity(rawValue: checkpoint.sensitivityRaw) ?? .balanced
 
@@ -147,7 +155,7 @@ final class FileImportEngine {
             dolphinInstalled: DolphinModelStore.isInstalled)
         await llm?.unload()
         let rawUtterances = try await OfflineTranscriber.transcribe(
-            audioFile,
+            contentsOf: recordingURL,
             language: direction.source,
             backend: backend,
             sensitivity: sensitivity,

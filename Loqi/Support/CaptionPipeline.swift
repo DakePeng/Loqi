@@ -533,57 +533,81 @@ final class CaptionPipeline {
     /// OCR'd in the background (Vision — no MLX contention), anchored to
     /// the last finalized entry so it lands in the right transcript spot.
     func attachImage(_ image: UIImage) {
-        guard isRunning, let sessionID,
-              let data = ImageTextExtractor.jpegData(for: image) else { return }
+        guard isRunning, let sessionID else { return }
+        // Anchor to the transcript position at TAP time, not at write
+        // completion — the downscale/encode/write happens off-main
+        // (ISSUES.md: it hitched live captions) and entries keep landing
+        // meanwhile.
+        let anchorEntryID = store.entries.last { $0.state != .volatile }?.id
+        Task { [weak self] in
+            guard let fileName = await Self.saveAttachmentJPEG(image) else { return }
+            guard let self, self.isRunning, self.sessionID == sessionID else {
+                // Session ended mid-encode: don't attach to a dead session.
+                try? FileManager.default.removeItem(
+                    at: SessionArchive.attachmentURL(fileName: fileName))
+                return
+            }
+            let attachment = SessionRecord.Attachment(
+                fileName: fileName,
+                timestamp: .now,
+                anchorEntryID: anchorEntryID)
+            self.liveAttachments.append(attachment)
+            self.writeJournal()
+            // OCR off the hot path. Skipped only under the heaviest thermal
+            // shedding — it's deferrable work; a missing result just means
+            // the photo contributes no text.
+            guard self.thermal.policy != .llmUnloaded else { return }
+            let attachmentID = attachment.id
+            Task { [weak self] in
+                let text = await ImageTextExtractor.recognizeText(in: image)
+                guard let text else { return }
+                self?.applyAttachmentText(text, attachmentID: attachmentID, sessionID: sessionID)
+            }
+            Task { [weak self] in
+                await self?.enqueueAttachmentDescription(attachment, sessionID: sessionID)
+            }
+        }
+    }
+
+    /// Downscale + JPEG-encode + write, off the main actor. Returns the
+    /// stored file name, or nil when encoding/writing failed.
+    nonisolated private static func saveAttachmentJPEG(_ image: UIImage) async -> String? {
+        guard let data = ImageTextExtractor.jpegData(for: image) else { return nil }
         let fileName = "\(UUID().uuidString).jpg"
         try? FileManager.default.createDirectory(
             at: SessionArchive.attachmentsDirectory, withIntermediateDirectories: true)
         guard (try? data.write(
             to: SessionArchive.attachmentURL(fileName: fileName),
-            options: .atomic)) != nil else { return }
-        let attachment = SessionRecord.Attachment(
-            fileName: fileName,
-            timestamp: .now,
-            anchorEntryID: store.entries
-                .last { $0.state != .volatile }?.id)
-        liveAttachments.append(attachment)
-        writeJournal()
-        // OCR off the hot path. Skipped only under the heaviest thermal
-        // shedding — it's deferrable work; a missing result just means the
-        // photo contributes no text.
-        guard thermal.policy != .llmUnloaded else { return }
-        let attachmentID = attachment.id
-        Task { [weak self] in
-            let text = await ImageTextExtractor.recognizeText(in: image)
-            guard let text else { return }
-            self?.applyAttachmentText(text, attachmentID: attachmentID, sessionID: sessionID)
-        }
-        Task { [weak self] in
-            await self?.enqueueAttachmentDescription(attachment, sessionID: sessionID)
-        }
+            options: .atomic)) != nil else { return nil }
+        return fileName
     }
 
     /// Attach a photo to a saved session (detail view). Unanchored — it
     /// renders in the Photos section and trails the markdown export.
+    /// Encode/write happen off-main; the record mutates on completion.
     func attachImage(_ image: UIImage, to recordID: UUID) {
-        guard var record = archive.sessions.first(where: { $0.id == recordID }),
-              let data = ImageTextExtractor.jpegData(for: image) else { return }
-        let fileName = "\(UUID().uuidString).jpg"
-        try? FileManager.default.createDirectory(
-            at: SessionArchive.attachmentsDirectory, withIntermediateDirectories: true)
-        guard (try? data.write(
-            to: SessionArchive.attachmentURL(fileName: fileName),
-            options: .atomic)) != nil else { return }
-        let attachment = SessionRecord.Attachment(fileName: fileName, timestamp: .now)
-        record.attachments = (record.attachments ?? []) + [attachment]
-        archive.update(record)
+        guard archive.sessions.contains(where: { $0.id == recordID }) else { return }
         Task { [weak self] in
-            let text = await ImageTextExtractor.recognizeText(in: image)
-            guard let text else { return }
-            self?.applyAttachmentText(text, attachmentID: attachment.id, sessionID: recordID)
-        }
-        Task { [weak self] in
-            await self?.enqueueAttachmentDescription(attachment, sessionID: recordID)
+            guard let fileName = await Self.saveAttachmentJPEG(image) else { return }
+            guard let self,
+                  var record = self.archive.sessions.first(where: { $0.id == recordID })
+            else {
+                // Session deleted mid-encode.
+                try? FileManager.default.removeItem(
+                    at: SessionArchive.attachmentURL(fileName: fileName))
+                return
+            }
+            let attachment = SessionRecord.Attachment(fileName: fileName, timestamp: .now)
+            record.attachments = (record.attachments ?? []) + [attachment]
+            self.archive.update(record)
+            Task { [weak self] in
+                let text = await ImageTextExtractor.recognizeText(in: image)
+                guard let text else { return }
+                self?.applyAttachmentText(text, attachmentID: attachment.id, sessionID: recordID)
+            }
+            Task { [weak self] in
+                await self?.enqueueAttachmentDescription(attachment, sessionID: recordID)
+            }
         }
     }
 

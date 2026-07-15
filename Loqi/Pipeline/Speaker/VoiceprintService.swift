@@ -87,8 +87,7 @@ actor VoiceprintService {
                 onProgress?(.download($0))
             }
         }
-        let audioFile = try AVAudioFile(forReading: url)
-        let samples = try await OfflineTranscriber.decodeMono16k(audioFile)
+        let samples = try await OfflineTranscriber.decodeMono16k(contentsOf: url)
 
         let clustering = Self.clustering(forPickerValue: speakerCount)
         var config = sherpaOnnxOfflineSpeakerDiarizationConfig(

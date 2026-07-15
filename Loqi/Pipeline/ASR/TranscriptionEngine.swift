@@ -582,6 +582,9 @@ actor HybridSpeechEngine: SpeechEngine {
         else { return nil }
         var consumed = false
         var conversionError: NSError?
+        // The input block runs synchronously inside convert() on this
+        // thread; the buffer never actually crosses an isolation boundary.
+        nonisolated(unsafe) let inputBuffer = buffer
         converter.convert(to: converted, error: &conversionError) { _, status in
             if consumed {
                 status.pointee = .noDataNow
@@ -589,7 +592,7 @@ actor HybridSpeechEngine: SpeechEngine {
             }
             consumed = true
             status.pointee = .haveData
-            return buffer
+            return inputBuffer
         }
         if conversionError != nil { return nil }
         return converted
