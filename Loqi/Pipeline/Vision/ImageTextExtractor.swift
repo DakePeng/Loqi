@@ -56,11 +56,24 @@ enum ImageTextExtractor {
         }
         return scaled.jpegData(compressionQuality: 0.8)
         #else
-        let scaled = NSImage(size: target)
-        scaled.lockFocus()
-        image.draw(in: CGRect(origin: .zero, size: target))
-        scaled.unlockFocus()
-        return scaled.jpegData(compressionQuality: 0.8)
+        // CoreGraphics, not NSImage.lockFocus(): the encode runs off the
+        // main actor (attachImage moved it there), and AppKit's focus-lock
+        // drawing is main-thread-only.
+        guard let cgImage = image.cgImage(
+            forProposedRect: nil, context: nil, hints: nil),
+              let context = CGContext(
+                data: nil,
+                width: Int(target.width), height: Int(target.height),
+                bitsPerComponent: 8, bytesPerRow: 0,
+                space: CGColorSpace(name: CGColorSpace.sRGB)!,
+                bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue)
+        else { return nil }
+        context.interpolationQuality = .high
+        context.draw(cgImage, in: CGRect(origin: .zero, size: target))
+        guard let scaledCG = context.makeImage() else { return nil }
+        let rep = NSBitmapImageRep(cgImage: scaledCG)
+        return rep.representation(
+            using: .jpeg, properties: [.compressionFactor: 0.8])
         #endif
     }
 
