@@ -192,6 +192,16 @@ struct PipelineResourceTests {
         #expect(SummaryJobCenter.shouldResumeLLMJobsAfterRecording(isBackgrounded: false))
     }
 
+    /// The automatic accuracy pass runs only on external power. `.unknown`
+    /// fails open — a missing sensor reading (simulator, monitoring just
+    /// enabled) must not silently defer the pass forever.
+    @Test func accuracyPassChargeGateMapsBatteryStates() {
+        #expect(SummaryJobCenter.pluggedIn(.charging))
+        #expect(SummaryJobCenter.pluggedIn(.full))
+        #expect(!SummaryJobCenter.pluggedIn(.unplugged))
+        #expect(SummaryJobCenter.pluggedIn(.unknown))
+    }
+
     /// Memory warnings full-unload the LLM during import-only jobs (their
     /// pipeline is ASR/translation; the auto-summary afterwards is its own
     /// job) but only shed the cache while a job actually uses the model.

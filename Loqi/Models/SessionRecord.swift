@@ -222,6 +222,19 @@ struct SessionRecord: Identifiable, Codable, Sendable {
         var backendRaw: String
         var segments: [ImportCheckpoint.Segment] = []
     }
+
+    /// An automatic accuracy pass (re-transcribe + re-summarize of a fresh
+    /// recording) that hasn't completed — deferred until the device is on
+    /// power, or interrupted by a kill. Swept at launch/charge; cleared
+    /// when any accuracy pass for this session completes, or on explicit
+    /// cancel. Optional: legacy records decode as nil.
+    var pendingPostProcess: PendingPostProcess?
+
+    struct PendingPostProcess: Codable, Sendable {
+        var styleRaw: String
+        var lengthRaw: String
+        var suggestVocabulary: Bool?
+    }
     /// True when speaker separation was requested for this session but the
     /// diarizer failed (model download or analysis) — the transcript is
     /// intact, it just has no speaker labels. Optional: legacy records and

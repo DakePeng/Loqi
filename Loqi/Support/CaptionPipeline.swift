@@ -294,6 +294,7 @@ final class CaptionPipeline {
             // transition re-runs them via resumeBackgroundJobs().
             self.jobs.resumeUnfinishedImports()
             self.jobs.resumeUnfinishedSummaries()
+            self.jobs.resumePendingPostProcesses()
             self.migrateLiveRefineModelIfNeeded()
         }
 

@@ -137,7 +137,43 @@ final class SummaryJobCenter {
         self.translator = translator
         self.voiceprint = voiceprint
         self.isRecording = isRecording
+        #if os(iOS)
+        // The accuracy pass defers to the charger; hear about plug-ins.
+        UIDevice.current.isBatteryMonitoringEnabled = true
+        NotificationCenter.default.addObserver(
+            forName: UIDevice.batteryStateDidChangeNotification,
+            object: nil, queue: .main
+        ) { [weak self] _ in
+            Task { @MainActor [weak self] in
+                self?.resumePendingPostProcesses()
+            }
+        }
+        #endif
     }
+
+    /// True when the device is on external power — the only time the
+    /// automatic accuracy pass is allowed to burn 20-30 minutes of CPU.
+    /// `.unknown` fails open (run now): a missing sensor reading must not
+    /// silently defer the pass forever. Pure mapping split for testing.
+    static func isPluggedIn() -> Bool {
+        #if os(iOS)
+        UIDevice.current.isBatteryMonitoringEnabled = true
+        return pluggedIn(UIDevice.current.batteryState)
+        #else
+        return true
+        #endif
+    }
+
+    #if os(iOS)
+    nonisolated static func pluggedIn(_ state: UIDevice.BatteryState) -> Bool {
+        switch state {
+        case .charging, .full: true
+        case .unplugged: false
+        case .unknown: true
+        @unknown default: true
+        }
+    }
+    #endif
 
     /// Await any in-flight heavy job unwinding. The live pipeline calls this
     /// right after `yieldToRecording()` so live capture never shares the GPU
@@ -158,8 +194,10 @@ final class SummaryJobCenter {
         errors[sessionID] = nil
         suspendedSummaries[sessionID] = nil
         backgroundPausedRetranscribeTasks[sessionID] = nil
-        // An explicit cancel must not resurrect the summary at next launch.
+        // An explicit cancel must not resurrect the summary — or the
+        // deferred accuracy pass — at the next launch/charge sweep.
         clearPendingSummary(sessionID)
+        clearPendingPostProcess(sessionID)
         if let index = retranscribeQueue.firstIndex(where: { $0.sessionID == sessionID }) {
             retranscribeQueue.remove(at: index)
             activities[sessionID] = nil
@@ -248,6 +286,8 @@ final class SummaryJobCenter {
         }
         drainRetranscribeQueue()
         resumeUnfinishedImports()
+        // A recording blocks the sweeps; on-charger pending passes can go now.
+        resumePendingPostProcesses()
     }
 
     /// Scene moved to/from the background. Metal-backed work can't run there:
@@ -389,6 +429,8 @@ final class SummaryJobCenter {
         // Catch-all sweep for summaries whose job died without a held
         // activity (e.g. cancelled by a memory-warning unload).
         resumeUnfinishedSummaries()
+        // Accuracy passes deferred to the charger, or orphaned by a kill.
+        resumePendingPostProcesses()
     }
 
     private func resumeLLMJobs() {
@@ -603,9 +645,32 @@ final class SummaryJobCenter {
         guard (backend != nil || speakerCount != nil),
               SessionRetranscriber.canRetranscribe(session)
         else {
+            // Nothing heavy applies (also the swept-marker case after the
+            // user removed the models) — consume any pending marker so the
+            // charge sweep stops re-visiting this session.
+            clearPendingPostProcess(sessionID)
             summarize(
                 sessionID: sessionID, style: style, length: length,
                 allowDownload: allowDownload, suggestVocabulary: suggestVocabulary)
+            return
+        }
+
+        // Persist the intent BEFORE running: a kill mid-pass (or the
+        // deferral below) restarts it at the next launch/charge sweep, and
+        // the retranscribe checkpoint makes that restart cheap.
+        markPendingPostProcess(
+            sessionID: sessionID, style: style, length: length,
+            suggestVocabulary: suggestVocabulary)
+
+        // On battery, the accuracy pass would cost 20-30 hot minutes in
+        // the user's hand — summarize the live transcript now and run the
+        // pass when the charger connects. Vocabulary suggestions wait for
+        // the accuracy pass (better text, better suggestions).
+        guard Self.isPluggedIn() else {
+            logger.info("accuracy pass deferred to charger: \(sessionID, privacy: .public)")
+            summarize(
+                sessionID: sessionID, style: style, length: length,
+                allowDownload: allowDownload, suggestVocabulary: false)
             return
         }
 
@@ -745,6 +810,9 @@ final class SummaryJobCenter {
             // archive with a half-finished record.
             try Task.checkCancellation()
             archive.update(updated)
+            // Any completed accuracy pass (auto or manual) satisfies a
+            // pending marker — the charge sweep must not run it again.
+            clearPendingPostProcess(sessionID)
             // The transcript is archived; from here it's an LLM summarize that
             // backgrounding can cancel and restart on its own — persist that
             // intent so even a process kill restarts it at next launch.
@@ -895,6 +963,51 @@ final class SummaryJobCenter {
                 allowDownload: pending.allowDownload ?? false,
                 isResume: true)
         }
+    }
+
+    /// Starts accuracy passes that are waiting for power — deferred at
+    /// recording time, or orphaned by a mid-pass kill. Called at launch,
+    /// on foreground resume, and when the charger connects. Each hit
+    /// re-runs the normal post-process decision, so model installs/removals
+    /// since the marker was written are honored (and a marker with nothing
+    /// left to do is consumed there).
+    func resumePendingPostProcesses() {
+        guard !isRecording(), !isBackgrounded, Self.isPluggedIn() else { return }
+        for session in archive.sessions
+        where session.pendingPostProcess != nil && session.importing != true
+            && !isBusy(session.id) {
+            guard let pending = session.pendingPostProcess,
+                  let style = SummaryStyle(rawValue: pending.styleRaw),
+                  let length = SummaryLength(rawValue: pending.lengthRaw)
+            else {
+                // Unparseable marker (style/length from a future build).
+                clearPendingPostProcess(session.id)
+                continue
+            }
+            logger.info("pending accuracy pass: starting \(session.id, privacy: .public)")
+            postProcessAndSummarizeNewSession(
+                sessionID: session.id, style: style, length: length,
+                suggestVocabulary: pending.suggestVocabulary ?? false)
+        }
+    }
+
+    private func markPendingPostProcess(
+        sessionID: UUID, style: SummaryStyle, length: SummaryLength,
+        suggestVocabulary: Bool
+    ) {
+        guard var record = archive.sessions.first(where: { $0.id == sessionID }) else { return }
+        record.pendingPostProcess = SessionRecord.PendingPostProcess(
+            styleRaw: style.rawValue, lengthRaw: length.rawValue,
+            suggestVocabulary: suggestVocabulary)
+        archive.update(record)
+    }
+
+    private func clearPendingPostProcess(_ sessionID: UUID) {
+        guard var record = archive.sessions.first(where: { $0.id == sessionID }),
+              record.pendingPostProcess != nil
+        else { return }
+        record.pendingPostProcess = nil
+        archive.update(record)
     }
 
     private func markPendingSummary(
