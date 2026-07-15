@@ -274,8 +274,33 @@ actor SenseVoiceDecoder {
         guard let recognizer else { return SenseVoiceRecognitionResult(text: "") }
         let result = recognizer.decode(samples: samples)
         return SenseVoiceRecognitionResult(
-            text: result.text.trimmingCharacters(in: .whitespacesAndNewlines),
+            text: Self.collapsedCJKTokenSpaces(result.text)
+                .trimmingCharacters(in: .whitespacesAndNewlines),
             language: AppLanguage(speechRecognitionCode: result.lang))
+    }
+
+    /// SenseVoice emits token-level spaces inside CJK text ("黒川 さん の
+    /// ボス"); collapse whitespace runs both of whose neighbors are CJK.
+    /// `Character.isCJK` is Han + kana only, so Korean keeps its real
+    /// spaces and Latin/digit boundaries ("Wi-Fi ルーター", "3 キロ")
+    /// are untouched.
+    nonisolated static func collapsedCJKTokenSpaces(_ text: String) -> String {
+        var result = ""
+        result.reserveCapacity(text.count)
+        var pendingWhitespace = ""
+        for char in text {
+            if char.isWhitespace {
+                pendingWhitespace.append(char)
+            } else {
+                if !pendingWhitespace.isEmpty,
+                   !(result.last?.isCJK == true && char.isCJK) {
+                    result += pendingWhitespace
+                }
+                pendingWhitespace = ""
+                result.append(char)
+            }
+        }
+        return result + pendingWhitespace
     }
 }
 
