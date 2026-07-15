@@ -63,9 +63,10 @@ struct SettingsView: View {
                     Picker("Engine", selection: $asrEngine) {
                         Text("Apple (instant)").tag("apple")
                         Text("SenseVoice (accurate)").tag("sensevoice")
+                        Text("Hybrid (responsive + accurate)").tag("hybrid")
                     }
 
-                    if asrEngine == "sensevoice" {
+                    if asrEngine == "sensevoice" || asrEngine == "hybrid" {
                         LabeledContent(
                             "Recognition model",
                             value: senseVoiceInstalled
@@ -104,7 +105,7 @@ struct SettingsView: View {
                 } header: {
                     Text("Speech recognition")
                 } footer: {
-                    Text("SenseVoice recognizes 中文, English, 日本語 and 한국어 with much higher accuracy — captions update in ~1-second pulses instead of word-by-word. Runs fully on this iPhone.")
+                    Text("SenseVoice recognizes 中文, English, 日本語 and 한국어 with much higher accuracy — captions update in ~1-second pulses instead of word-by-word. Hybrid shows Apple's instant word-by-word captions while SenseVoice finalizes each sentence for the saved transcript — the coolest-running option; needs a specific language (not Auto). Everything runs fully on this iPhone.")
                 }
 
                 Section {

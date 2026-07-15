@@ -478,6 +478,8 @@ final class CaptionPipeline {
         Task { [llm] in await llm.resetHeatStats() }
         if let engine = engines[engineKey(for: route.source)] as? SenseVoiceEngine {
             Task { await engine.resetHeatStats() }
+        } else if let hybrid = engines[engineKey(for: route.source)] as? HybridSpeechEngine {
+            Task { await hybrid.resetSenseVoiceHeatStats() }
         }
 
         do {
@@ -1025,21 +1027,54 @@ final class CaptionPipeline {
         return kind == "apple" ? .language(source.fallbackLanguage) : source
     }
 
+    /// Why a chosen live engine couldn't be used as-is.
+    enum ASRFallbackNotice: Equatable {
+        case modelMissing
+        case hybridNeedsConcreteLanguage
+    }
+
+    /// Resolve the Settings engine choice to the kind that can actually
+    /// run. Hybrid needs the SenseVoice model AND a concrete source
+    /// language (its Apple display child is single-locale); with Auto it
+    /// falls back to pure SenseVoice so per-utterance language detection
+    /// keeps working. Pure for testing.
+    nonisolated static func resolveASRKind(
+        setting: String?,
+        senseVoiceInstalled: Bool,
+        source: RecognitionLanguageSelection
+    ) -> (kind: String, notice: ASRFallbackNotice?) {
+        switch setting {
+        case "sensevoice":
+            return senseVoiceInstalled
+                ? ("sensevoice", nil) : ("apple", .modelMissing)
+        case "hybrid":
+            guard senseVoiceInstalled else { return ("apple", .modelMissing) }
+            return source == .auto
+                ? ("sensevoice", .hybridNeedsConcreteLanguage) : ("hybrid", nil)
+        default:
+            return ("apple", nil)
+        }
+    }
+
     private func ensureEngine(for source: RecognitionLanguageSelection) {
         #if os(macOS)
-        let wantsSenseVoice = false
+        let setting: String? = nil
         #else
-        let wantsSenseVoice = UserDefaults.standard.string(forKey: "asr.engine") == "sensevoice"
+        let setting = UserDefaults.standard.string(forKey: "asr.engine")
         #endif
-        let kind: String
-        if wantsSenseVoice, SenseVoiceModelStore.isInstalled {
-            kind = "sensevoice"
+        let (kind, notice) = Self.resolveASRKind(
+            setting: setting,
+            senseVoiceInstalled: SenseVoiceModelStore.isInstalled,
+            source: source)
+        switch notice {
+        case .modelMissing:
+            setStatus(.asr, String(
+                localized: "SenseVoice model not downloaded — using Apple recognition."))
+        case .hybridNeedsConcreteLanguage:
+            setStatus(.asr, String(
+                localized: "Hybrid needs a specific language — using SenseVoice for Auto."))
+        case nil:
             setStatus(.asr, nil)
-        } else {
-            kind = "apple"
-            setStatus(.asr, wantsSenseVoice
-                ? String(localized: "SenseVoice model not downloaded — using Apple recognition.")
-                : nil)
         }
         if enginesKind != kind {
             engines.removeAll()
@@ -1048,9 +1083,11 @@ final class CaptionPipeline {
         }
         let key = engineKey(for: source, kind: kind)
         if engines[key] == nil {
-            engines[key] = kind == "sensevoice"
-                ? SenseVoiceEngine(sourceSelection: source)
-                : TranscriptionEngine(language: key.fallbackLanguage)
+            engines[key] = switch kind {
+            case "sensevoice": SenseVoiceEngine(sourceSelection: source)
+            case "hybrid": HybridSpeechEngine(language: key.fallbackLanguage)
+            default: TranscriptionEngine(language: key.fallbackLanguage)
+            }
         }
     }
 
@@ -1491,12 +1528,17 @@ final class CaptionPipeline {
         }
     }
 
-    /// Decode active-seconds of the live SenseVoice engine, or 0 when the
-    /// active engine is Apple's recognizer (no in-process decode cost).
+    /// Decode active-seconds of the live SenseVoice engine (pure or inside
+    /// the hybrid), or 0 when the active engine is Apple's recognizer (no
+    /// in-process decode cost).
     func activeSenseVoiceDecodeSeconds() async -> Double {
         if let activeEngineKey,
            let sv = engines[activeEngineKey] as? SenseVoiceEngine {
             return await sv.decodeActiveSeconds
+        }
+        if let activeEngineKey,
+           let hybrid = engines[activeEngineKey] as? HybridSpeechEngine {
+            return await hybrid.senseVoiceDecodeActiveSeconds()
         }
         return 0
     }

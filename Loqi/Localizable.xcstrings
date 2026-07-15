@@ -1397,6 +1397,9 @@
         }
       }
     },
+    "Dolphin (fast, 中/日/한)" : {
+
+    },
     "Done" : {
       "extractionState" : "stale",
       "localizations" : {
@@ -1512,6 +1515,22 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "立即下载模型"
+          }
+        }
+      }
+    },
+    "Download photo model (0.8B)" : {
+      "localizations" : {
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "写真モデルをダウンロード（0.8B）"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "下载照片模型（0.8B）"
           }
         }
       }
@@ -2320,6 +2339,38 @@
         }
       }
     },
+    "Hybrid (responsive + accurate)" : {
+      "localizations" : {
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "ハイブリッド（高速 + 高精度）"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "混合（灵敏 + 高精度）"
+          }
+        }
+      }
+    },
+    "Hybrid needs a specific language — using SenseVoice for Auto." : {
+      "localizations" : {
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "ハイブリッドには言語の指定が必要です — 自動検出では SenseVoice を使用します。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "混合模式需要指定语言 — 自动检测时使用 SenseVoice。"
+          }
+        }
+      }
+    },
     "I speak" : {
       "extractionState" : "stale",
       "localizations" : {
@@ -2669,38 +2720,6 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "实时模型文件"
-          }
-        }
-      }
-    },
-    "Photo AI model files" : {
-      "localizations" : {
-        "ja" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "写真AIモデルのファイル"
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "照片 AI 模型文件"
-          }
-        }
-      }
-    },
-    "Download photo model (0.8B)" : {
-      "localizations" : {
-        "ja" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "写真モデルをダウンロード（0.8B）"
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "下载照片模型（0.8B）"
           }
         }
       }
@@ -3417,7 +3436,11 @@
         }
       }
     },
+    "Once downloaded, Re-transcribe & summarize uses Qwen3-ASR automatically, and imports can select it. Auto post-process re-transcribes and identifies speakers before the first summary for new recordings, using downloaded models only. Dolphin is an experimental fast tier for 中文/日本語/한국어 — several times quicker than Qwen3-ASR at somewhat lower accuracy; while installed it takes over those languages (remove it to go back). Live captions stay on the fast engines." : {
+
+    },
     "Once downloaded, Re-transcribe & summarize uses Qwen3-ASR automatically, and imports can select it. Auto post-process re-transcribes and identifies speakers before the first summary for new recordings, using downloaded models only. Live captions stay on the fast engines." : {
+      "extractionState" : "stale",
       "localizations" : {
         "ja" : {
           "stringUnit" : {
@@ -3595,6 +3618,22 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "性能"
+          }
+        }
+      }
+    },
+    "Photo AI model files" : {
+      "localizations" : {
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "写真AIモデルのファイル"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "照片 AI 模型文件"
           }
         }
       }
@@ -4467,7 +4506,24 @@
         }
       }
     },
+    "SenseVoice recognizes 中文, English, 日本語 and 한국어 with much higher accuracy — captions update in ~1-second pulses instead of word-by-word. Hybrid shows Apple's instant word-by-word captions while SenseVoice finalizes each sentence for the saved transcript — the coolest-running option; needs a specific language (not Auto). Everything runs fully on this iPhone." : {
+      "localizations" : {
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "SenseVoice は中国語・英語・日本語・韓国語をはるかに高い精度で認識します。字幕は単語ごとではなく約 1 秒ごとに更新されます。ハイブリッドは Apple の即時字幕を単語ごとに表示しながら、保存する文字起こしは SenseVoice が文ごとに確定します — 最も発熱の少ない選択肢です（言語の指定が必要で、自動検出は不可）。すべてこの iPhone 上で実行されます。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "SenseVoice 识别中文、英语、日语和韩语，精度大幅提升——字幕约每 1 秒成段更新，而非逐词出现。混合模式实时逐词显示 Apple 的即时字幕，同时由 SenseVoice 逐句确定保存的文字记录——发热最低的选项；需要指定语言（不支持自动检测）。全部在这台 iPhone 上运行。"
+          }
+        }
+      }
+    },
     "SenseVoice recognizes 中文, English, 日本語 and 한국어 with much higher accuracy — captions update in ~1-second pulses instead of word-by-word. Runs fully on this iPhone." : {
+      "extractionState" : "stale",
       "localizations" : {
         "ja" : {
           "stringUnit" : {

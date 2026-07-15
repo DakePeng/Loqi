@@ -43,14 +43,27 @@ actor SenseVoiceEngine: SpeechEngine {
     /// + final), the ASR counterpart to LLMService.generateActiveSeconds.
     private(set) var decodeActiveSeconds: Double = 0
 
+    /// False in the hybrid engine's record role: Apple supplies the
+    /// volatile text, so the pulsing whole-utterance partial decodes —
+    /// the live path's dominant heat cost — are skipped entirely. Finals,
+    /// VAD, speech-activity edges, and language detection are unaffected.
+    private var emitsPartials: Bool
+
     private static let sampleRate = 16_000
     private static let preRollSamples = 8_000        // 0.5s
     private static let maxUtteranceSamples = 16_000 * 20
 
     private let logger = Logger(subsystem: "com.kunzhipeng.loqi", category: "sensevoice")
 
-    init(sourceSelection: RecognitionLanguageSelection) {
+    init(sourceSelection: RecognitionLanguageSelection, emitsPartials: Bool = true) {
         self.sourceSelection = sourceSelection
+        self.emitsPartials = emitsPartials
+    }
+
+    /// The hybrid engine flips this back on when its Apple child fails and
+    /// it degrades to pure-SenseVoice behavior.
+    func setEmitsPartials(_ enabled: Bool) {
+        emitsPartials = enabled
     }
 
     func prepare(contextualStrings: [String] = []) async throws -> AVAudioFormat {
@@ -183,6 +196,7 @@ actor SenseVoiceEngine: SpeechEngine {
     // MARK: Decoding
 
     private func maybeDecodePartial() {
+        guard emitsPartials else { return }
         guard samplesSincePartial >= partialInterval,
               !partialInFlight,
               let decoder else { return }
@@ -335,7 +349,7 @@ actor SenseVoiceEngine: SpeechEngine {
     nonisolated var language: AppLanguage { sourceSelection.fallbackLanguage }
     private(set) var decodeActiveSeconds: Double = 0
 
-    init(sourceSelection: RecognitionLanguageSelection) {
+    init(sourceSelection: RecognitionLanguageSelection, emitsPartials: Bool = true) {
         self.sourceSelection = sourceSelection
     }
 
@@ -350,6 +364,7 @@ actor SenseVoiceEngine: SpeechEngine {
     func feed(_ chunk: AudioCaptureService.AudioChunk) {}
     func stop() async {}
     func applyContextualStrings(_ strings: [String]) async throws {}
+    func setEmitsPartials(_ enabled: Bool) {}
     func resetHeatStats() {}
 }
 

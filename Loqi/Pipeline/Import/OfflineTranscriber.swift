@@ -40,7 +40,9 @@ enum OfflineTranscriber {
         #else
         if dolphinInstalled, dolphinSupports(source) { return .dolphin }
         if qwen3Installed { return .qwen3ASR }
-        if engineChoice == "sensevoice", senseVoiceInstalled { return .senseVoice }
+        // Hybrid's record layer IS SenseVoice — same re-transcribe backend.
+        if engineChoice == "sensevoice" || engineChoice == "hybrid",
+           senseVoiceInstalled { return .senseVoice }
         return .apple
         #endif
     }
