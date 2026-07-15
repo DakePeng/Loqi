@@ -66,7 +66,7 @@ struct SessionRetranscriber {
 
     func retranscribe(
         _ record: SessionRecord,
-        backend: OfflineTranscriber.Backend = OfflineTranscriber.currentBackend(),
+        backend: OfflineTranscriber.Backend,
         alreadyDecoded: [SessionRecord.ImportCheckpoint.Segment] = [],
         onSegmentComplete: (@MainActor @Sendable (SessionRecord.ImportCheckpoint.Segment) -> Void)? = nil,
         onPhase: @escaping @MainActor @Sendable (Phase) -> Void

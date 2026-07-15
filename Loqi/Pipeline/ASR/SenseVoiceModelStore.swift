@@ -118,3 +118,104 @@ final class SenseVoiceModelStore {
         }
     }
 }
+
+/// Manages the on-disk Dolphin-small CTC files — the FAST offline tier
+/// behind Re-transcribe/imports: non-autoregressive, so a decode pool
+/// chews through a file several times faster than the Qwen3-ASR pass, at
+/// somewhat lower accuracy and without decoder hotword priming. Eastern
+/// languages only (中文/日本語/한국어 here) — never offered for English.
+/// ponytail: hosted in this file, not its own, so the xcodegen-generated
+/// pbxproj (which has pending local edits) needn't change; split it out
+/// on the next project regen.
+@MainActor
+@Observable
+final class DolphinModelStore {
+    nonisolated static let files: [ModelRemoteFile] = [
+        ModelRemoteFile(
+            name: "model.int8.onnx",
+            hfPath: "csukuangfj/sherpa-onnx-dolphin-small-ctc-multi-lang-int8-2025-04-02/resolve/main/model.int8.onnx",
+            modelScopePath: "models/csukuangfj/sherpa-onnx-dolphin-small-ctc-multi-lang-int8-2025-04-02/resolve/master/model.int8.onnx",
+            minBytes: 200_000_000,
+            expectedBytes: 249_658_954),
+        ModelRemoteFile(
+            name: "tokens.txt",
+            hfPath: "csukuangfj/sherpa-onnx-dolphin-small-ctc-multi-lang-int8-2025-04-02/resolve/main/tokens.txt",
+            modelScopePath: "models/csukuangfj/sherpa-onnx-dolphin-small-ctc-multi-lang-int8-2025-04-02/resolve/master/tokens.txt",
+            minBytes: 300_000,
+            expectedBytes: 504_662),
+        ModelRemoteFile(
+            name: "silero_vad.onnx",
+            hfPath: "csukuangfj/vad/resolve/main/silero_vad.onnx",
+            modelScopePath: "models/manyeyes/silero-vad-onnx/resolve/master/silero_vad.onnx",
+            minBytes: 1_000_000,
+            expectedBytes: 1_807_522),
+    ]
+
+    /// Total download size across all files, for the progress readout.
+    nonisolated static var totalExpectedBytes: Int64 {
+        files.reduce(0) { $0 + $1.expectedBytes }
+    }
+
+    nonisolated static var directory: URL {
+        URL.applicationSupportDirectory.appending(path: "Dolphin", directoryHint: .isDirectory)
+    }
+
+    nonisolated static func fileURL(_ name: String) -> URL {
+        directory.appending(path: name)
+    }
+
+    /// All files present and plausibly sized.
+    nonisolated static var isInstalled: Bool {
+        ModelFileDownloader.allInstalled(files, in: directory)
+    }
+
+    private(set) var downloading = false
+    /// 0…1 across all files, weighted by expected size.
+    private(set) var progress: Double = 0
+    private(set) var lastError: String?
+
+    private var downloadTask: Task<Void, Never>?
+    private let logger = Logger(subsystem: "com.kunzhipeng.loqi", category: "dolphin")
+
+    func download(from source: ASRModelSource) async {
+        guard !downloading else { return }
+        downloading = true
+        lastError = nil
+        progress = 0
+        // Run in an owned task so Stop can cancel it; completed-file
+        // checkpoints stay on disk and a later download resumes.
+        let task = Task { await performDownload(from: source) }
+        downloadTask = task
+        await task.value
+        downloadTask = nil
+        downloading = false
+    }
+
+    /// User-initiated stop; not an error. Partial files remain for resume.
+    func cancelDownload() {
+        downloadTask?.cancel()
+    }
+
+    /// Removes the installed files — also how the user leaves the fast
+    /// tier: with Dolphin gone, backend selection returns to Qwen3-ASR.
+    func removeInstalled() {
+        try? FileManager.default.removeItem(at: Self.directory)
+    }
+
+    private func performDownload(from source: ASRModelSource) async {
+        do {
+            try await ModelFileDownloader.downloadAll(
+                Self.files, to: Self.directory, from: source
+            ) { [weak self] blended in
+                Task { @MainActor in self?.progress = blended }
+            }
+            progress = 1
+        } catch is CancellationError {
+        } catch let error as URLError where error.code == .cancelled {
+        } catch {
+            logger.error("download failed: \(error)")
+            lastError = String(
+                localized: "Download failed — check your connection and try again.")
+        }
+    }
+}

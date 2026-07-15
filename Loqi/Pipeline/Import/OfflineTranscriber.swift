@@ -16,19 +16,29 @@ enum OfflineTranscriber {
         case apple
         case senseVoice = "sensevoice"
         case qwen3ASR = "qwen3asr"
+        case dolphin
     }
 
-    /// Which backend Re-transcribe & summarize should use. Qwen3-ASR wins
-    /// whenever installed — that's the deliberate accuracy pass, and
-    /// installing the model IS the opt-in. Otherwise the live-engine
-    /// choice applies (SenseVoice when chosen AND installed), falling
-    /// back to Apple. Pure for testing.
+    /// Dolphin covers Eastern languages only — 中文/日本語/한국어 among the
+    /// app's four; an English session must never route to it.
+    nonisolated static func dolphinSupports(_ source: AppLanguage) -> Bool {
+        source != .english
+    }
+
+    /// Which backend Re-transcribe & summarize should use. Installing a
+    /// post-process model IS the opt-in. Dolphin (the fast tier) outranks
+    /// Qwen3-ASR while installed and the language fits — trying it is the
+    /// point; delete it in Settings to return to the accuracy pass.
+    /// Otherwise the live-engine choice applies (SenseVoice when chosen
+    /// AND installed), falling back to Apple. Pure for testing.
     nonisolated static func effectiveBackend(
-        engineChoice: String, senseVoiceInstalled: Bool, qwen3Installed: Bool
+        engineChoice: String, source: AppLanguage,
+        senseVoiceInstalled: Bool, qwen3Installed: Bool, dolphinInstalled: Bool
     ) -> Backend {
         #if os(macOS)
         return .apple
         #else
+        if dolphinInstalled, dolphinSupports(source) { return .dolphin }
         if qwen3Installed { return .qwen3ASR }
         if engineChoice == "sensevoice", senseVoiceInstalled { return .senseVoice }
         return .apple
@@ -41,13 +51,15 @@ enum OfflineTranscriber {
     /// picks it in the import options. Unavailable picks fall back to
     /// Apple. Pure for testing.
     nonisolated static func importBackend(
-        choice: String, senseVoiceInstalled: Bool, qwen3Installed: Bool
+        choice: String, source: AppLanguage,
+        senseVoiceInstalled: Bool, qwen3Installed: Bool, dolphinInstalled: Bool
     ) -> Backend {
         #if os(macOS)
         return .apple
         #else
         switch choice {
         case "qwen3" where qwen3Installed: .qwen3ASR
+        case "dolphin" where dolphinInstalled && dolphinSupports(source): .dolphin
         case "sensevoice" where senseVoiceInstalled: .senseVoice
         default: .apple
         }
@@ -56,12 +68,16 @@ enum OfflineTranscriber {
 
     /// Auto post-process for new recordings: use downloaded high-accuracy
     /// engines only. nil means keep the live transcript and summarize.
+    /// Same priority as `effectiveBackend`: fast Dolphin tier first when
+    /// installed and the language fits.
     nonisolated static func postProcessBackend(
-        senseVoiceInstalled: Bool, qwen3Installed: Bool
+        source: AppLanguage,
+        senseVoiceInstalled: Bool, qwen3Installed: Bool, dolphinInstalled: Bool
     ) -> Backend? {
         #if os(macOS)
         return nil
         #else
+        if dolphinInstalled, dolphinSupports(source) { return .dolphin }
         if qwen3Installed { return .qwen3ASR }
         if senseVoiceInstalled { return .senseVoice }
         return nil
@@ -69,11 +85,13 @@ enum OfflineTranscriber {
     }
 
     /// The Re-transcribe backend for the current device + settings state.
-    static func currentBackend() -> Backend {
+    static func currentBackend(source: AppLanguage) -> Backend {
         effectiveBackend(
             engineChoice: UserDefaults.standard.string(forKey: "asr.engine") ?? "apple",
+            source: source,
             senseVoiceInstalled: SenseVoiceModelStore.isInstalled,
-            qwen3Installed: Qwen3ASRModelStore.isInstalled)
+            qwen3Installed: Qwen3ASRModelStore.isInstalled,
+            dolphinInstalled: DolphinModelStore.isInstalled)
     }
 
     /// `onProgress` reports 0...1 through the file. `hotwords` reach only
@@ -97,6 +115,11 @@ enum OfflineTranscriber {
                 audioFile, sensitivity: sensitivity, hotwords: hotwords,
                 alreadyDecoded: alreadyDecoded, onSegmentComplete: onSegmentComplete,
                 onProgress: onProgress)
+        case .dolphin:
+            return try await transcribeWithDolphin(
+                audioFile, sensitivity: sensitivity,
+                alreadyDecoded: alreadyDecoded, onSegmentComplete: onSegmentComplete,
+                onProgress: onProgress)
         case .senseVoice:
             return try await transcribeWithSenseVoice(
                 audioFile, language: language, sensitivity: sensitivity,
@@ -107,6 +130,27 @@ enum OfflineTranscriber {
             return try await transcribeWithApple(
                 audioFile, source: language, duration: duration, onProgress: onProgress)
         }
+    }
+
+    /// Dolphin fast tier: CTC (non-autoregressive), pooled like SenseVoice,
+    /// language auto-detected across its Eastern-language set. No hotword
+    /// biasing (CTC can't) — the text-level fixup downstream still applies.
+    private static func transcribeWithDolphin(
+        _ audioFile: AVAudioFile,
+        sensitivity: MicSensitivity,
+        alreadyDecoded: [SessionRecord.ImportCheckpoint.Segment] = [],
+        onSegmentComplete: (@MainActor @Sendable (SessionRecord.ImportCheckpoint.Segment) -> Void)? = nil,
+        onProgress: @escaping (Double) -> Void
+    ) async throws -> [Utterance] {
+        let samples = try await decodeMono16k(audioFile)
+        let transcriber = DolphinFileTranscriber()
+        let utterances = try await transcriber.transcribe(
+            samples16k: samples, sensitivity: sensitivity,
+            alreadyDecoded: alreadyDecoded, onSegmentComplete: onSegmentComplete
+        ) { fraction in
+            onProgress(fraction)
+        }
+        return utterances.map { ($0.text, $0.start, $0.end) }
     }
 
     /// Apple SpeechAnalyzer: file-based, finals only, each Result carrying a

@@ -122,6 +122,10 @@ struct ImportAudioSheet: View {
                         if SenseVoiceModelStore.isInstalled {
                             Text("SenseVoice (accurate)").tag("sensevoice")
                         }
+                        if DolphinModelStore.isInstalled,
+                           OfflineTranscriber.dolphinSupports(source) {
+                            Text("Dolphin (fast, 中/日/한)").tag("dolphin")
+                        }
                         if Qwen3ASRModelStore.isInstalled {
                             Text("Qwen3-ASR (highest accuracy)").tag("qwen3")
                         }

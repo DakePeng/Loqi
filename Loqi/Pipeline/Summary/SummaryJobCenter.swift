@@ -631,8 +631,10 @@ final class SummaryJobCenter {
         else { return }
 
         let backend = OfflineTranscriber.postProcessBackend(
+            source: session.entries.first?.direction.source ?? .english,
             senseVoiceInstalled: SenseVoiceModelStore.isInstalled,
-            qwen3Installed: Qwen3ASRModelStore.isInstalled)
+            qwen3Installed: Qwen3ASRModelStore.isInstalled,
+            dolphinInstalled: DolphinModelStore.isInstalled)
         let speakerCount: Int?
         if VoiceprintService.isOfflineDiarizerDownloaded,
            let count = session.recordingSpeakerCount,
@@ -777,7 +779,8 @@ final class SummaryJobCenter {
             let suggestVocabulary: Bool
             switch request.kind {
             case .manual:
-                let backend = OfflineTranscriber.currentBackend()
+                let backend = OfflineTranscriber.currentBackend(
+                    source: session.entries.first?.direction.source ?? .english)
                 updated = try await retranscriber.retranscribe(
                     session,
                     backend: backend,

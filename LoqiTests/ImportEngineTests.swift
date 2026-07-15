@@ -9,27 +9,58 @@ struct ImportEngineTests {
     /// choice applies, falling back to Apple.
     @Test func qwen3WinsWheneverInstalled() {
         #expect(OfflineTranscriber.effectiveBackend(
-            engineChoice: "apple", senseVoiceInstalled: false, qwen3Installed: true)
+            engineChoice: "apple", source: .japanese,
+            senseVoiceInstalled: false, qwen3Installed: true, dolphinInstalled: false)
             == .qwen3ASR)
         #expect(OfflineTranscriber.effectiveBackend(
-            engineChoice: "sensevoice", senseVoiceInstalled: true, qwen3Installed: true)
+            engineChoice: "sensevoice", source: .japanese,
+            senseVoiceInstalled: true, qwen3Installed: true, dolphinInstalled: false)
             == .qwen3ASR)
+    }
+
+    /// Dolphin is the experimental fast tier: while installed it outranks
+    /// Qwen3 for its languages (installing IS choosing fast; removing it
+    /// returns to the accuracy pass) — but it has NO English, so an
+    /// English session must never route to it.
+    @Test func dolphinTakesItsLanguagesWhileInstalled() {
+        #expect(OfflineTranscriber.effectiveBackend(
+            engineChoice: "apple", source: .japanese,
+            senseVoiceInstalled: false, qwen3Installed: true, dolphinInstalled: true)
+            == .dolphin)
+        #expect(OfflineTranscriber.effectiveBackend(
+            engineChoice: "apple", source: .english,
+            senseVoiceInstalled: false, qwen3Installed: true, dolphinInstalled: true)
+            == .qwen3ASR)
+        #expect(OfflineTranscriber.postProcessBackend(
+            source: .chinese,
+            senseVoiceInstalled: false, qwen3Installed: true, dolphinInstalled: true)
+            == .dolphin)
+        #expect(OfflineTranscriber.postProcessBackend(
+            source: .english,
+            senseVoiceInstalled: false, qwen3Installed: true, dolphinInstalled: true)
+            == .qwen3ASR)
+        #expect(!OfflineTranscriber.dolphinSupports(.english))
+        #expect(OfflineTranscriber.dolphinSupports(.korean))
     }
 
     @Test func senseVoiceUsedOnlyWhenChosenAndInstalled() {
         #expect(OfflineTranscriber.effectiveBackend(
-            engineChoice: "sensevoice", senseVoiceInstalled: true, qwen3Installed: false)
+            engineChoice: "sensevoice", source: .japanese,
+            senseVoiceInstalled: true, qwen3Installed: false, dolphinInstalled: false)
             == .senseVoice)
         // Chosen but not downloaded → fall back to Apple.
         #expect(OfflineTranscriber.effectiveBackend(
-            engineChoice: "sensevoice", senseVoiceInstalled: false, qwen3Installed: false)
+            engineChoice: "sensevoice", source: .japanese,
+            senseVoiceInstalled: false, qwen3Installed: false, dolphinInstalled: false)
             == .apple)
         // Apple chosen → never SenseVoice, even if installed.
         #expect(OfflineTranscriber.effectiveBackend(
-            engineChoice: "apple", senseVoiceInstalled: true, qwen3Installed: false)
+            engineChoice: "apple", source: .japanese,
+            senseVoiceInstalled: true, qwen3Installed: false, dolphinInstalled: false)
             == .apple)
         #expect(OfflineTranscriber.effectiveBackend(
-            engineChoice: "", senseVoiceInstalled: true, qwen3Installed: false)
+            engineChoice: "", source: .japanese,
+            senseVoiceInstalled: true, qwen3Installed: false, dolphinInstalled: false)
             == .apple)
     }
 
@@ -37,32 +68,52 @@ struct ImportEngineTests {
     /// turn a long import into an hour-long wait) — it runs only when the
     /// user explicitly picks it in the import options.
     @Test func importsHonorTheExplicitChoiceOnly() {
-        // The key regression: Qwen3 installed must NOT hijack an import.
+        // The key regression: an installed model must NOT hijack an import.
         #expect(OfflineTranscriber.importBackend(
-            choice: "sensevoice", senseVoiceInstalled: true, qwen3Installed: true)
+            choice: "sensevoice", source: .japanese,
+            senseVoiceInstalled: true, qwen3Installed: true, dolphinInstalled: true)
             == .senseVoice)
         #expect(OfflineTranscriber.importBackend(
-            choice: "apple", senseVoiceInstalled: true, qwen3Installed: true)
+            choice: "apple", source: .japanese,
+            senseVoiceInstalled: true, qwen3Installed: true, dolphinInstalled: true)
             == .apple)
         // Explicit pick is honored when installed, falls back when not.
         #expect(OfflineTranscriber.importBackend(
-            choice: "qwen3", senseVoiceInstalled: false, qwen3Installed: true)
+            choice: "qwen3", source: .japanese,
+            senseVoiceInstalled: false, qwen3Installed: true, dolphinInstalled: false)
             == .qwen3ASR)
         #expect(OfflineTranscriber.importBackend(
-            choice: "qwen3", senseVoiceInstalled: false, qwen3Installed: false)
+            choice: "qwen3", source: .japanese,
+            senseVoiceInstalled: false, qwen3Installed: false, dolphinInstalled: false)
             == .apple)
         #expect(OfflineTranscriber.importBackend(
-            choice: "sensevoice", senseVoiceInstalled: false, qwen3Installed: false)
+            choice: "dolphin", source: .japanese,
+            senseVoiceInstalled: false, qwen3Installed: false, dolphinInstalled: true)
+            == .dolphin)
+        // A stale Dolphin pick on an English import falls back to Apple.
+        #expect(OfflineTranscriber.importBackend(
+            choice: "dolphin", source: .english,
+            senseVoiceInstalled: false, qwen3Installed: false, dolphinInstalled: true)
+            == .apple)
+        #expect(OfflineTranscriber.importBackend(
+            choice: "sensevoice", source: .japanese,
+            senseVoiceInstalled: false, qwen3Installed: false, dolphinInstalled: false)
             == .apple)
     }
 
     @Test func newRecordingPostProcessUsesDownloadedASROnly() {
         #expect(OfflineTranscriber.postProcessBackend(
-            senseVoiceInstalled: true, qwen3Installed: true) == .qwen3ASR)
+            source: .japanese,
+            senseVoiceInstalled: true, qwen3Installed: true, dolphinInstalled: false)
+            == .qwen3ASR)
         #expect(OfflineTranscriber.postProcessBackend(
-            senseVoiceInstalled: true, qwen3Installed: false) == .senseVoice)
+            source: .japanese,
+            senseVoiceInstalled: true, qwen3Installed: false, dolphinInstalled: false)
+            == .senseVoice)
         #expect(OfflineTranscriber.postProcessBackend(
-            senseVoiceInstalled: false, qwen3Installed: false) == nil)
+            source: .japanese,
+            senseVoiceInstalled: false, qwen3Installed: false, dolphinInstalled: false)
+            == nil)
     }
 
     @MainActor
@@ -145,6 +196,7 @@ struct ImportEngineTests {
         #expect(OfflineTranscriber.Backend.apple.rawValue == "apple")
         #expect(OfflineTranscriber.Backend.senseVoice.rawValue == "sensevoice")
         #expect(OfflineTranscriber.Backend.qwen3ASR.rawValue == "qwen3asr")
+        #expect(OfflineTranscriber.Backend.dolphin.rawValue == "dolphin")
     }
 
     @Test func retranscribeReusesOnlySameBackendSegments() {

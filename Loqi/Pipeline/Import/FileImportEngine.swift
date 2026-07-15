@@ -96,8 +96,10 @@ final class FileImportEngine {
         onPhase(.transcribing(0))
         let backend = OfflineTranscriber.importBackend(
             choice: engine,
+            source: direction.source,
             senseVoiceInstalled: SenseVoiceModelStore.isInstalled,
-            qwen3Installed: Qwen3ASRModelStore.isInstalled)
+            qwen3Installed: Qwen3ASRModelStore.isInstalled,
+            dolphinInstalled: DolphinModelStore.isInstalled)
         await llm?.unload()
         let rawUtterances = try await OfflineTranscriber.transcribe(
             audioFile,
@@ -139,8 +141,10 @@ final class FileImportEngine {
         onPhase(.transcribing(0))
         let backend = OfflineTranscriber.importBackend(
             choice: checkpoint.engine,
+            source: direction.source,
             senseVoiceInstalled: SenseVoiceModelStore.isInstalled,
-            qwen3Installed: Qwen3ASRModelStore.isInstalled)
+            qwen3Installed: Qwen3ASRModelStore.isInstalled,
+            dolphinInstalled: DolphinModelStore.isInstalled)
         await llm?.unload()
         let rawUtterances = try await OfflineTranscriber.transcribe(
             audioFile,

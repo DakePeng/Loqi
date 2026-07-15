@@ -20,6 +20,9 @@ struct SettingsView: View {
     @State private var qwen3Store = Qwen3ASRModelStore()
     @State private var qwen3Installed = Qwen3ASRModelStore.isInstalled
     @State private var qwen3Speedometer = DownloadSpeedometer()
+    @State private var dolphinStore = DolphinModelStore()
+    @State private var dolphinInstalled = DolphinModelStore.isInstalled
+    @State private var dolphinSpeedometer = DownloadSpeedometer()
     @State private var diarizerState = "—"
     @State private var visionDownloaded = false
     @State private var diarizerInstalled = VoiceprintService.isOfflineDiarizerDownloaded
@@ -143,10 +146,42 @@ struct SettingsView: View {
                                 .foregroundStyle(.red)
                         }
                     }
+                    LabeledContent(
+                        "Dolphin model (fast tier)",
+                        value: dolphinInstalled
+                            ? localized("Downloaded")
+                            : localized("Not downloaded"))
+
+                    if dolphinInstalled {
+                        Button("Remove Dolphin model", role: .destructive) {
+                            dolphinStore.removeInstalled()
+                            dolphinInstalled = DolphinModelStore.isInstalled
+                        }
+                    } else if dolphinStore.downloading {
+                        DownloadProgressRow(
+                            speedometer: dolphinSpeedometer,
+                            onStop: { dolphinStore.cancelDownload() })
+                    } else {
+                        Button("Download Dolphin model (~250 MB)") {
+                            dolphinSpeedometer.start(
+                                totalBytes: DolphinModelStore.totalExpectedBytes)
+                            Task {
+                                let source = ASRModelSource(
+                                    rawValue: asrSourceRaw) ?? .modelScope
+                                await dolphinStore.download(from: source)
+                                dolphinInstalled = DolphinModelStore.isInstalled
+                            }
+                        }
+                    }
+                    if let error = dolphinStore.lastError {
+                        Text(error)
+                            .font(.footnote)
+                            .foregroundStyle(.red)
+                    }
                 } header: {
                     Text("High-accuracy re-transcription")
                 } footer: {
-                    Text("Once downloaded, Re-transcribe & summarize uses Qwen3-ASR automatically, and imports can select it. Auto post-process re-transcribes and identifies speakers before the first summary for new recordings, using downloaded models only. Live captions stay on the fast engines.")
+                    Text("Once downloaded, Re-transcribe & summarize uses Qwen3-ASR automatically, and imports can select it. Auto post-process re-transcribes and identifies speakers before the first summary for new recordings, using downloaded models only. Dolphin is an experimental fast tier for 中文/日本語/한국어 — several times quicker than Qwen3-ASR at somewhat lower accuracy; while installed it takes over those languages (remove it to go back). Live captions stay on the fast engines.")
                 }
 
                 Section {
@@ -363,6 +398,9 @@ struct SettingsView: View {
             .onChange(of: qwen3Store.progress) { _, p in
                 qwen3Speedometer.update(p)
             }
+            .onChange(of: dolphinStore.progress) { _, p in
+                dolphinSpeedometer.update(p)
+            }
             .onChange(of: appLanguageRaw) {
                 Task { await refreshStats() }
             }
@@ -464,6 +502,7 @@ struct SettingsView: View {
         thermalTransitions = pipeline.thermal.transitions.count
         senseVoiceInstalled = SenseVoiceModelStore.isInstalled
         qwen3Installed = Qwen3ASRModelStore.isInstalled
+        dolphinInstalled = DolphinModelStore.isInstalled
 
         diarizerInstalled = VoiceprintService.isOfflineDiarizerDownloaded
         // Stateless offline pipeline: downloaded or not is the whole story
