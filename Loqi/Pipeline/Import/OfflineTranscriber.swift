@@ -20,25 +20,35 @@ enum OfflineTranscriber {
     }
 
     /// Dolphin covers Eastern languages only — 中文/日本語/한국어 among the
-    /// app's four; an English session must never route to it.
+    /// app's four; an English session must never route to it. Used for
+    /// imports, where the user explicitly picked one source language.
     nonisolated static func dolphinSupports(_ source: AppLanguage) -> Bool {
         source != .english
     }
 
+    /// Session-level gate for the accuracy pass: Dolphin may take a
+    /// session only when EVERY language its entries detected is covered —
+    /// a zh/en code-switching meeting must keep the multilingual pass
+    /// (its English utterances would come back garbled). An empty set
+    /// (no entries yet) fails closed to the multilingual backends.
+    nonisolated static func dolphinSupports(_ sourceLanguages: Set<AppLanguage>) -> Bool {
+        !sourceLanguages.isEmpty && !sourceLanguages.contains(.english)
+    }
+
     /// Which backend Re-transcribe & summarize should use. Installing a
     /// post-process model IS the opt-in. Dolphin (the fast tier) outranks
-    /// Qwen3-ASR while installed and the language fits — trying it is the
-    /// point; delete it in Settings to return to the accuracy pass.
-    /// Otherwise the live-engine choice applies (SenseVoice when chosen
-    /// AND installed), falling back to Apple. Pure for testing.
+    /// Qwen3-ASR while installed and every session language fits — trying
+    /// it is the point; delete it in Settings to return to the accuracy
+    /// pass. Otherwise the live-engine choice applies (SenseVoice when
+    /// chosen AND installed), falling back to Apple. Pure for testing.
     nonisolated static func effectiveBackend(
-        engineChoice: String, source: AppLanguage,
+        engineChoice: String, sourceLanguages: Set<AppLanguage>,
         senseVoiceInstalled: Bool, qwen3Installed: Bool, dolphinInstalled: Bool
     ) -> Backend {
         #if os(macOS)
         return .apple
         #else
-        if dolphinInstalled, dolphinSupports(source) { return .dolphin }
+        if dolphinInstalled, dolphinSupports(sourceLanguages) { return .dolphin }
         if qwen3Installed { return .qwen3ASR }
         // Hybrid's record layer IS SenseVoice — same re-transcribe backend.
         if engineChoice == "sensevoice" || engineChoice == "hybrid",
@@ -71,15 +81,15 @@ enum OfflineTranscriber {
     /// Auto post-process for new recordings: use downloaded high-accuracy
     /// engines only. nil means keep the live transcript and summarize.
     /// Same priority as `effectiveBackend`: fast Dolphin tier first when
-    /// installed and the language fits.
+    /// installed and every session language fits.
     nonisolated static func postProcessBackend(
-        source: AppLanguage,
+        sourceLanguages: Set<AppLanguage>,
         senseVoiceInstalled: Bool, qwen3Installed: Bool, dolphinInstalled: Bool
     ) -> Backend? {
         #if os(macOS)
         return nil
         #else
-        if dolphinInstalled, dolphinSupports(source) { return .dolphin }
+        if dolphinInstalled, dolphinSupports(sourceLanguages) { return .dolphin }
         if qwen3Installed { return .qwen3ASR }
         if senseVoiceInstalled { return .senseVoice }
         return nil
@@ -87,10 +97,10 @@ enum OfflineTranscriber {
     }
 
     /// The Re-transcribe backend for the current device + settings state.
-    static func currentBackend(source: AppLanguage) -> Backend {
+    static func currentBackend(sourceLanguages: Set<AppLanguage>) -> Backend {
         effectiveBackend(
             engineChoice: UserDefaults.standard.string(forKey: "asr.engine") ?? "apple",
-            source: source,
+            sourceLanguages: sourceLanguages,
             senseVoiceInstalled: SenseVoiceModelStore.isInstalled,
             qwen3Installed: Qwen3ASRModelStore.isInstalled,
             dolphinInstalled: DolphinModelStore.isInstalled)

@@ -96,6 +96,14 @@ struct ImportAudioSheet: View {
                     .onChange(of: sourceRaw) {
                         UserDefaults.standard.set(sourceRaw, forKey: "captions.source")
                         if translationRaw == source.rawValue { translationRaw = "" }
+                        // Dolphin has no English: switching the language
+                        // hides its row, and a stale pick would silently
+                        // fall through to Apple at import time.
+                        if importEngine == "dolphin",
+                           !OfflineTranscriber.dolphinSupports(source) {
+                            importEngine = SenseVoiceModelStore.isInstalled
+                                ? "sensevoice" : "apple"
+                        }
                     }
                     Picker("Translation", selection: $translationRaw) {
                         Text("Off").tag("")

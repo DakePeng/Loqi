@@ -1398,7 +1398,84 @@
       }
     },
     "Dolphin (fast, 中/日/한)" : {
-
+      "localizations" : {
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Dolphin（高速・中/日/韓）"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Dolphin（快速，中/日/韩）"
+          }
+        }
+      }
+    },
+    "Dolphin is unavailable in the native Mac app until the sherpa-onnx macOS library is bundled." : {
+      "localizations" : {
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "sherpa-onnx の macOS ライブラリが同梱されるまで、Mac 版アプリでは Dolphin を利用できません。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "在捆绑 sherpa-onnx 的 macOS 库之前，Mac 原生应用暂不支持 Dolphin。"
+          }
+        }
+      }
+    },
+    "Dolphin model (fast tier)" : {
+      "localizations" : {
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Dolphin モデル（高速ティア）"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Dolphin 模型（快速档）"
+          }
+        }
+      }
+    },
+    "Download Dolphin model (~250 MB)" : {
+      "localizations" : {
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Dolphin モデルをダウンロード（約 250 MB）"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "下载 Dolphin 模型（约 250 MB）"
+          }
+        }
+      }
+    },
+    "Download the Dolphin model in Settings first." : {
+      "localizations" : {
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "先に設定で Dolphin モデルをダウンロードしてください。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "请先在设置中下载 Dolphin 模型。"
+          }
+        }
+      }
     },
     "Done" : {
       "extractionState" : "stale",
@@ -3437,7 +3514,20 @@
       }
     },
     "Once downloaded, Re-transcribe & summarize uses Qwen3-ASR automatically, and imports can select it. Auto post-process re-transcribes and identifies speakers before the first summary for new recordings, using downloaded models only. Dolphin is an experimental fast tier for 中文/日本語/한국어 — several times quicker than Qwen3-ASR at somewhat lower accuracy; while installed it takes over those languages (remove it to go back). Live captions stay on the fast engines." : {
-
+      "localizations" : {
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "ダウンロード後、「再文字起こしして要約」は自動的に Qwen3-ASR を使用し、インポートでも選択できます。自動後処理は、新しい録音の最初の要約前に、ダウンロード済みモデルのみで再文字起こしと話者識別を行います。Dolphin は中国語・日本語・韓国語向けの実験的な高速ティアです — Qwen3-ASR より数倍高速で、精度はやや劣ります。インストール中はこれらの言語を引き受けます（元に戻すには削除してください）。ライブ字幕は引き続き高速エンジンで動作します。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "下载后，“重新转写并总结”会自动使用 Qwen3-ASR，导入时也可选用。自动后处理仅使用已下载的模型，在新录音的首次总结前重新转写并识别说话人。Dolphin 是面向中文/日语/韩语的实验性快速档 — 比 Qwen3-ASR 快数倍，准确率略低；安装期间将接管这些语言（删除即可恢复）。实时字幕仍使用快速引擎。"
+          }
+        }
+      }
     },
     "Once downloaded, Re-transcribe & summarize uses Qwen3-ASR automatically, and imports can select it. Auto post-process re-transcribes and identifies speakers before the first summary for new recordings, using downloaded models only. Live captions stay on the fast engines." : {
       "extractionState" : "stale",
@@ -4182,6 +4272,22 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "降低发热"
+          }
+        }
+      }
+    },
+    "Remove Dolphin model" : {
+      "localizations" : {
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Dolphin モデルを削除"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "删除 Dolphin 模型"
           }
         }
       }

@@ -210,7 +210,13 @@ struct SummaryEngine {
                     fixed, original: entry.sourceText),
                   fixed != entry.sourceText
             else { continue }
-            updated.entries[index].rawSourceText = entry.sourceText
+            // Keep the EARLIEST raw text: when the live cleanup already
+            // stored the true ASR original, overwriting it here with the
+            // cleaned intermediate would permanently lose the record of
+            // what was actually recognized.
+            if updated.entries[index].rawSourceText == nil {
+                updated.entries[index].rawSourceText = entry.sourceText
+            }
             updated.entries[index].sourceText = fixed
             changedIDs.insert(entry.id)
         }

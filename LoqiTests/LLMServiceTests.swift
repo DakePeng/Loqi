@@ -193,13 +193,14 @@ struct PipelineResourceTests {
     }
 
     /// The automatic accuracy pass runs only on external power. `.unknown`
-    /// fails open — a missing sensor reading (simulator, monitoring just
-    /// enabled) must not silently defer the pass forever.
+    /// fails CLOSED — a cold launch reads .unknown before the first
+    /// battery sample, and the hot pass must not start on battery; the
+    /// battery observer re-sweeps once the state becomes known.
     @Test func accuracyPassChargeGateMapsBatteryStates() {
         #expect(SummaryJobCenter.pluggedIn(.charging))
         #expect(SummaryJobCenter.pluggedIn(.full))
         #expect(!SummaryJobCenter.pluggedIn(.unplugged))
-        #expect(SummaryJobCenter.pluggedIn(.unknown))
+        #expect(!SummaryJobCenter.pluggedIn(.unknown))
     }
 
     /// Memory warnings full-unload the LLM during import-only jobs (their

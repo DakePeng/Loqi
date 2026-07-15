@@ -83,6 +83,9 @@ final class SummaryJobCenter {
     /// Retranscribe workers canceled by backgrounding. Foreground resume waits
     /// for their cleanup before reusing the same activity/task slots.
     @ObservationIgnored private var backgroundPausedRetranscribeTasks: [UUID: Task<Void, Never>] = [:]
+    /// Decoded segments awaiting a batched checkpoint write (see
+    /// `retranscribeCheckpointBatch`).
+    @ObservationIgnored private var retranscribeSegmentBuffers: [UUID: [SessionRecord.ImportCheckpoint.Segment]] = [:]
     /// One-at-a-time gate every heavy post-hoc job acquires before touching
     /// the GPU/ASR. Re-summary fired during a file import used to run both
     /// at once and the OS killed the process; now the second job queues.
@@ -153,8 +156,13 @@ final class SummaryJobCenter {
 
     /// True when the device is on external power — the only time the
     /// automatic accuracy pass is allowed to burn 20-30 minutes of CPU.
-    /// `.unknown` fails open (run now): a missing sensor reading must not
-    /// silently defer the pass forever. Pure mapping split for testing.
+    /// `.unknown` fails CLOSED (defer): a cold launch reads .unknown
+    /// before the first battery sample, and running the hot pass on
+    /// battery is the exact failure charge-gating exists to prevent. A
+    /// deferral never strands the pass — the battery observer re-sweeps
+    /// the moment the state becomes known. (Simulator reports .unknown;
+    /// manual Re-transcribe stays available there.) Pure mapping split
+    /// for testing.
     static func isPluggedIn() -> Bool {
         #if os(iOS)
         UIDevice.current.isBatteryMonitoringEnabled = true
@@ -166,12 +174,7 @@ final class SummaryJobCenter {
 
     #if os(iOS)
     nonisolated static func pluggedIn(_ state: UIDevice.BatteryState) -> Bool {
-        switch state {
-        case .charging, .full: true
-        case .unplugged: false
-        case .unknown: true
-        @unknown default: true
-        }
+        state == .charging || state == .full
     }
     #endif
 
@@ -631,7 +634,7 @@ final class SummaryJobCenter {
         else { return }
 
         let backend = OfflineTranscriber.postProcessBackend(
-            source: session.entries.first?.direction.source ?? .english,
+            sourceLanguages: Set(session.entries.map(\.direction.source)),
             senseVoiceInstalled: SenseVoiceModelStore.isInstalled,
             qwen3Installed: Qwen3ASRModelStore.isInstalled,
             dolphinInstalled: DolphinModelStore.isInstalled)
@@ -780,7 +783,7 @@ final class SummaryJobCenter {
             switch request.kind {
             case .manual:
                 let backend = OfflineTranscriber.currentBackend(
-                    source: session.entries.first?.direction.source ?? .english)
+                    sourceLanguages: Set(session.entries.map(\.direction.source)))
                 updated = try await retranscriber.retranscribe(
                     session,
                     backend: backend,
@@ -975,6 +978,11 @@ final class SummaryJobCenter {
     /// since the marker was written are honored (and a marker with nothing
     /// left to do is consumed there).
     func resumePendingPostProcesses() {
+        // Cheap early-out before touching UIDevice: battery notifications
+        // can bounce (plug/unplug, charge/full) and most fires find
+        // nothing pending.
+        guard archive.sessions.contains(where: { $0.pendingPostProcess != nil })
+        else { return }
         guard !isRecording(), !isBackgrounded, Self.isPluggedIn() else { return }
         for session in archive.sessions
         where session.pendingPostProcess != nil && session.importing != true
@@ -1147,20 +1155,39 @@ final class SummaryJobCenter {
         return reusable
     }
 
-    /// Per-segment checkpoint writer for the accuracy pass — same write
-    /// frequency as `recordImportSegment`. nil for Apple (no segments).
+    /// How many decoded segments accumulate before the checkpoint persists.
+    /// Unlike an import (whose record starts empty), a retranscribe rides a
+    /// fully-populated SessionRecord — per-segment archive.update would
+    /// re-encode the whole multi-hundred-KB record continuously for the
+    /// 20-30 min pass. Batching trades ≤9 segments (~1 min of decode) of
+    /// resume progress for ~10x less encode/flash churn.
+    private static let retranscribeCheckpointBatch = 10
+
+    /// Batched checkpoint writer for the accuracy pass. nil for Apple
+    /// (no segments). The tail of a partial batch is deliberately not
+    /// flushed — a cancelled pass just re-decodes those few segments.
     private func retranscribeSegmentRecorder(
         sessionID: UUID, backend: OfflineTranscriber.Backend
     ) -> (@MainActor @Sendable (SessionRecord.ImportCheckpoint.Segment) -> Void)? {
         guard backend != .apple else { return nil }
+        retranscribeSegmentBuffers[sessionID] = []
         return { [weak self] segment in
-            guard let self,
-                  var record = self.archive.sessions.first(where: { $0.id == sessionID }),
-                  record.retranscribeCheckpoint != nil
-            else { return }
-            record.retranscribeCheckpoint?.segments.append(segment)
-            self.archive.update(record)
+            self?.bufferRetranscribeSegment(sessionID: sessionID, segment: segment)
         }
+    }
+
+    private func bufferRetranscribeSegment(
+        sessionID: UUID, segment: SessionRecord.ImportCheckpoint.Segment
+    ) {
+        retranscribeSegmentBuffers[sessionID, default: []].append(segment)
+        guard let buffered = retranscribeSegmentBuffers[sessionID],
+              buffered.count >= Self.retranscribeCheckpointBatch,
+              var record = archive.sessions.first(where: { $0.id == sessionID }),
+              record.retranscribeCheckpoint != nil
+        else { return }
+        record.retranscribeCheckpoint?.segments.append(contentsOf: buffered)
+        retranscribeSegmentBuffers[sessionID] = []
+        archive.update(record)
     }
 
     /// Summarize a freshly imported session with the user's default style.
@@ -1276,6 +1303,7 @@ final class SummaryJobCenter {
         tasks[sessionID] = nil
         graces[sessionID]?.end()
         graces[sessionID] = nil
+        retranscribeSegmentBuffers[sessionID] = nil
         // A resume sweep that ran while this job was still unwinding
         // skipped its session (`tasks` non-nil). Now that teardown is
         // done, re-sweep — otherwise a checkpointed import cancelled by
@@ -1284,6 +1312,12 @@ final class SummaryJobCenter {
         // guards (foreground, not recording, no badge, checkpoint
         // present) make this a no-op in every other case.
         resumeUnfinishedImports()
+        // Same rationale for deferred accuracy passes: the charger can
+        // connect while the battery-time summarize is still running — the
+        // battery observer's sweep skips the busy session, and no later
+        // battery event may come. Re-sweep now that this job's slot is
+        // clear; the sweep's own guards no-op every other case.
+        resumePendingPostProcesses()
     }
 
     /// Respect the gates, then make the model ready. With consent the load

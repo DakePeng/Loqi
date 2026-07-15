@@ -141,19 +141,6 @@ actor DolphinDecoder {
     }
 }
 
-enum DolphinError: LocalizedError {
-    case modelMissing
-    case unavailableOnMac
-
-    var errorDescription: String? {
-        switch self {
-        case .modelMissing:
-            String(localized: "Download the Dolphin model in Settings first.")
-        case .unavailableOnMac:
-            String(localized: "Dolphin is unavailable in the native Mac app until the sherpa-onnx macOS library is bundled.")
-        }
-    }
-}
 #else
 actor SenseVoiceFileTranscriber {
     typealias Utterance = VADSegmentedTranscriber.Utterance
@@ -184,6 +171,7 @@ actor DolphinFileTranscriber {
         throw DolphinError.unavailableOnMac
     }
 }
+#endif
 
 enum DolphinError: LocalizedError {
     case modelMissing
@@ -198,4 +186,3 @@ enum DolphinError: LocalizedError {
         }
     }
 }
-#endif

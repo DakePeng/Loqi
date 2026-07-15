@@ -406,6 +406,10 @@ actor HybridSpeechEngine: SpeechEngine {
         }
     }
 
+    /// Prepare-time degrade ONLY: safe to drop the converter because we
+    /// return SenseVoice's own 16k format — the mic tap will feed 16k.
+    /// After prepare() has committed Apple's format, degrades must KEEP
+    /// the converter or SenseVoice receives wrong-rate audio.
     private func degrade(returning format: AVAudioFormat) async -> AVAudioFormat {
         degraded = true
         converter = nil
@@ -420,9 +424,11 @@ actor HybridSpeechEngine: SpeechEngine {
             do {
                 appleEvents = try await apple.start()
             } catch {
+                // prepare() already returned Apple's format — the mic tap
+                // feeds it, so the converter MUST survive this degrade or
+                // the record engine decodes wrong-rate audio all session.
                 logger.error("hybrid: Apple child start failed (\(error)); degrading to pure SenseVoice")
                 degraded = true
-                converter = nil
                 await senseVoice.setEmitsPartials(true)
             }
         }
@@ -541,7 +547,15 @@ actor HybridSpeechEngine: SpeechEngine {
             break
         case .ended(let error):
             if let error {
-                logger.warning("hybrid: Apple child died (\(error)); captions continue finals-only")
+                // Degrade to pure-SenseVoice behavior: partials resume from
+                // the next utterance and SenseVoice volatiles forward
+                // (degraded routing). The converter stays — the mic tap is
+                // still feeding Apple's committed format.
+                logger.warning("hybrid: Apple child died (\(error)); reverting to SenseVoice partials")
+                degraded = true
+                appleFeed?.finish()
+                appleFeed = nil
+                Task { [senseVoice] in await senseVoice.setEmitsPartials(true) }
             }
         }
     }
