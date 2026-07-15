@@ -100,10 +100,10 @@ struct PromptBuilder: Sendable {
     }
 
     /// Parse the restored sentence ("S:" tagged, fullwidth colon tolerated;
-    /// untagged output is taken whole). Uses the sentence-safe cleaner:
-    /// transcripts legitimately contain markup ("use the <title> tag") and
-    /// the fidelity gate would accept its deletion, so only KNOWN model
-    /// wrapper tags are stripped here — unlike `cleanResponse`.
+    /// untagged single-line output is taken whole). Uses the sentence-safe
+    /// cleaner: transcripts legitimately contain markup ("use the <title>
+    /// tag") and the fidelity gate would accept its deletion, so only KNOWN
+    /// model wrapper tags are stripped here — unlike `cleanResponse`.
     func parseRestoredSentence(_ raw: String) -> String? {
         for line in cleanSentenceResponse(raw).split(separator: "\n") {
             let trimmed = line.trimmingCharacters(in: .whitespaces)
@@ -111,8 +111,22 @@ struct PromptBuilder: Sendable {
                 return value
             }
         }
-        let whole = cleanSentenceResponse(raw)
-        return whole.isEmpty ? nil : whole
+        // Untagged fallback. Small models sometimes prepend a preamble line
+        // ("以下は…翻訳です：", "Here is the corrected sentence:") that the
+        // fidelity gate accepts on long sentences — drop leading
+        // colon-terminated lines. Output still spanning multiple lines
+        // after that isn't the "exactly one line" the prompts demand, and
+        // guessing risks a false record: reject so the caller keeps the
+        // ASR original.
+        var lines = cleanSentenceResponse(raw).split(separator: "\n")
+            .map { $0.trimmingCharacters(in: .whitespaces) }
+            .filter { !$0.isEmpty }
+        while lines.count > 1, let first = lines.first,
+              first.hasSuffix(":") || first.hasSuffix("：") {
+            lines.removeFirst()
+        }
+        guard lines.count == 1 else { return nil }
+        return lines[0]
     }
 
     /// Fidelity gate for the restore: a sentence that diverges beyond a

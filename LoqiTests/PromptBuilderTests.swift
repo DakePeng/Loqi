@@ -135,6 +135,26 @@ struct PromptBuilderTests {
             == "Sentence structure matters here")
     }
 
+    @Test func parseRefinedSentenceDropsPreambleLines() {
+        // Observed in a 2026-07-07 session export: LFM2.5 prepended a
+        // natural-language label line, and the combined text passed the
+        // fidelity gate and was saved (then translated).
+        #expect(builder.parseRefinedSentence(
+            "以下は、日本語での正確で自然な日本語翻訳です：\n\n黒川さんが大野さんと対応する中でまず。")
+            == "黒川さんが大野さんと対応する中でまず。")
+        #expect(builder.parseRefinedSentence(
+            "Here is the corrected sentence:\nWe meet with Zhipeng tomorrow.")
+            == "We meet with Zhipeng tomorrow.")
+    }
+
+    @Test func parseRefinedSentenceRejectsMultiLineOutput() {
+        // Off-contract multi-line output can't be joined safely; reject so
+        // the caller keeps the ASR original.
+        #expect(builder.parseRefinedSentence("第一の文です。\n第二の文です。") == nil)
+        // A lone colon-terminated line is content, not a preamble.
+        #expect(builder.parseRefinedSentence("次の通りです：") == "次の通りです：")
+    }
+
     @Test func sentenceParsingKeepsSpokenMarkup() {
         // Transcripts about markup legitimately contain tags; only KNOWN
         // model wrappers are stripped from sentence output.
