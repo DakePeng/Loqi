@@ -841,6 +841,12 @@ final class SummaryJobCenter {
         } catch {
             errors[sessionID] = error.localizedDescription
             clearPendingSummary(sessionID)
+            // A failed accuracy pass must not auto-retry: finishJob's
+            // re-sweep would re-enqueue this session immediately, and a
+            // deterministic failure (AI disabled, model missing) would
+            // loop forever. Kills/cancels keep the marker; failures
+            // consume it — same policy as failed imports.
+            clearPendingPostProcess(sessionID)
         }
     }
 
