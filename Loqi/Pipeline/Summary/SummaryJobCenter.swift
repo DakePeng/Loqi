@@ -712,7 +712,15 @@ final class SummaryJobCenter {
             let suggestVocabulary: Bool
             switch request.kind {
             case .manual:
-                updated = try await retranscriber.retranscribe(session) { [weak self] phase in
+                let backend = OfflineTranscriber.currentBackend()
+                updated = try await retranscriber.retranscribe(
+                    session,
+                    backend: backend,
+                    alreadyDecoded: seedRetranscribeCheckpoint(
+                        sessionID: sessionID, backend: backend),
+                    onSegmentComplete: retranscribeSegmentRecorder(
+                        sessionID: sessionID, backend: backend)
+                ) { [weak self] phase in
                     self?.retranscribeProgress(sessionID: sessionID, phase: phase)
                 }
                 suggestVocabulary = false
@@ -721,7 +729,13 @@ final class SummaryJobCenter {
                     session,
                     backend: backend,
                     speakerCount: speakerCount,
-                    voiceprint: voiceprint
+                    voiceprint: voiceprint,
+                    alreadyDecoded: backend.map {
+                        seedRetranscribeCheckpoint(sessionID: sessionID, backend: $0)
+                    } ?? [],
+                    onSegmentComplete: backend.flatMap {
+                        retranscribeSegmentRecorder(sessionID: sessionID, backend: $0)
+                    }
                 ) { [weak self] phase in
                     self?.retranscribeProgress(sessionID: sessionID, phase: phase)
                 }
@@ -991,6 +1005,46 @@ final class SummaryJobCenter {
         else { return }
         record.importCheckpoint?.segments.append(segment)
         archive.update(record)
+    }
+
+    /// Arms (or reuses) the accuracy pass's resume checkpoint and returns
+    /// the segments a matching prior attempt already decoded. A checkpoint
+    /// written by a different backend is replaced — its segments are not
+    /// reusable. The Apple backend reports no segments, so there's nothing
+    /// to arm.
+    private func seedRetranscribeCheckpoint(
+        sessionID: UUID, backend: OfflineTranscriber.Backend
+    ) -> [SessionRecord.ImportCheckpoint.Segment] {
+        guard backend != .apple,
+              var record = archive.sessions.first(where: { $0.id == sessionID })
+        else { return [] }
+        let reusable = SessionRetranscriber.reusableSegments(
+            checkpoint: record.retranscribeCheckpoint, backend: backend)
+        if record.retranscribeCheckpoint?.backendRaw != backend.rawValue {
+            record.retranscribeCheckpoint = SessionRecord.RetranscribeCheckpoint(
+                backendRaw: backend.rawValue)
+            archive.update(record)
+        }
+        if !reusable.isEmpty {
+            logger.info("retranscribe resume: \(reusable.count) cached segments for \(sessionID, privacy: .public)")
+        }
+        return reusable
+    }
+
+    /// Per-segment checkpoint writer for the accuracy pass — same write
+    /// frequency as `recordImportSegment`. nil for Apple (no segments).
+    private func retranscribeSegmentRecorder(
+        sessionID: UUID, backend: OfflineTranscriber.Backend
+    ) -> (@MainActor @Sendable (SessionRecord.ImportCheckpoint.Segment) -> Void)? {
+        guard backend != .apple else { return nil }
+        return { [weak self] segment in
+            guard let self,
+                  var record = self.archive.sessions.first(where: { $0.id == sessionID }),
+                  record.retranscribeCheckpoint != nil
+            else { return }
+            record.retranscribeCheckpoint?.segments.append(segment)
+            self.archive.update(record)
+        }
     }
 
     /// Summarize a freshly imported session with the user's default style.

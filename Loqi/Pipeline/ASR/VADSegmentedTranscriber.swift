@@ -79,6 +79,30 @@ enum VADSegmentedTranscriber {
     /// recognizers' worth of ONNX arenas is the most we'll risk.
     static let maxDecoderPool = 3
 
+    /// True when the batch pass should hold before starting another
+    /// segment: at sustained `.serious` iOS throttles the whole SoC, so
+    /// pausing cools faster AND wastes less than grinding on. Pure for
+    /// testing.
+    static func shouldHoldForThermals(_ state: ProcessInfo.ThermalState) -> Bool {
+        state >= .serious
+    }
+
+    /// How often a held decode re-checks the thermal state.
+    static let thermalPollInterval: Duration = .seconds(15)
+
+    /// Sleep-poll until the SoC cools below `.serious`. Cancellation
+    /// propagates through `Task.sleep`, so a cancelled import/re-transcribe
+    /// stops promptly even mid-hold. In-flight decodes finish naturally;
+    /// only new segments wait.
+    private static func waitWhileThermallyLimited() async throws {
+        guard shouldHoldForThermals(ProcessInfo.processInfo.thermalState) else { return }
+        logger.notice("offline decode paused: thermal state serious")
+        repeat {
+            try await Task.sleep(for: thermalPollInterval)
+        } while shouldHoldForThermals(ProcessInfo.processInfo.thermalState)
+        logger.notice("offline decode resumed: thermal state recovered")
+    }
+
     /// How many independent decoders to run in parallel given the free
     /// memory and core budget. The first is always allowed (it's today's
     /// single-decoder baseline); each additional one needs its own
@@ -174,6 +198,7 @@ enum VADSegmentedTranscriber {
                     results[index] = [Utterance(text: text, start: s, end: e)]
                     return
                 }
+                try await waitWhileThermallyLimited()
                 if free.isEmpty { try await harvestOne() }
                 let slot = free.removeLast()
                 group.addTask {

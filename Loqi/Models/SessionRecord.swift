@@ -209,6 +209,19 @@ struct SessionRecord: Identifiable, Codable, Sendable {
         /// legacy markers decode as nil (no consent).
         var allowDownload: Bool?
     }
+
+    /// Resumable state for an interrupted accuracy pass (re-transcribe or
+    /// new-recording post-process): segments decoded so far, reusable only
+    /// by the same backend — a SenseVoice cache must never seed a Qwen3
+    /// pass. Survives cancellation, preemption, AND failure (decoded
+    /// segments are paid-for work a retry reuses); only a completed pass
+    /// clears it. Optional: legacy records decode as nil.
+    var retranscribeCheckpoint: RetranscribeCheckpoint?
+
+    struct RetranscribeCheckpoint: Codable, Sendable {
+        var backendRaw: String
+        var segments: [ImportCheckpoint.Segment] = []
+    }
     /// True when speaker separation was requested for this session but the
     /// diarizer failed (model download or analysis) — the transcript is
     /// intact, it just has no speaker labels. Optional: legacy records and

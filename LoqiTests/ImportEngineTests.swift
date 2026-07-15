@@ -139,6 +139,38 @@ struct ImportEngineTests {
             coreCount: 6, hardCap: 3) == 1)
     }
 
+    @Test func backendRawValuesStayStable() {
+        // Persisted in RetranscribeCheckpoint.backendRaw — a rename breaks
+        // every in-flight resume.
+        #expect(OfflineTranscriber.Backend.apple.rawValue == "apple")
+        #expect(OfflineTranscriber.Backend.senseVoice.rawValue == "sensevoice")
+        #expect(OfflineTranscriber.Backend.qwen3ASR.rawValue == "qwen3asr")
+    }
+
+    @Test func retranscribeReusesOnlySameBackendSegments() {
+        let segments = [
+            SessionRecord.ImportCheckpoint.Segment(start: 0, end: 3.5, text: "黒川さんのボス"),
+        ]
+        let checkpoint = SessionRecord.RetranscribeCheckpoint(
+            backendRaw: "qwen3asr", segments: segments)
+        #expect(SessionRetranscriber.reusableSegments(
+            checkpoint: checkpoint, backend: .qwen3ASR).count == 1)
+        // A SenseVoice pass must never seed from Qwen3 segments.
+        #expect(SessionRetranscriber.reusableSegments(
+            checkpoint: checkpoint, backend: .senseVoice).isEmpty)
+        #expect(SessionRetranscriber.reusableSegments(
+            checkpoint: nil, backend: .qwen3ASR).isEmpty)
+    }
+
+    @Test func thermalHoldTriggersAtSeriousAndAbove() {
+        // Below .serious the batch pass runs; at .serious+ it holds so the
+        // SoC cools instead of grinding through OS throttling.
+        #expect(!VADSegmentedTranscriber.shouldHoldForThermals(.nominal))
+        #expect(!VADSegmentedTranscriber.shouldHoldForThermals(.fair))
+        #expect(VADSegmentedTranscriber.shouldHoldForThermals(.serious))
+        #expect(VADSegmentedTranscriber.shouldHoldForThermals(.critical))
+    }
+
     @Test func cachedTextMatchesOnlyExactRange() {
         let checkpoint = [
             SessionRecord.ImportCheckpoint.Segment(start: 0, end: 4.5, text: "大家好"),

@@ -10,10 +10,12 @@ import Speech
 enum OfflineTranscriber {
     typealias Utterance = (text: String, start: TimeInterval, end: TimeInterval)
 
-    enum Backend: Equatable {
+    /// Raw values are persisted in `SessionRecord.RetranscribeCheckpoint`
+    /// — keep them stable.
+    enum Backend: String, Equatable {
         case apple
-        case senseVoice
-        case qwen3ASR
+        case senseVoice = "sensevoice"
+        case qwen3ASR = "qwen3asr"
     }
 
     /// Which backend Re-transcribe & summarize should use. Qwen3-ASR wins

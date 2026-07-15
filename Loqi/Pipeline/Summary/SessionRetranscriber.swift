@@ -52,9 +52,23 @@ struct SessionRetranscriber {
     /// caches are cleared: they anchor to replaced entry IDs.
     ///
     /// The caller persists the result and runs a normal summarize.
+    /// Segments a fresh pass may reuse from a prior attempt's checkpoint:
+    /// only when the checkpoint was written by the SAME backend — decoders
+    /// aren't interchangeable. Pure for testing.
+    nonisolated static func reusableSegments(
+        checkpoint: SessionRecord.RetranscribeCheckpoint?,
+        backend: OfflineTranscriber.Backend
+    ) -> [SessionRecord.ImportCheckpoint.Segment] {
+        guard let checkpoint, checkpoint.backendRaw == backend.rawValue
+        else { return [] }
+        return checkpoint.segments
+    }
+
     func retranscribe(
         _ record: SessionRecord,
         backend: OfflineTranscriber.Backend = OfflineTranscriber.currentBackend(),
+        alreadyDecoded: [SessionRecord.ImportCheckpoint.Segment] = [],
+        onSegmentComplete: (@MainActor @Sendable (SessionRecord.ImportCheckpoint.Segment) -> Void)? = nil,
         onPhase: @escaping @MainActor @Sendable (Phase) -> Void
     ) async throws -> SessionRecord {
         guard let fileName = record.audioFileName,
@@ -76,7 +90,9 @@ struct SessionRetranscriber {
             audioFile,
             language: direction.source,
             backend: backend,
-            hotwords: hotwords?.biasStrings(for: direction.source) ?? []
+            hotwords: hotwords?.biasStrings(for: direction.source) ?? [],
+            alreadyDecoded: alreadyDecoded,
+            onSegmentComplete: onSegmentComplete
         ) { fraction in
             onPhase(.transcribing(fraction))
         }
@@ -126,6 +142,9 @@ struct SessionRetranscriber {
         updated.liveNotesEndEntryID = nil
         updated.summary = nil
         updated.summaryEdited = nil
+        // The pass is complete — the resume checkpoint has served its
+        // purpose and must not survive into the finished record.
+        updated.retranscribeCheckpoint = nil
         return updated
     }
 
@@ -136,13 +155,18 @@ struct SessionRetranscriber {
         backend: OfflineTranscriber.Backend?,
         speakerCount: Int?,
         voiceprint: VoiceprintService,
+        alreadyDecoded: [SessionRecord.ImportCheckpoint.Segment] = [],
+        onSegmentComplete: (@MainActor @Sendable (SessionRecord.ImportCheckpoint.Segment) -> Void)? = nil,
         onPhase: @escaping @MainActor @Sendable (Phase) -> Void
     ) async throws -> SessionRecord {
         var updated = record
         if let backend {
             do {
                 updated = try await retranscribe(
-                    updated, backend: backend, onPhase: onPhase)
+                    updated, backend: backend,
+                    alreadyDecoded: alreadyDecoded,
+                    onSegmentComplete: onSegmentComplete,
+                    onPhase: onPhase)
             } catch is CancellationError {
                 throw CancellationError()
             } catch {
