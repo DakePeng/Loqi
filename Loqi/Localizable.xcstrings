@@ -2481,6 +2481,22 @@
         }
       }
     },
+    "Identify speakers" : {
+      "localizations" : {
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "話者を識別"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "识别说话人"
+          }
+        }
+      }
+    },
     "Identifying speakers…" : {
       "extractionState" : "stale",
       "localizations" : {

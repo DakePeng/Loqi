@@ -173,13 +173,42 @@ struct SessionRetranscriber {
             }
         }
 
+        if let speakerCount {
+            try await applySpeakerSeparation(
+                to: &updated, speakerCount: speakerCount,
+                voiceprint: voiceprint, onPhase: onPhase)
+        }
+        return updated
+    }
+
+    /// Manual re-transcribe diarizes only when the old transcript has no
+    /// speaker labels to inherit — existing labels mean inherit-by-overlap,
+    /// which protects the user's renamed slots. Pure for testing.
+    nonisolated static func manualRetranscribeDiarizes(
+        entriesHaveSpeakers: Bool, diarizerDownloaded: Bool, speakerCount: Int
+    ) -> Bool {
+        !entriesHaveSpeakers && diarizerDownloaded
+            && VoiceprintService.separationEnabled(forPickerValue: speakerCount)
+    }
+
+    /// Diarize `updated`'s saved audio and stamp the slots onto its
+    /// entries. Best-effort: success clears `speakerSeparationFailed` and
+    /// the caches anchored to the old labels; failure sets the flag (the
+    /// detail view then offers Retry). Throws only on cancellation.
+    /// No-op when the diarizer isn't downloaded, separation is off for
+    /// `speakerCount`, or the audio file is gone.
+    func applySpeakerSeparation(
+        to updated: inout SessionRecord,
+        speakerCount: Int,
+        voiceprint: VoiceprintService,
+        onPhase: @escaping @MainActor @Sendable (Phase) -> Void
+    ) async throws {
         guard VoiceprintService.isOfflineDiarizerDownloaded,
-              let speakerCount,
               VoiceprintService.separationEnabled(forPickerValue: speakerCount),
               let fileName = updated.audioFileName
-        else { return updated }
+        else { return }
         let url = SessionArchive.recordingURL(fileName: fileName)
-        guard FileManager.default.fileExists(atPath: url.path) else { return updated }
+        guard FileManager.default.fileExists(atPath: url.path) else { return }
 
         do {
             onPhase(.identifyingSpeakers(0))
@@ -202,9 +231,8 @@ struct SessionRetranscriber {
             throw CancellationError()
         } catch {
             updated.speakerSeparationFailed = true
-            logger.error("auto post-process diarization failed: \(error.localizedDescription)")
+            logger.error("diarization failed: \(error.localizedDescription)")
         }
-        return updated
     }
 
     /// Map each new utterance to the old entry it overlaps most and take

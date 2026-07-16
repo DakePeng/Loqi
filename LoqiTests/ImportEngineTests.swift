@@ -220,6 +220,24 @@ struct ImportEngineTests {
             checkpoint: nil, backend: .qwen3ASR).isEmpty)
     }
 
+    /// Manual re-transcribe diarizes ONLY a label-less session — labels
+    /// present means inherit-by-overlap, protecting renamed slots.
+    @Test func manualRetranscribeDiarizesOnlyLabellessSessions() {
+        #expect(SessionRetranscriber.manualRetranscribeDiarizes(
+            entriesHaveSpeakers: false, diarizerDownloaded: true, speakerCount: -1))
+        #expect(SessionRetranscriber.manualRetranscribeDiarizes(
+            entriesHaveSpeakers: false, diarizerDownloaded: true, speakerCount: 3))
+        // Existing labels → inherit, never re-cluster.
+        #expect(!SessionRetranscriber.manualRetranscribeDiarizes(
+            entriesHaveSpeakers: true, diarizerDownloaded: true, speakerCount: -1))
+        // No model → nothing to run.
+        #expect(!SessionRetranscriber.manualRetranscribeDiarizes(
+            entriesHaveSpeakers: false, diarizerDownloaded: false, speakerCount: -1))
+        // Separation off (one voice) → skip.
+        #expect(!SessionRetranscriber.manualRetranscribeDiarizes(
+            entriesHaveSpeakers: false, diarizerDownloaded: true, speakerCount: 0))
+    }
+
     @Test func thermalHoldTriggersAtSeriousAndAbove() {
         // Below .serious the batch pass runs; at .serious+ it holds so the
         // SoC cools instead of grinding through OS throttling.

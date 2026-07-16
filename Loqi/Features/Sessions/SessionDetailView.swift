@@ -500,6 +500,19 @@ struct SessionDetailView: View {
                           systemImage: "arrow.trianglehead.2.clockwise.rotate.90")
                 }
                 .disabled(jobRunning || isEditingSummary || pipeline.isRunning)
+                // Run/redo diarization alone: labels a session that never
+                // got them, or re-clusters one that split badly — without
+                // paying for a re-transcribe. Re-clustering reassigns
+                // slots, so custom speaker names may need re-mapping.
+                if VoiceprintService.separationEnabled(
+                    forPickerValue: session.recordingSpeakerCount ?? -1) {
+                    Button {
+                        pipeline.jobs.retryDiarization(sessionID: sessionID)
+                    } label: {
+                        Label("Identify speakers", systemImage: "person.2.wave.2")
+                    }
+                    .disabled(jobRunning || isEditingSummary || pipeline.isRunning)
+                }
             }
             Picker("Summary style", selection: styleBinding) {
                 ForEach(SummaryStyle.allCases) { style in

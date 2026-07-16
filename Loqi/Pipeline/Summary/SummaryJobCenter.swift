@@ -583,11 +583,13 @@ final class SummaryJobCenter {
             allowDownload: allowDownload)
     }
 
-    /// Retry speaker separation for a session whose diarization failed
-    /// (`speakerSeparationFailed`). Diarizes the saved audio and writes the
-    /// slots back, leaving the transcript text, summary, and notes intact
-    /// (entry IDs don't change). Tapping Retry is implied download consent —
-    /// the offline diarizer is tens of MB, not the multi-GB LLM.
+    /// Diarize a saved session's audio and write the speaker slots back,
+    /// leaving the transcript text intact (entry IDs don't change).
+    /// Reached two ways: the Retry button after a failed separation
+    /// (`speakerSeparationFailed`), and the "Identify speakers" menu
+    /// action for sessions that never got labels or need a re-cluster.
+    /// Tapping is implied download consent — the offline diarizer is tens
+    /// of MB, not the multi-GB LLM.
     func retryDiarization(sessionID: UUID) {
         guard !isRecording(), !isBusy(sessionID),
               let session = archive.sessions.first(where: { $0.id == sessionID }),
@@ -802,7 +804,7 @@ final class SummaryJobCenter {
             case .manual:
                 let backend = OfflineTranscriber.currentBackend(
                     sourceLanguages: Set(session.entries.map(\.direction.source)))
-                updated = try await retranscriber.retranscribe(
+                var record = try await retranscriber.retranscribe(
                     session,
                     backend: backend,
                     alreadyDecoded: seedRetranscribeCheckpoint(
@@ -812,6 +814,23 @@ final class SummaryJobCenter {
                 ) { [weak self] phase in
                     self?.retranscribeProgress(sessionID: sessionID, phase: phase)
                 }
+                // A label-less session has nothing for inheritSpeakers to
+                // inherit (live diarization is gone; the auto pass may
+                // never have run) — re-transcribing is the natural moment
+                // to finally label it. Sessions WITH labels keep the
+                // rename-preserving inherit path untouched.
+                let speakerCount = session.recordingSpeakerCount ?? -1
+                if SessionRetranscriber.manualRetranscribeDiarizes(
+                    entriesHaveSpeakers: session.entries.contains { $0.speaker != nil },
+                    diarizerDownloaded: VoiceprintService.isOfflineDiarizerDownloaded,
+                    speakerCount: speakerCount) {
+                    try await retranscriber.applySpeakerSeparation(
+                        to: &record, speakerCount: speakerCount, voiceprint: voiceprint
+                    ) { [weak self] phase in
+                        self?.retranscribeProgress(sessionID: sessionID, phase: phase)
+                    }
+                }
+                updated = record
                 suggestVocabulary = false
             case .newRecording(let backend, let speakerCount, let suggest):
                 updated = try await retranscriber.postProcessNewRecording(
