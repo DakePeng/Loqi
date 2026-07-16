@@ -646,12 +646,18 @@ final class SummaryJobCenter {
         guard !isRecording(), !isBusy(sessionID),
               let session = archive.sessions.first(where: { $0.id == sessionID }),
               let fileName = session.audioFileName
-        else { return }
+        else {
+            logger.info("diarize rejected: \(sessionID, privacy: .public) busy=\(self.isBusy(sessionID)) recording=\(self.isRecording())")
+            return
+        }
         let url = SessionArchive.recordingURL(fileName: fileName)
         let speakerCount = session.recordingSpeakerCount ?? -1
         guard FileManager.default.fileExists(atPath: url.path),
               VoiceprintService.separationEnabled(forPickerValue: speakerCount)
-        else { return }
+        else {
+            logger.info("diarize rejected: \(sessionID, privacy: .public) audioExists=\(FileManager.default.fileExists(atPath: url.path)) picker=\(speakerCount)")
+            return
+        }
 
         errors[sessionID] = nil
         activities[sessionID] = .retranscribing(.identifyingSpeakers(0))
@@ -679,6 +685,15 @@ final class SummaryJobCenter {
                 guard var record = archive.sessions.first(where: { $0.id == sessionID })
                 else { return }
                 SessionRetranscriber.applyDiarizationSegments(segments, to: &record)
+                let labeled = record.entries.count(where: { $0.speaker != nil })
+                logger.info("diarize applied: \(segments.count) segments -> \(labeled)/\(record.entries.count) entries labeled")
+                // A run that labels nothing must SAY so — a silent no-op
+                // reads as a broken button.
+                guard labeled > 0 else {
+                    errors[sessionID] = String(localized:
+                        "Speaker separation found no speakers in this recording.")
+                    return
+                }
                 record.speakerSeparationFailed = nil
                 archive.update(record)
             } catch is CancellationError {

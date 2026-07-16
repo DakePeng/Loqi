@@ -5046,6 +5046,22 @@
         }
       }
     },
+    "Speaker separation found no speakers in this recording." : {
+      "localizations" : {
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "この録音では話者を検出できませんでした。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "在这段录音中未检测到说话人。"
+          }
+        }
+      }
+    },
     "Speaker separation isn't available on this platform." : {
       "localizations" : {
         "ja" : {

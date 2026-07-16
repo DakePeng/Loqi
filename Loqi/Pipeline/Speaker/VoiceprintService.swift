@@ -10,6 +10,8 @@ import os
 /// ONNX runtime. The ONLY diarizer — live recordings get their speaker
 /// labels from the post-process pass over the saved audio.
 actor VoiceprintService {
+    private static let logger = Logger(
+        subsystem: "com.kunzhipeng.loqi", category: "diarize")
     /// Bundle size for download speedometers and the onboarding total.
     nonisolated static var approximateDownloadBytes: Int64 {
         DiarizerModelStore.totalExpectedBytes
@@ -90,6 +92,7 @@ actor VoiceprintService {
         let samples = try await OfflineTranscriber.decodeMono16k(contentsOf: url)
 
         let clustering = Self.clustering(forPickerValue: speakerCount)
+        Self.logger.info("diarize: \(samples.count / 16_000)s audio, picker=\(speakerCount), clusters=\(clustering.numClusters), threshold=\(clustering.threshold)")
         // Both ONNX sessions default to ONE thread — on an hour of audio
         // that made the sherpa pass minutes-slow where the old CoreML/ANE
         // path felt instant. This batch job owns the device (same
@@ -129,7 +132,7 @@ actor VoiceprintService {
         try Task.checkCancellation()
 
         var slotByID: [Int: Int] = [:]
-        return raw.map { segment in
+        let segments = raw.map { segment in
             let slot = slotByID[segment.speaker, default: slotByID.count]
             slotByID[segment.speaker] = slot
             return SpeakerAttribution.Segment(
@@ -137,6 +140,8 @@ actor VoiceprintService {
                 start: TimeInterval(segment.start),
                 end: TimeInterval(segment.end))
         }
+        Self.logger.info("diarize: \(segments.count) segments, \(slotByID.count) speakers")
+        return segments
         #else
         // No sherpa runtime in the macOS target; diarization is gated off
         // upstream (postProcessBackend and the import sheet).
