@@ -179,6 +179,25 @@ struct SessionRecord: Identifiable, Codable, Sendable {
     /// True once the user renamed the session; auto-titling then never
     /// overwrites it (mirrors `summaryEdited`).
     var titleEdited: Bool?
+    /// Per-record language choices (detail view's Languages menu). All nil
+    /// on legacy records = prior behavior. Raw strings so an unknown
+    /// future language can never fail record decoding.
+    /// Overrides what the recording's entries claim the speech is in —
+    /// for sessions recorded under the wrong source or a misdetected Auto.
+    var spokenLanguageRaw: String?
+    /// nil = inherit the entries' recorded target; "" = explicitly off;
+    /// else the AppLanguage raw value to translate every entry into.
+    var translateToRaw: String?
+    /// nil = automatic (device language, falling back to the session's
+    /// target); else the AppLanguage raw value summaries are written in.
+    var summaryLanguageRaw: String?
+
+    var spokenLanguageOverride: AppLanguage? {
+        spokenLanguageRaw.flatMap(AppLanguage.init(rawValue:))
+    }
+    var summaryLanguageOverride: AppLanguage? {
+        summaryLanguageRaw.flatMap(AppLanguage.init(rawValue:))
+    }
     /// Photos attached to the session. Optional: legacy records decode.
     var attachments: [Attachment]?
     /// True until the user opens the session — the Sessions list shows a

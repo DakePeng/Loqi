@@ -413,10 +413,12 @@ struct SummaryEngine {
         return String(format: "%02d:%02d", total / 60, total % 60)
     }
 
-    /// Summaries are for the reader: the app/device language wins, with the
+    /// Summaries are for the reader: an explicit per-record choice
+    /// (Languages menu) wins, then the app/device language, with the
     /// session's target language as fallback.
     static func summaryLanguage(for record: SessionRecord) -> AppLanguage {
-        AppLanguage.devicePreferred
+        record.summaryLanguageOverride
+            ?? AppLanguage.devicePreferred
             ?? record.entries.last?.direction.target ?? .english
     }
 

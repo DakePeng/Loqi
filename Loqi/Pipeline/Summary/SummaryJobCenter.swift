@@ -583,6 +583,58 @@ final class SummaryJobCenter {
             allowDownload: allowDownload)
     }
 
+    /// Re-draft every entry's translation to the record's current
+    /// language choices (Languages menu) — or clear translations when the
+    /// record's translation is off — without re-transcribing. Entry
+    /// directions are re-stamped so the transcript UI and future passes
+    /// follow the new pair. Summary/notes are left alone (they live in
+    /// the summary language, not the entry translations).
+    func retranslate(sessionID: UUID) {
+        guard !isRecording(), !isBusy(sessionID),
+              let session = archive.sessions.first(where: { $0.id == sessionID }),
+              !session.entries.isEmpty
+        else { return }
+        errors[sessionID] = nil
+        activities[sessionID] = .retranscribing(.translating(0))
+        beginGrace(sessionID, name: "retranslate")
+        tasks[sessionID] = Task { [weak self] in
+            guard let self else { return }
+            defer { self.finishJob(sessionID) }
+            do { try await self.heavyGate.acquire() } catch { return }
+            defer { self.heavyGate.release() }
+            do {
+                guard var record = self.archive.sessions.first(where: { $0.id == sessionID }),
+                      let direction = SessionRetranscriber.languageDirection(for: record)
+                else { return }
+                let total = max(record.entries.count, 1)
+                for index in record.entries.indices {
+                    try Task.checkCancellation()
+                    self.retranscribeProgress(
+                        sessionID: sessionID,
+                        phase: .translating(Double(index) / Double(total)))
+                    // Per-entry source: the spoken override wins; an Auto
+                    // session without one keeps its per-utterance detection.
+                    let source = record.spokenLanguageOverride
+                        ?? record.entries[index].direction.source
+                    let pair = LanguagePair(source: source, target: direction.target)
+                    record.entries[index].direction = pair
+                    if pair.source == pair.target {
+                        record.entries[index].translation = nil
+                    } else {
+                        await self.translator.addDirection(pair)
+                        record.entries[index].translation = try? await self.translator.draft(
+                            record.entries[index].sourceText, direction: pair)
+                    }
+                }
+                try Task.checkCancellation()
+                self.archive.update(record)
+            } catch {
+                // Cancellation only — per-entry drafts already swallow
+                // their own failures.
+            }
+        }
+    }
+
     /// Diarize a saved session's audio and write the speaker slots back,
     /// leaving the transcript text intact (entry IDs don't change).
     /// Reached two ways: the Retry button after a failed separation
@@ -652,7 +704,8 @@ final class SummaryJobCenter {
         else { return }
 
         let backend = OfflineTranscriber.postProcessBackend(
-            sourceLanguages: Set(session.entries.map(\.direction.source)),
+            sourceLanguages: session.spokenLanguageOverride.map { [$0] }
+                ?? Set(session.entries.map(\.direction.source)),
             senseVoiceInstalled: SenseVoiceModelStore.isInstalled,
             qwen3Installed: Qwen3ASRModelStore.isInstalled,
             dolphinInstalled: DolphinModelStore.isInstalled)
@@ -803,7 +856,8 @@ final class SummaryJobCenter {
             switch request.kind {
             case .manual:
                 let backend = OfflineTranscriber.currentBackend(
-                    sourceLanguages: Set(session.entries.map(\.direction.source)))
+                    sourceLanguages: session.spokenLanguageOverride.map { [$0] }
+                        ?? Set(session.entries.map(\.direction.source)))
                 var record = try await retranscriber.retranscribe(
                     session,
                     backend: backend,

@@ -2699,6 +2699,22 @@
         }
       }
     },
+    "Languages" : {
+      "localizations" : {
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "言語"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "语言"
+          }
+        }
+      }
+    },
     "Last generation" : {
       "extractionState" : "stale",
       "localizations" : {
@@ -5080,6 +5096,22 @@
         }
       }
     },
+    "Spoken language" : {
+      "localizations" : {
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "話されている言語"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "录音语言"
+          }
+        }
+      }
+    },
     "Standard" : {
       "extractionState" : "stale",
       "localizations" : {
@@ -5415,6 +5447,22 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "摘要生成失败——请重试。"
+          }
+        }
+      }
+    },
+    "Summary language" : {
+      "localizations" : {
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "要約の言語"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "总结语言"
           }
         }
       }
@@ -5974,6 +6022,22 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "翻译"
+          }
+        }
+      }
+    },
+    "Translate to" : {
+      "localizations" : {
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "翻訳先"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "翻译为"
           }
         }
       }

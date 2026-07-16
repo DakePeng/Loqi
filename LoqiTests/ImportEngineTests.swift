@@ -220,6 +220,47 @@ struct ImportEngineTests {
             checkpoint: nil, backend: .qwen3ASR).isEmpty)
     }
 
+    /// The Languages-menu resolution: spoken override wins over the
+    /// recorded source; translate-to inherits (nil), disables (""), or
+    /// overrides the target; transcribe-only records stay transcribe-only
+    /// when only the source moves.
+    @Test func languageDirectionHonorsRecordOverrides() {
+        var record = SessionRecord(
+            mode: .captions, startedAt: .now, endedAt: .now,
+            entries: [SessionRecord.Entry(
+                sourceText: "こんにちは",
+                translation: nil,
+                speaker: nil,
+                direction: LanguagePair(source: .japanese, target: .chinese),
+                timestamp: .now)])
+
+        // nil overrides → recorded pair.
+        #expect(SessionRetranscriber.languageDirection(for: record)
+            == LanguagePair(source: .japanese, target: .chinese))
+        // Spoken override moves the source, target inherited.
+        record.spokenLanguageRaw = AppLanguage.korean.rawValue
+        #expect(SessionRetranscriber.languageDirection(for: record)
+            == LanguagePair(source: .korean, target: .chinese))
+        // Explicit off → transcribe-only.
+        record.translateToRaw = ""
+        #expect(SessionRetranscriber.languageDirection(for: record)
+            == LanguagePair(source: .korean, target: .korean))
+        // Explicit target.
+        record.translateToRaw = AppLanguage.english.rawValue
+        #expect(SessionRetranscriber.languageDirection(for: record)
+            == LanguagePair(source: .korean, target: .english))
+        // Transcribe-only record + spoken override stays transcribe-only.
+        var plain = record
+        plain.spokenLanguageRaw = AppLanguage.chinese.rawValue
+        plain.translateToRaw = nil
+        plain.entries[0].direction = LanguagePair(source: .japanese, target: .japanese)
+        #expect(SessionRetranscriber.languageDirection(for: plain)
+            == LanguagePair(source: .chinese, target: .chinese))
+        // No entries → nil.
+        plain.entries = []
+        #expect(SessionRetranscriber.languageDirection(for: plain) == nil)
+    }
+
     /// Manual re-transcribe diarizes ONLY a label-less session — labels
     /// present means inherit-by-overlap, protecting renamed slots.
     @Test func manualRetranscribeDiarizesOnlyLabellessSessions() {

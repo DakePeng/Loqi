@@ -52,6 +52,30 @@ struct SessionRetranscriber {
     /// caches are cleared: they anchor to replaced entry IDs.
     ///
     /// The caller persists the result and runs a normal summarize.
+    /// The language pair every language-touching pass runs under,
+    /// honoring the record's Languages-menu choices: spoken-language
+    /// override wins over what the first entry recorded; the translate-to
+    /// choice wins over the recorded target (nil inherits it, "" turns
+    /// translation off — source == target means transcribe-only
+    /// downstream). nil only when the record has no entries. Pure for
+    /// testing.
+    nonisolated static func languageDirection(for record: SessionRecord) -> LanguagePair? {
+        guard let base = record.entries.first?.direction else { return nil }
+        let source = record.spokenLanguageOverride ?? base.source
+        let target: AppLanguage
+        switch record.translateToRaw {
+        case nil:
+            // Inherit; a transcribe-only record stays transcribe-only
+            // even when the spoken override moved the source.
+            target = base.source == base.target ? source : base.target
+        case "":
+            target = source
+        case let raw?:
+            target = AppLanguage(rawValue: raw) ?? source
+        }
+        return LanguagePair(source: source, target: target)
+    }
+
     /// Segments a fresh pass may reuse from a prior attempt's checkpoint:
     /// only when the checkpoint was written by the SAME backend — decoders
     /// aren't interchangeable. Pure for testing.
@@ -72,7 +96,7 @@ struct SessionRetranscriber {
         onPhase: @escaping @MainActor @Sendable (Phase) -> Void
     ) async throws -> SessionRecord {
         guard let fileName = record.audioFileName,
-              let direction = record.entries.first?.direction
+              let direction = Self.languageDirection(for: record)
         else { throw RetranscribeError.noAudio }
         let url = SessionArchive.recordingURL(fileName: fileName)
         guard FileManager.default.fileExists(atPath: url.path) else {

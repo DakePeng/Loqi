@@ -514,6 +514,10 @@ struct SessionDetailView: View {
                     .disabled(jobRunning || isEditingSummary || pipeline.isRunning)
                 }
             }
+            if let session {
+                languagesMenu(session)
+                    .disabled(jobRunning || isEditingSummary || pipeline.isRunning)
+            }
             Picker("Summary style", selection: styleBinding) {
                 ForEach(SummaryStyle.allCases) { style in
                     Label(style.displayName, systemImage: style.symbolName)
@@ -555,6 +559,76 @@ struct SessionDetailView: View {
         } label: {
             wandLabel
         }
+    }
+
+    /// Per-record language controls: what the recording is in (override
+    /// for wrong/misdetected sources), what to translate entries into
+    /// (drafts refresh immediately via retranslate), and what language
+    /// the summary is written in (takes effect on the next summarize).
+    private func languagesMenu(_ session: SessionRecord) -> some View {
+        Menu {
+            Picker("Spoken language", selection: Binding(
+                get: {
+                    session.spokenLanguageRaw
+                        ?? session.entries.first?.direction.source.rawValue
+                        ?? AppLanguage.english.rawValue
+                },
+                set: { setSpokenLanguage($0) })) {
+                ForEach(AppLanguage.allCases) { language in
+                    Text(language.displayName).tag(language.rawValue)
+                }
+            }
+            Picker("Translate to", selection: Binding(
+                get: { session.translateToRaw ?? inheritedTargetRaw(session) },
+                set: { setTranslateTo($0) })) {
+                Text("Off").tag("")
+                ForEach(AppLanguage.allCases) { language in
+                    Text(language.displayName).tag(language.rawValue)
+                }
+            }
+            Picker("Summary language", selection: Binding(
+                get: { session.summaryLanguageRaw ?? "" },
+                set: { setSummaryLanguage($0) })) {
+                Text("Auto").tag("")
+                ForEach(AppLanguage.allCases) { language in
+                    Text(language.displayName).tag(language.rawValue)
+                }
+            }
+        } label: {
+            Label("Languages", systemImage: "globe")
+        }
+    }
+
+    /// The target the record was made with; transcribe-only shows as Off.
+    private func inheritedTargetRaw(_ session: SessionRecord) -> String {
+        guard let base = session.entries.first?.direction,
+              base.source != base.target else { return "" }
+        return base.target.rawValue
+    }
+
+    private func setSpokenLanguage(_ raw: String) {
+        guard var session else { return }
+        session.spokenLanguageRaw = raw
+        pipeline.archive.update(session)
+        // Existing drafts were made from the old source legs; refresh them
+        // whenever a translation target is active.
+        if let direction = SessionRetranscriber.languageDirection(for: session),
+           direction.source != direction.target {
+            pipeline.jobs.retranslate(sessionID: sessionID)
+        }
+    }
+
+    private func setTranslateTo(_ raw: String) {
+        guard var session else { return }
+        session.translateToRaw = raw
+        pipeline.archive.update(session)
+        pipeline.jobs.retranslate(sessionID: sessionID)
+    }
+
+    private func setSummaryLanguage(_ raw: String) {
+        guard var session else { return }
+        session.summaryLanguageRaw = raw.isEmpty ? nil : raw
+        pipeline.archive.update(session)
     }
 
     @ViewBuilder
