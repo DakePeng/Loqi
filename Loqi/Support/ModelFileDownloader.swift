@@ -1,5 +1,71 @@
 import CryptoKit
 import Foundation
+import Observation
+import os
+
+/// The download-task shell every model store shares: downloading/progress/
+/// lastError state plus the cancel-able task around
+/// `ModelFileDownloader.downloadAll`. The manifest loop was extracted long
+/// ago; this absorbs the surrounding lifecycle that SenseVoice, Qwen3-ASR,
+/// and Dolphin had each copied verbatim — a store is now its manifest, a
+/// directory, and one of these.
+@MainActor
+@Observable
+final class ModelStoreDownloads {
+    private let files: [ModelRemoteFile]
+    private let directory: URL
+    private let logger: Logger
+
+    private(set) var downloading = false
+    /// 0…1 across all files, weighted by expected size.
+    private(set) var progress: Double = 0
+    private(set) var lastError: String?
+    private var downloadTask: Task<Void, Never>?
+
+    init(files: [ModelRemoteFile], directory: URL, logCategory: String) {
+        self.files = files
+        self.directory = directory
+        self.logger = Logger(subsystem: "com.kunzhipeng.loqi", category: logCategory)
+    }
+
+    func download(from source: ASRModelSource) async {
+        guard !downloading else { return }
+        downloading = true
+        lastError = nil
+        progress = 0
+        // Run in an owned task so Stop can cancel it; completed-file
+        // checkpoints stay on disk and a later download resumes.
+        let task = Task { await performDownload(from: source) }
+        downloadTask = task
+        await task.value
+        downloadTask = nil
+        downloading = false
+    }
+
+    /// User-initiated stop; not an error. Partial files remain for resume.
+    func cancelDownload() {
+        downloadTask?.cancel()
+    }
+
+    private func performDownload(from source: ASRModelSource) async {
+        do {
+            // Shared manifest loop: skip-completed resume, per-file
+            // verify-or-delete, size-weighted progress.
+            try await ModelFileDownloader.downloadAll(
+                files, to: directory, from: source
+            ) { [weak self] blended in
+                Task { @MainActor in self?.progress = blended }
+            }
+            progress = 1
+        } catch is CancellationError {
+        } catch let error as URLError where error.code == .cancelled {
+        } catch {
+            logger.error("download failed: \(error)")
+            lastError = String(
+                localized: "Download failed — check your connection and try again.")
+        }
+    }
+}
 
 enum ModelFileDownloader {
     enum Mode: Equatable {

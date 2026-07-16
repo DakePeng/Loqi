@@ -93,49 +93,13 @@ final class Qwen3ASRModelStore {
         ModelFileDownloader.allInstalled(files, in: directory)
     }
 
-    private(set) var downloading = false
-    /// 0…1 across all files, weighted by expected size.
-    private(set) var progress: Double = 0
-    private(set) var lastError: String?
-
-    private var downloadTask: Task<Void, Never>?
-    private let logger = Logger(subsystem: "com.kunzhipeng.loqi", category: "qwen3asr")
-
-    func download(from source: ASRModelSource) async {
-        guard !downloading else { return }
-        downloading = true
-        lastError = nil
-        progress = 0
-        // Run in an owned task so Stop can cancel it; completed-file
-        // checkpoints stay on disk and a later download resumes.
-        let task = Task { await performDownload(from: source) }
-        downloadTask = task
-        await task.value
-        downloadTask = nil
-        downloading = false
-    }
-
-    /// User-initiated stop; not an error. Partial files remain for resume.
-    func cancelDownload() {
-        downloadTask?.cancel()
-    }
-
-    private func performDownload(from source: ASRModelSource) async {
-        do {
-            // Shared manifest loop: skip-completed resume, per-file
-            // verify-or-delete, size-weighted progress.
-            try await ModelFileDownloader.downloadAll(
-                Self.files, to: Self.directory, from: source
-            ) { [weak self] blended in
-                Task { @MainActor in self?.progress = blended }
-            }
-            progress = 1
-        } catch is CancellationError {
-        } catch let error as URLError where error.code == .cancelled {
-        } catch {
-            logger.error("download failed: \(error)")
-            lastError = String(
-                localized: "Download failed — check your connection and try again.")
-        }
-    }
+    // Shared download shell (state + cancel-able task); forwarding keeps
+    // every call site and observation untouched.
+    private let downloads = ModelStoreDownloads(
+        files: files, directory: directory, logCategory: "qwen3asr")
+    var downloading: Bool { downloads.downloading }
+    var progress: Double { downloads.progress }
+    var lastError: String? { downloads.lastError }
+    func download(from source: ASRModelSource) async { await downloads.download(from: source) }
+    func cancelDownload() { downloads.cancelDownload() }
 }

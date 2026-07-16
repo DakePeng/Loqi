@@ -476,10 +476,8 @@ final class CaptionPipeline {
         // ASR + the LLM cost more heat than live labels were worth.
         ensureEngine(for: route.source)
         Task { [llm] in await llm.resetHeatStats() }
-        if let engine = engines[engineKey(for: route.source)] as? SenseVoiceEngine {
+        if let engine = engines[engineKey(for: route.source)] {
             Task { await engine.resetHeatStats() }
-        } else if let hybrid = engines[engineKey(for: route.source)] as? HybridSpeechEngine {
-            Task { await hybrid.resetSenseVoiceHeatStats() }
         }
 
         do {
@@ -1552,19 +1550,12 @@ final class CaptionPipeline {
         }
     }
 
-    /// Decode active-seconds of the live SenseVoice engine (pure or inside
-    /// the hybrid), or 0 when the active engine is Apple's recognizer (no
-    /// in-process decode cost).
+    /// In-process ASR decode seconds of the active live engine — every
+    /// engine answers through the SpeechEngine protocol (out-of-process
+    /// ones report 0), so no engine kind can be forgotten here.
     func activeSenseVoiceDecodeSeconds() async -> Double {
-        if let activeEngineKey,
-           let sv = engines[activeEngineKey] as? SenseVoiceEngine {
-            return await sv.decodeActiveSeconds
-        }
-        if let activeEngineKey,
-           let hybrid = engines[activeEngineKey] as? HybridSpeechEngine {
-            return await hybrid.senseVoiceDecodeActiveSeconds()
-        }
-        return 0
+        guard let activeEngineKey, let engine = engines[activeEngineKey] else { return 0 }
+        return await engine.decodeActiveSeconds()
     }
 
     private func loadLLMIfAllowed() {

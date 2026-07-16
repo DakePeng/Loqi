@@ -16,6 +16,20 @@ protocol SpeechEngine: Actor {
     /// Flushes pending audio into final results, then finishes the stream.
     func stop() async
     func applyContextualStrings(_ strings: [String]) async throws
+    /// Cumulative in-process ASR decode wall-time this session — the
+    /// session heat readout. On the protocol so the pipeline never
+    /// type-casts engines (a forgotten cast silently reported 0 for new
+    /// engine kinds). Out-of-process engines report 0.
+    func decodeActiveSeconds() async -> Double
+    /// Zero the heat readout at session start.
+    func resetHeatStats() async
+}
+
+extension SpeechEngine {
+    /// Engines whose decode runs out-of-process (Apple's SpeechAnalyzer)
+    /// have no in-process heat to report.
+    func decodeActiveSeconds() async -> Double { 0 }
+    func resetHeatStats() async {}
 }
 
 /// Wraps SpeechAnalyzer/SpeechTranscriber for one locale.
@@ -500,14 +514,13 @@ actor HybridSpeechEngine: SpeechEngine {
         try await apple.applyContextualStrings(strings)
     }
 
-    // Heat-stat plumbing: CaptionPipeline reads/resets SenseVoice decode
-    // seconds through the hybrid (its `as? SenseVoiceEngine` cast would
-    // otherwise silently report 0 for hybrid sessions).
-    func senseVoiceDecodeActiveSeconds() async -> Double {
-        await senseVoice.decodeActiveSeconds
+    // Heat stats forward to the record child — SenseVoice's decodes are
+    // the hybrid's only in-process ASR cost (Apple runs out-of-process).
+    func decodeActiveSeconds() async -> Double {
+        await senseVoice.decodeActiveSeconds()
     }
 
-    func resetSenseVoiceHeatStats() async {
+    func resetHeatStats() async {
         await senseVoice.resetHeatStats()
     }
 

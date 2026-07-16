@@ -41,7 +41,8 @@ actor SenseVoiceEngine: SpeechEngine {
 
     /// Cumulative wall time spent in SenseVoice decode this session (partial
     /// + final), the ASR counterpart to LLMService.generateActiveSeconds.
-    private(set) var decodeActiveSeconds: Double = 0
+    /// Read through the SpeechEngine protocol's decodeActiveSeconds().
+    private var decodeSecondsAccumulated: Double = 0
 
     /// False in the hybrid engine's record role: Apple supplies the
     /// volatile text, so the pulsing whole-utterance partial decodes —
@@ -189,8 +190,12 @@ actor SenseVoiceEngine: SpeechEngine {
     /// deterministic HotwordMatcher fixup still applies downstream.
     func applyContextualStrings(_ strings: [String]) async throws {}
 
+    func decodeActiveSeconds() -> Double {
+        decodeSecondsAccumulated
+    }
+
     func resetHeatStats() {
-        decodeActiveSeconds = 0
+        decodeSecondsAccumulated = 0
     }
 
     // MARK: Decoding
@@ -242,7 +247,7 @@ actor SenseVoiceEngine: SpeechEngine {
     }
 
     private func addDecodeActiveSeconds(_ duration: Duration) {
-        decodeActiveSeconds += Double(duration.components.seconds)
+        decodeSecondsAccumulated += Double(duration.components.seconds)
             + Double(duration.components.attoseconds) / 1e18
     }
 
@@ -347,7 +352,6 @@ enum SenseVoiceError: LocalizedError {
 actor SenseVoiceEngine: SpeechEngine {
     nonisolated let sourceSelection: RecognitionLanguageSelection
     nonisolated var language: AppLanguage { sourceSelection.fallbackLanguage }
-    private(set) var decodeActiveSeconds: Double = 0
 
     init(sourceSelection: RecognitionLanguageSelection, emitsPartials: Bool = true) {
         self.sourceSelection = sourceSelection
