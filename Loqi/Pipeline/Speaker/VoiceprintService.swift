@@ -90,27 +90,37 @@ actor VoiceprintService {
         let samples = try await OfflineTranscriber.decodeMono16k(contentsOf: url)
 
         let clustering = Self.clustering(forPickerValue: speakerCount)
+        // Both ONNX sessions default to ONE thread — on an hour of audio
+        // that made the sherpa pass minutes-slow where the old CoreML/ANE
+        // path felt instant. This batch job owns the device (same
+        // rationale as the Qwen3 pass), so give the sessions real cores.
+        let threads = max(2, min(4, ProcessInfo.processInfo.activeProcessorCount - 2))
         var config = sherpaOnnxOfflineSpeakerDiarizationConfig(
             segmentation: sherpaOnnxOfflineSpeakerSegmentationModelConfig(
                 pyannote: sherpaOnnxOfflineSpeakerSegmentationPyannoteModelConfig(
-                    model: DiarizerModelStore.segmentationModelURL.path)),
+                    model: DiarizerModelStore.segmentationModelURL.path),
+                numThreads: threads),
             embedding: sherpaOnnxSpeakerEmbeddingExtractorConfig(
-                model: DiarizerModelStore.embeddingModelURL.path),
+                model: DiarizerModelStore.embeddingModelURL.path,
+                numThreads: threads),
             clustering: sherpaOnnxFastClusteringConfig(
                 numClusters: clustering.numClusters,
                 threshold: clustering.threshold))
         guard let diarizer = SherpaOnnxOfflineSpeakerDiarizationWrapper(config: &config)
         else { throw DiarizationError.modelLoadFailed }
 
-        // One long synchronous C call. Run it on a GCD utility thread via a
+        // One long synchronous C call. Run it on a GCD thread via a
         // continuation so it never parks a Swift cooperative-pool thread
         // for minutes — the pool is core-count wide and shared with every
-        // actor in the app. Cancellation cannot interrupt the C call itself
-        // (sherpa documents the progress callback's return value as
-        // ignored), so the practical bound is checking before it starts.
+        // actor in the app. userInitiated, not utility: the user is
+        // watching this progress row, and utility QoS parks CPU-bound
+        // work on efficiency cores. Cancellation cannot interrupt the C
+        // call itself (sherpa documents the progress callback's return
+        // value as ignored), so the practical bound is checking before
+        // it starts.
         try Task.checkCancellation()
         let raw = await withCheckedContinuation { continuation in
-            DispatchQueue.global(qos: .utility).async {
+            DispatchQueue.global(qos: .userInitiated).async {
                 continuation.resume(returning: diarizer.process(samples: samples) { done, total in
                     onProgress?(.analysis(Double(done) / Double(max(total, 1))))
                 })
