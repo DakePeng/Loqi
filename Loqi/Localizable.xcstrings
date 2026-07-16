@@ -4810,6 +4810,22 @@
         }
       }
     },
+    "Shows a translation under each transcript line. Changing this re-translates the whole transcript right away." : {
+      "localizations" : {
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "各行の下に翻訳を表示します。変更するとトランスクリプト全体がすぐに再翻訳されます。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "在每行文字下方显示翻译。更改后会立即重新翻译整个文字记录。"
+          }
+        }
+      }
+    },
     "Simplified Chinese" : {
       "localizations" : {
         "ja" : {
@@ -5708,6 +5724,22 @@
         }
       }
     },
+    "The language summaries are written in. Auto follows your device language. Applies the next time you summarize." : {
+      "localizations" : {
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "要約が書かれる言語です。「自動」はデバイスの言語に従います。次回の要約から適用されます。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "总结所使用的语言。“自动”跟随设备语言。下次生成总结时生效。"
+          }
+        }
+      }
+    },
     "The selected model cannot read images" : {
       "extractionState" : "stale",
       "localizations" : {
@@ -6240,6 +6272,22 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "这是一段什么类型的录音？"
+          }
+        }
+      }
+    },
+    "What the recording is in. Fixes a wrong or misdetected language — re-transcription, translation, and transcript cleanup all follow it." : {
+      "localizations" : {
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "録音の言語です。誤選択・誤検出された言語を修正します — 再文字起こし・翻訳・文字起こしのクリーンアップがこれに従います。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "录音所用的语言。用于纠正选错或误检测的语言 — 重新转写、翻译和文字清理都会遵循它。"
           }
         }
       }
