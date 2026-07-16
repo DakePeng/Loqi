@@ -42,6 +42,7 @@ struct LiveCaptionsView: View {
     @State private var renamingSlot: Int?
     @State private var renameText = ""
     @State private var showingSummarySoFar = false
+    @State private var showingRecordingOptions = false
     @State private var showingCamera = false
     @State private var showingPhotoLibrary = false
     @State private var photoItem: PhotosPickerItem?
@@ -156,6 +157,9 @@ struct LiveCaptionsView: View {
             }
             .sheet(isPresented: $showingSummarySoFar) {
                 SummarySoFarSheet(pipeline: pipeline)
+            }
+            .sheet(isPresented: $showingRecordingOptions) {
+                RecordingOptionsSheet(pipeline: pipeline)
             }
             #if os(iOS)
             .fullScreenCover(isPresented: $showingCamera) {
@@ -505,22 +509,15 @@ struct LiveCaptionsView: View {
         .accessibilityLabel("Stop")
     }
 
+    // The chips and bar buttons are value DISPLAYS that all open one
+    // labeled Recording-options sheet — Pickers embedded in Menus rendered
+    // as an unlabeled run of checkmarked options.
+
     private var languageChip: some View {
-        Menu {
-            Picker("Language", selection: $sourceRaw) {
-                Text("Auto").tag(RecognitionLanguageSelection.autoRawValue)
-                ForEach(AppLanguage.allCases) { language in
-                    Text(language.displayName).tag(language.rawValue)
-                }
-            }
+        Button {
+            showingRecordingOptions = true
         } label: {
             chip(icon: "waveform", text: sourceSelection.displayName)
-        }
-        .onChange(of: sourceRaw) {
-            // Translating into the spoken language makes no sense.
-            if sourceSelection != .auto, translationRaw == sourceSelection.rawValue {
-                translationRaw = ""
-            }
         }
     }
 
@@ -528,35 +525,21 @@ struct LiveCaptionsView: View {
         MicSensitivity(rawValue: sensitivityRaw) ?? .far
     }
 
-    /// Mic pickup preset, adjustable mid-session too: switching restarts
-    /// the live turn so the VADs and the capture boost rebind.
-    private var pickupPicker: some View {
-        Picker("Mic pickup", selection: $sensitivityRaw) {
-            ForEach(MicSensitivity.allCases) { preset in
-                Label(preset.displayName, systemImage: preset.symbolName)
-                    .tag(preset.rawValue)
-            }
-        }
-    }
-
     private var pickupChip: some View {
-        Menu {
-            pickupPicker
+        Button {
+            showingRecordingOptions = true
         } label: {
             chip(
                 icon: sensitivity.symbolName,
                 text: sensitivity.shortName,
                 active: sensitivity != .balanced)
         }
-        .onChange(of: sensitivityRaw) {
-            pipeline.updateMicSensitivity()
-        }
     }
 
-    /// Same picker, icon-only — fits the slim recording bar.
+    /// Icon-only opener — fits the slim recording bar.
     private var pickupBarButton: some View {
-        Menu {
-            pickupPicker
+        Button {
+            showingRecordingOptions = true
         } label: {
             Image(systemName: sensitivity.symbolName)
                 .font(.body)
@@ -568,28 +551,22 @@ struct LiveCaptionsView: View {
                 .contentShape(Rectangle())
         }
         .accessibilityLabel("Mic pickup")
-        .onChange(of: sensitivityRaw) {
-            pipeline.updateMicSensitivity()
-        }
     }
 
     private var translationChip: some View {
-        Menu {
-            translationPicker
+        Button {
+            showingRecordingOptions = true
         } label: {
             chip(
                 icon: "globe",
                 text: translationTarget?.displayName ?? String(localized: "Translate"),
                 active: translationTarget != nil)
         }
-        .onChange(of: translationRaw) {
-            pipeline.updateTranslationTarget(translationTarget)
-        }
     }
 
     private var translationBarButton: some View {
-        Menu {
-            translationPicker
+        Button {
+            showingRecordingOptions = true
         } label: {
             Image(systemName: "globe")
                 .font(.body)
@@ -601,20 +578,6 @@ struct LiveCaptionsView: View {
                 .contentShape(Rectangle())
         }
         .accessibilityLabel("Translation")
-        .onChange(of: translationRaw) {
-            pipeline.updateTranslationTarget(translationTarget)
-        }
-    }
-
-    private var translationPicker: some View {
-        Picker("Translation", selection: $translationRaw) {
-            Text("Off").tag("")
-            ForEach(AppLanguage.allCases.filter { language in
-                sourceSelection == .auto || language.rawValue != sourceRaw
-            }) { language in
-                Text(language.displayName).tag(language.rawValue)
-            }
-        }
     }
 
     private func chip(icon: String, text: String, active: Bool = false) -> some View {
@@ -829,5 +792,91 @@ private struct SummarySoFarSheet: View {
                 failureText = error.localizedDescription
             }
         }
+    }
+}
+
+/// The Record surface's three selectors as labeled rows with footers —
+/// one sheet opened by the idle chips AND the recording-bar buttons.
+/// Spoken language locks while recording (the route is fixed at start);
+/// translation and mic pickup apply live.
+private struct RecordingOptionsSheet: View {
+    @Bindable var pipeline: CaptionPipeline
+    @AppStorage("captions.source") private var sourceRaw
+        = RecognitionLanguageSelection.autoRawValue
+    @AppStorage("captions.translation") private var translationRaw = ""
+    @AppStorage(MicSensitivity.defaultsKey) private var sensitivityRaw
+        = MicSensitivity.far.rawValue
+
+    private var sourceSelection: RecognitionLanguageSelection {
+        .init(rawValue: sourceRaw)
+    }
+
+    var body: some View {
+        SelectorSheet(title: "Recording options") {
+            Section {
+                Picker("Spoken language", selection: Binding(
+                    get: { sourceRaw },
+                    set: { setSource($0) })) {
+                    Text("Auto").tag(RecognitionLanguageSelection.autoRawValue)
+                    ForEach(AppLanguage.allCases) { language in
+                        Text(language.displayName).tag(language.rawValue)
+                    }
+                }
+                .disabled(pipeline.isRunning)
+            } footer: {
+                if pipeline.isRunning {
+                    Text("Locked while recording — stop the session to change the spoken language.")
+                } else {
+                    Text("The language being spoken. Auto detects it as you talk.")
+                }
+            }
+            Section {
+                Picker("Translate to", selection: Binding(
+                    get: { translationRaw },
+                    set: { setTranslation($0) })) {
+                    Text("Off").tag("")
+                    ForEach(AppLanguage.allCases.filter { language in
+                        sourceSelection == .auto || language.rawValue != sourceRaw
+                    }) { language in
+                        Text(language.displayName).tag(language.rawValue)
+                    }
+                }
+            } footer: {
+                Text("Shows a translation under each caption. You can change this during a recording.")
+            }
+            Section {
+                Picker("Mic pickup", selection: Binding(
+                    get: { sensitivityRaw },
+                    set: { setSensitivity($0) })) {
+                    ForEach(MicSensitivity.allCases) { preset in
+                        Label(preset.displayName, systemImage: preset.symbolName)
+                            .tag(preset.rawValue)
+                    }
+                }
+            } footer: {
+                Text("How far the mic reaches for voices. Changing it mid-recording pauses captions for a moment.")
+            }
+        }
+    }
+
+    private func setSource(_ raw: String) {
+        sourceRaw = raw
+        // Translating into the spoken language makes no sense.
+        if sourceSelection != .auto, translationRaw == sourceSelection.rawValue {
+            translationRaw = ""
+            pipeline.updateTranslationTarget(nil)
+        }
+    }
+
+    private func setTranslation(_ raw: String) {
+        translationRaw = raw
+        pipeline.updateTranslationTarget(AppLanguage(rawValue: raw))
+    }
+
+    /// Switching restarts the live turn so the VADs and capture boost
+    /// rebind — self-guarded on isRunning inside the pipeline.
+    private func setSensitivity(_ raw: String) {
+        sensitivityRaw = raw
+        pipeline.updateMicSensitivity()
     }
 }

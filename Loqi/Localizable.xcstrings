@@ -504,6 +504,22 @@
         }
       }
     },
+    "Applies to this session and becomes the default for new recordings. If a summary exists, it's rewritten in the new style." : {
+      "localizations" : {
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "このセッションに適用され、新しい録音のデフォルトになります。既に要約がある場合は、新しいスタイルで書き直されます。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "应用于本次会话，并成为新录音的默认设置。如果已有总结，会按新风格重写。"
+          }
+        }
+      }
+    },
     "Ask about this session" : {
       "extractionState" : "stale",
       "localizations" : {
@@ -2432,6 +2448,38 @@
         }
       }
     },
+    "How far the mic reaches for voices. Changing it mid-recording pauses captions for a moment." : {
+      "localizations" : {
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "マイクが声を拾う距離です。録音中に変更すると、キャプションが一瞬止まります。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "麦克风拾取人声的距离。录音中更改会让字幕暂停片刻。"
+          }
+        }
+      }
+    },
+    "How much detail the summary keeps. Applies to this session and becomes the default for new recordings." : {
+      "localizations" : {
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "要約に残す詳細の量です。このセッションに適用され、新しい録音のデフォルトになります。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "总结保留的细节多少。应用于本次会话，并成为新录音的默认设置。"
+          }
+        }
+      }
+    },
     "Hybrid (responsive + accurate)" : {
       "localizations" : {
         "ja" : {
@@ -2912,6 +2960,22 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "加载中"
+          }
+        }
+      }
+    },
+    "Locked while recording — stop the session to change the spoken language." : {
+      "localizations" : {
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "録音中はロックされます — 話す言語を変えるには録音を停止してください。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "录音期间已锁定 — 要更改说话语言，请先停止录音。"
           }
         }
       }
@@ -4259,6 +4323,22 @@
         }
       }
     },
+    "Recording options" : {
+      "localizations" : {
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "録音オプション"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "录音选项"
+          }
+        }
+      }
+    },
     "Recording saved to Sessions — no speech was transcribed." : {
       "extractionState" : "stale",
       "localizations" : {
@@ -4806,6 +4886,22 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "设置"
+          }
+        }
+      }
+    },
+    "Shows a translation under each caption. You can change this during a recording." : {
+      "localizations" : {
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "各キャプションの下に翻訳を表示します。録音中でも変更できます。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "在每条字幕下方显示翻译。录音过程中也可以更改。"
           }
         }
       }
@@ -5550,6 +5646,22 @@
         }
       }
     },
+    "Summary options" : {
+      "localizations" : {
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "要約オプション"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "总结选项"
+          }
+        }
+      }
+    },
     "Summary so far" : {
       "extractionState" : "stale",
       "localizations" : {
@@ -5736,6 +5848,22 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "AI 模型尚未加载——它会在说话间隙预热。请稍后再试。"
+          }
+        }
+      }
+    },
+    "The language being spoken. Auto detects it as you talk." : {
+      "localizations" : {
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "話される言語です。「自動」は話し始めると自動的に検出します。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "说话所用的语言。“自动”会在你开口时自动检测。"
           }
         }
       }

@@ -38,6 +38,7 @@ struct SessionDetailView: View {
     @State private var confirmDeleteAudio = false
     @State private var showingChat = false
     @State private var showingLanguages = false
+    @State private var showingSummaryOptions = false
     @State private var autoStarted = false
     /// Shared with PlaybackBar so tapping a transcript line can seek.
     @State private var playback = AudioPlaybackController()
@@ -45,10 +46,6 @@ struct SessionDetailView: View {
     @State private var showingCamera = false
     @State private var showingPhotoLibrary = false
     @State private var photoItem: PhotosPickerItem?
-    /// Style picked while the replace-edited-summary confirm is up; only
-    /// persisted on Replace so Cancel fully reverts the picker.
-    @State private var pendingStyle: SummaryStyle?
-    @State private var pendingLength: SummaryLength?
     /// AI action waiting on the user's one-time model-download consent.
     @State private var pendingDownload: DownloadAction?
     /// Last style the user picked anywhere — the default for new sessions.
@@ -78,22 +75,18 @@ struct SessionDetailView: View {
 
     private var jobRunning: Bool { jobActivity != nil }
 
-    /// A legacy summary without a stored style was written meeting-shaped;
-    /// it must show Meeting, not whatever the user picked elsewhere since.
     private var selectedStyle: SummaryStyle {
-        if let raw = session?.summaryStyle, let style = SummaryStyle(rawValue: raw) {
-            return style
-        }
-        if session?.summary != nil { return .meeting }
-        return SummaryStyle(rawValue: defaultStyleRaw) ?? .meeting
+        SummaryStyle.effective(
+            storedRaw: session?.summaryStyle,
+            hasSummary: session?.summary != nil,
+            defaultRaw: defaultStyleRaw)
     }
 
     private var selectedLength: SummaryLength {
-        if let raw = session?.summaryLength, let length = SummaryLength(rawValue: raw) {
-            return length
-        }
-        if session?.summary != nil { return .standard }
-        return SummaryLength(rawValue: defaultLengthRaw) ?? .standard
+        SummaryLength.effective(
+            storedRaw: session?.summaryLength,
+            hasSummary: session?.summary != nil,
+            defaultRaw: defaultLengthRaw)
     }
 
     var body: some View {
@@ -173,6 +166,11 @@ struct SessionDetailView: View {
         .sheet(isPresented: $showingLanguages) {
             SessionLanguagesSheet(pipeline: pipeline, sessionID: sessionID)
         }
+        .sheet(isPresented: $showingSummaryOptions) {
+            SummaryOptionsSheet(pipeline: pipeline, sessionID: sessionID) {
+                applySummaryPreferences(style: $0, length: $1)
+            }
+        }
         #if os(iOS)
         .fullScreenCover(isPresented: $showingCamera) {
             CameraCaptureView { image in
@@ -251,21 +249,12 @@ struct SessionDetailView: View {
             isPresented: $confirmRegenerate,
             titleVisibility: .visible
         ) {
+            // Style/length changes confirm inside SummaryOptionsSheet;
+            // this dialog now backs only the wand's Re-summarize.
             Button("Replace", role: .destructive) {
-                if pendingStyle != nil || pendingLength != nil {
-                    let style = pendingStyle ?? selectedStyle
-                    let length = pendingLength ?? selectedLength
-                    pendingStyle = nil
-                    pendingLength = nil
-                    applySummaryPreferences(style: style, length: length)
-                } else {
-                    requestSummarize(style: selectedStyle, length: selectedLength)
-                }
+                requestSummarize(style: selectedStyle, length: selectedLength)
             }
-            Button("Cancel", role: .cancel) {
-                pendingStyle = nil
-                pendingLength = nil
-            }
+            Button("Cancel", role: .cancel) {}
         } message: {
             Text("You edited this summary. Summarizing again will replace your changes.")
         }
@@ -483,10 +472,6 @@ struct SessionDetailView: View {
         Menu {
             Button {
                 if session?.summaryEdited == true {
-                    // Stale pendingStyle from an abandoned style change
-                    // must not hijack a plain re-summarize.
-                    pendingStyle = nil
-                    pendingLength = nil
                     confirmRegenerate = true
                 } else {
                     requestSummarize(style: selectedStyle, length: selectedLength)
@@ -525,20 +510,12 @@ struct SessionDetailView: View {
                     Label("Languages", systemImage: "globe")
                 }
             }
-            Picker("Summary style", selection: styleBinding) {
-                ForEach(SummaryStyle.allCases) { style in
-                    Label(style.displayName, systemImage: style.symbolName)
-                        .tag(style)
-                }
+            Button {
+                showingSummaryOptions = true
+            } label: {
+                Label("Summary options", systemImage: "slider.horizontal.3")
             }
-            .disabled(jobRunning || isEditingSummary)
-            Picker("Summary length", selection: lengthBinding) {
-                ForEach(SummaryLength.allCases) { length in
-                    Label(length.displayName, systemImage: length.symbolName)
-                        .tag(length)
-                }
-            }
-            .disabled(jobRunning || isEditingSummary)
+            .disabled(isEditingSummary)
             Button {
                 requestSuggestHotwords()
             } label: {
@@ -973,39 +950,9 @@ struct SessionDetailView: View {
         }
     }
 
-    /// Picking a style persists it (and regenerates when a summary exists)
-    /// unless an edited summary needs confirming first — then the choice
-    /// parks in `pendingStyle` so Cancel reverts the picker untouched.
-    private var styleBinding: Binding<SummaryStyle> {
-        Binding(
-            get: { selectedStyle },
-            set: { style in
-                guard style != selectedStyle else { return }
-                if session?.summary != nil, session?.summaryEdited == true {
-                    pendingStyle = style
-                    pendingLength = selectedLength
-                    confirmRegenerate = true
-                } else {
-                    applySummaryPreferences(style: style, length: selectedLength)
-                }
-            })
-    }
-
-    private var lengthBinding: Binding<SummaryLength> {
-        Binding(
-            get: { selectedLength },
-            set: { length in
-                guard length != selectedLength else { return }
-                if session?.summary != nil, session?.summaryEdited == true {
-                    pendingStyle = selectedStyle
-                    pendingLength = length
-                    confirmRegenerate = true
-                } else {
-                    applySummaryPreferences(style: selectedStyle, length: length)
-                }
-            })
-    }
-
+    /// Persists a style/length choice (session + app default) and
+    /// regenerates when a summary exists. The edited-summary confirm
+    /// happens upstream in SummaryOptionsSheet before this is called.
     private func applySummaryPreferences(style: SummaryStyle, length: SummaryLength) {
         defaultStyleRaw = style.rawValue
         defaultLengthRaw = length.rawValue
@@ -1207,7 +1154,6 @@ struct SummaryTextView: View {
 struct SessionLanguagesSheet: View {
     @Bindable var pipeline: CaptionPipeline
     let sessionID: UUID
-    @Environment(\.dismiss) private var dismiss
 
     private var session: SessionRecord? {
         pipeline.archive.sessions.first { $0.id == sessionID }
@@ -1220,8 +1166,7 @@ struct SessionLanguagesSheet: View {
     }
 
     var body: some View {
-        NavigationStack {
-            Form {
+        SelectorSheet(title: "Languages", locked: locked) {
                 if let session {
                     Section {
                         Picker("Spoken language", selection: Binding(
@@ -1263,19 +1208,7 @@ struct SessionLanguagesSheet: View {
                         Text("The language summaries are written in. Auto follows your device language. Applies the next time you summarize.")
                     }
                 }
-            }
-            .disabled(locked)
-            .navigationTitle("Languages")
-            #if os(iOS)
-            .navigationBarTitleDisplayMode(.inline)
-            #endif
-            .toolbar {
-                ToolbarItem(placement: .confirmationAction) {
-                    Button("Done") { dismiss() }
-                }
-            }
         }
-        .presentationDetents([.medium, .large])
     }
 
     /// The target the record was made with; transcribe-only shows as Off.
@@ -1308,5 +1241,118 @@ struct SessionLanguagesSheet: View {
         guard var session else { return }
         session.summaryLanguageRaw = raw.isEmpty ? nil : raw
         pipeline.archive.update(session)
+    }
+}
+
+/// Summary style + length as labeled rows with footers — these lived as
+/// inline Pickers in the wand menu, rendering as one unlabeled run of
+/// checkmarked options. Owns the replace-edited-summary confirm locally
+/// so the dialog presents OVER this sheet.
+struct SummaryOptionsSheet: View {
+    @Bindable var pipeline: CaptionPipeline
+    let sessionID: UUID
+    /// Host's applySummaryPreferences: persists session + defaults and
+    /// kicks a regenerate when a summary exists.
+    let apply: (SummaryStyle, SummaryLength) -> Void
+
+    @Environment(\.dismiss) private var dismiss
+    @AppStorage("summary.defaultStyle") private var defaultStyleRaw
+        = SummaryStyle.meeting.rawValue
+    @AppStorage("summary.defaultLength") private var defaultLengthRaw
+        = SummaryLength.standard.rawValue
+    /// Choice parked while the replace-edited-summary confirm is up;
+    /// Cancel clears it so the picker row reverts untouched.
+    @State private var pendingStyle: SummaryStyle?
+    @State private var pendingLength: SummaryLength?
+    @State private var confirmReplace = false
+
+    private var session: SessionRecord? {
+        pipeline.archive.sessions.first { $0.id == sessionID }
+    }
+
+    private var selectedStyle: SummaryStyle {
+        SummaryStyle.effective(
+            storedRaw: session?.summaryStyle,
+            hasSummary: session?.summary != nil,
+            defaultRaw: defaultStyleRaw)
+    }
+
+    private var selectedLength: SummaryLength {
+        SummaryLength.effective(
+            storedRaw: session?.summaryLength,
+            hasSummary: session?.summary != nil,
+            defaultRaw: defaultLengthRaw)
+    }
+
+    var body: some View {
+        SelectorSheet(
+            title: "Summary options",
+            locked: pipeline.jobs.isBusy(sessionID)
+        ) {
+            Section {
+                Picker("Summary style", selection: Binding(
+                    get: { selectedStyle },
+                    set: { select(style: $0, length: selectedLength) })) {
+                    ForEach(SummaryStyle.allCases) { style in
+                        Label(style.displayName, systemImage: style.symbolName)
+                            .tag(style)
+                    }
+                }
+            } footer: {
+                Text("Applies to this session and becomes the default for new recordings. If a summary exists, it's rewritten in the new style.")
+            }
+            Section {
+                Picker("Summary length", selection: Binding(
+                    get: { selectedLength },
+                    set: { select(style: selectedStyle, length: $0) })) {
+                    ForEach(SummaryLength.allCases) { length in
+                        Label(length.displayName, systemImage: length.symbolName)
+                            .tag(length)
+                    }
+                }
+            } footer: {
+                Text("How much detail the summary keeps. Applies to this session and becomes the default for new recordings.")
+            }
+        }
+        .confirmationDialog(
+            "Replace edited summary?",
+            isPresented: $confirmReplace,
+            titleVisibility: .visible
+        ) {
+            Button("Replace", role: .destructive) {
+                let style = pendingStyle ?? selectedStyle
+                let length = pendingLength ?? selectedLength
+                pendingStyle = nil
+                pendingLength = nil
+                applyAndHandOffIfNeeded(style: style, length: length)
+            }
+            Button("Cancel", role: .cancel) {
+                pendingStyle = nil
+                pendingLength = nil
+            }
+        } message: {
+            Text("You edited this summary. Summarizing again will replace your changes.")
+        }
+    }
+
+    private func select(style: SummaryStyle, length: SummaryLength) {
+        guard style != selectedStyle || length != selectedLength else { return }
+        if session?.summary != nil, session?.summaryEdited == true {
+            pendingStyle = style
+            pendingLength = length
+            confirmReplace = true
+        } else {
+            applyAndHandOffIfNeeded(style: style, length: length)
+        }
+    }
+
+    private func applyAndHandOffIfNeeded(style: SummaryStyle, length: SummaryLength) {
+        // The AI-off notice and the model-download consent present from
+        // the HOST view, underneath this sheet — hand the screen back so
+        // they're visible.
+        let needsHost = session?.summary != nil
+            && (!pipeline.llmEnabled || !pipeline.llmDownloaded)
+        apply(style, length)
+        if needsHost { dismiss() }
     }
 }
