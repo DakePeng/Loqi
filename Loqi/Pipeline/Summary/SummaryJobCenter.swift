@@ -154,15 +154,31 @@ final class SummaryJobCenter {
         #endif
     }
 
-    /// True when the device is on external power — the only time the
-    /// automatic accuracy pass is allowed to burn 20-30 minutes of CPU.
-    /// `.unknown` fails CLOSED (defer): a cold launch reads .unknown
-    /// before the first battery sample, and running the hot pass on
-    /// battery is the exact failure charge-gating exists to prevent. A
-    /// deferral never strands the pass — the battery observer re-sweeps
-    /// the moment the state becomes known. (Simulator reports .unknown;
-    /// manual Re-transcribe stays available there.) Pure mapping split
-    /// for testing.
+    /// Whether the automatic accuracy pass waits for external power.
+    /// OFF by default: deferral moves the 20-30 hot minutes to the
+    /// charger but doesn't shrink them — the speed/heat fixes are the
+    /// thermal pause, checkpoints, and the Dolphin tier. The toggle
+    /// remains for battery courtesy (Settings).
+    nonisolated static var accuracyPassRequiresCharger: Bool {
+        UserDefaults.standard.bool(forKey: "summary.accuracyPassRequiresCharger")
+    }
+
+    /// Defer only when the user opted into charge-gating AND the device
+    /// is off power. Pure for testing.
+    nonisolated static func shouldDeferAccuracyPass(
+        requiresCharger: Bool, pluggedIn: Bool
+    ) -> Bool {
+        requiresCharger && !pluggedIn
+    }
+
+    /// True when the device is on external power. `.unknown` fails
+    /// CLOSED (defer) while charge-gating is on: a cold launch reads
+    /// .unknown before the first battery sample, and running the hot
+    /// pass on battery is the exact failure the opt-in exists to
+    /// prevent. A deferral never strands the pass — the battery observer
+    /// re-sweeps the moment the state becomes known. (Simulator reports
+    /// .unknown; manual Re-transcribe stays available there.) Pure
+    /// mapping split for testing.
     static func isPluggedIn() -> Bool {
         #if os(iOS)
         UIDevice.current.isBatteryMonitoringEnabled = true
@@ -667,11 +683,13 @@ final class SummaryJobCenter {
             sessionID: sessionID, style: style, length: length,
             suggestVocabulary: suggestVocabulary)
 
-        // On battery, the accuracy pass would cost 20-30 hot minutes in
-        // the user's hand — summarize the live transcript now and run the
-        // pass when the charger connects. Vocabulary suggestions wait for
-        // the accuracy pass (better text, better suggestions).
-        guard Self.isPluggedIn() else {
+        // Opt-in charge gating: summarize the live transcript now and run
+        // the pass when the charger connects. Vocabulary suggestions wait
+        // for the accuracy pass (better text, better suggestions).
+        guard !Self.shouldDeferAccuracyPass(
+            requiresCharger: Self.accuracyPassRequiresCharger,
+            pluggedIn: Self.isPluggedIn())
+        else {
             logger.info("accuracy pass deferred to charger: \(sessionID, privacy: .public)")
             summarize(
                 sessionID: sessionID, style: style, length: length,
@@ -989,7 +1007,13 @@ final class SummaryJobCenter {
         // nothing pending.
         guard archive.sessions.contains(where: { $0.pendingPostProcess != nil })
         else { return }
-        guard !isRecording(), !isBackgrounded, Self.isPluggedIn() else { return }
+        guard !isRecording(), !isBackgrounded else { return }
+        // With charge-gating off, pending markers (kill-recovery) run on
+        // any power state.
+        guard !Self.shouldDeferAccuracyPass(
+            requiresCharger: Self.accuracyPassRequiresCharger,
+            pluggedIn: Self.isPluggedIn())
+        else { return }
         for session in archive.sessions
         where session.pendingPostProcess != nil && session.importing != true
             && !isBusy(session.id) {

@@ -15,6 +15,10 @@ struct SettingsView: View {
     @AppStorage("asr.source") private var asrSourceRaw = ASRModelSource.modelScope.rawValue
     @AppStorage("summary.autoPostProcessNewRecordings")
     private var autoPostProcessNewRecordings = false
+    /// Battery courtesy, not a heat fix — deferral moves the pass to the
+    /// charger without shrinking it, so it ships OFF.
+    @AppStorage("summary.accuracyPassRequiresCharger")
+    private var accuracyPassRequiresCharger = false
     @State private var senseVoiceStore = SenseVoiceModelStore()
     @State private var senseVoiceInstalled = SenseVoiceModelStore.isInstalled
     @State private var qwen3Store = Qwen3ASRModelStore()
@@ -112,6 +116,12 @@ struct SettingsView: View {
                     Toggle(
                         "Auto post-process new recordings",
                         isOn: $autoPostProcessNewRecordings)
+
+                    if autoPostProcessNewRecordings {
+                        Toggle(
+                            "Accuracy pass only while charging",
+                            isOn: $accuracyPassRequiresCharger)
+                    }
 
                     LabeledContent(
                         "Qwen3-ASR model",

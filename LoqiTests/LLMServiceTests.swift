@@ -192,15 +192,26 @@ struct PipelineResourceTests {
         #expect(SummaryJobCenter.shouldResumeLLMJobsAfterRecording(isBackgrounded: false))
     }
 
-    /// The automatic accuracy pass runs only on external power. `.unknown`
-    /// fails CLOSED — a cold launch reads .unknown before the first
-    /// battery sample, and the hot pass must not start on battery; the
-    /// battery observer re-sweeps once the state becomes known.
+    /// Charge-gating is an OPT-IN battery courtesy (deferral doesn't
+    /// shrink the pass): off by default, the pass runs on any power.
+    /// When on, `.unknown` fails CLOSED — a cold launch reads .unknown
+    /// before the first battery sample, and the battery observer
+    /// re-sweeps once the state becomes known.
     @Test func accuracyPassChargeGateMapsBatteryStates() {
         #expect(SummaryJobCenter.pluggedIn(.charging))
         #expect(SummaryJobCenter.pluggedIn(.full))
         #expect(!SummaryJobCenter.pluggedIn(.unplugged))
         #expect(!SummaryJobCenter.pluggedIn(.unknown))
+        // Gate off → never defer, plugged or not.
+        #expect(!SummaryJobCenter.shouldDeferAccuracyPass(
+            requiresCharger: false, pluggedIn: false))
+        #expect(!SummaryJobCenter.shouldDeferAccuracyPass(
+            requiresCharger: false, pluggedIn: true))
+        // Gate on → defer exactly while off power.
+        #expect(SummaryJobCenter.shouldDeferAccuracyPass(
+            requiresCharger: true, pluggedIn: false))
+        #expect(!SummaryJobCenter.shouldDeferAccuracyPass(
+            requiresCharger: true, pluggedIn: true))
     }
 
     /// Memory warnings full-unload the LLM during import-only jobs (their
