@@ -19,8 +19,12 @@ struct ImportAudioSheet: View {
     // -1 = Auto (diarize). Default on so imports get speaker labels.
     // Recordings have no picker anymore — their post-process always runs
     // Auto when the model is downloaded — but imports keep this control
-    // because a file's speaker count is often known up front.
-    @AppStorage("import.speakerCount") private var speakerCount = -1
+    // because a file's speaker count is often known up front. Per-import
+    // @State, deliberately NOT remembered: an explicit count forces
+    // EXACTLY that many clusters, so a stale "3 speakers" from last week's
+    // meeting would split a solo lecture into three phantom speakers.
+    // (The old "import.speakerCount" defaults key is intentionally unread.)
+    @State private var speakerCount = -1
     @AppStorage("import.sensitivity") private var sensitivityRaw
         = MicSensitivity.balanced.rawValue
     /// Per-import engine choice. Defaults to the fast accurate option;
