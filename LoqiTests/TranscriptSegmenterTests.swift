@@ -229,6 +229,21 @@ struct ASRKindResolutionTests {
         #expect(resolved.kind == "apple")
         #expect(resolved.notice == .modelMissing)
     }
+
+    @Test func dolphinFinalsGate() {
+        // Upgrades only for the hybrid record role (preferred), with the
+        // model installed, on a concrete non-English language.
+        #expect(SenseVoiceEngine.usesDolphinFinals(
+            preferred: true, dolphinInstalled: true, source: .language(.japanese)))
+        #expect(!SenseVoiceEngine.usesDolphinFinals(
+            preferred: false, dolphinInstalled: true, source: .language(.japanese)))
+        #expect(!SenseVoiceEngine.usesDolphinFinals(
+            preferred: true, dolphinInstalled: false, source: .language(.japanese)))
+        #expect(!SenseVoiceEngine.usesDolphinFinals(
+            preferred: true, dolphinInstalled: true, source: .language(.english)))
+        #expect(!SenseVoiceEngine.usesDolphinFinals(
+            preferred: true, dolphinInstalled: true, source: .auto))
+    }
 }
 
 struct UtteranceMergerTests {

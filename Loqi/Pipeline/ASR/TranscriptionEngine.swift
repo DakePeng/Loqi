@@ -351,7 +351,10 @@ struct HybridVolatileComposer: Sendable {
 /// the growing utterance every 0.7s — and remains the sole source of
 /// saved entries, refinement, and translation. Captions get more
 /// responsive than the SenseVoice pulses while its live compute drops
-/// roughly an order of magnitude.
+/// roughly an order of magnitude. Finals upgrade to Dolphin when it's
+/// installed and the language fits — the same priority the offline pass
+/// applies, and affordable live precisely because finals-only decoding
+/// makes the heavier model's cost one decode per segment.
 ///
 /// Failure policy: SenseVoice is the record engine — its prepare() errors
 /// propagate. The Apple child is optional responsiveness — any failure
@@ -389,7 +392,8 @@ actor HybridSpeechEngine: SpeechEngine {
         self.language = language
         self.apple = TranscriptionEngine(language: language)
         self.senseVoice = SenseVoiceEngine(
-            sourceSelection: .language(language), emitsPartials: false)
+            sourceSelection: .language(language), emitsPartials: false,
+            prefersDolphinFinals: true)
         self.composer = HybridVolatileComposer(
             separator: language.usesCJKScript ? "" : " ")
     }

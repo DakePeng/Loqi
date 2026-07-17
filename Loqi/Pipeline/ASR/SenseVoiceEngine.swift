@@ -14,7 +14,9 @@ actor SenseVoiceEngine: SpeechEngine {
     nonisolated let sourceSelection: RecognitionLanguageSelection
 
     private var vad: SherpaOnnxVoiceActivityDetectorWrapper?
-    private var decoder: SenseVoiceDecoder?
+    /// Decodes one buffer of speech — SenseVoice, or Dolphin when the
+    /// hybrid record role upgraded finals (see `usesDolphinFinals`).
+    private var decode: (@Sendable ([Float]) async -> SenseVoiceRecognitionResult)?
     private var eventContinuation: AsyncStream<TranscriptionEvent>.Continuation?
 
     /// Samples of the current speech run (our own copy — the VAD only
@@ -50,15 +52,40 @@ actor SenseVoiceEngine: SpeechEngine {
     /// VAD, speech-activity edges, and language detection are unaffected.
     private var emitsPartials: Bool
 
+    /// Set by the hybrid record role: finals decode with Dolphin (the
+    /// offline fast tier — better Eastern-language accuracy) when it's
+    /// installed and the session language fits. Only worth it there —
+    /// finals-only is ONE decode per VAD segment; pure SenseVoice mode
+    /// re-decodes the growing utterance every pulse, where Dolphin's
+    /// heavier encoder would recreate the heat problem.
+    private let prefersDolphinFinals: Bool
+
     private static let sampleRate = 16_000
     private static let preRollSamples = 8_000        // 0.5s
     private static let maxUtteranceSamples = 16_000 * 20
 
     private let logger = Logger(subsystem: "com.kunzhipeng.loqi", category: "sensevoice")
 
-    init(sourceSelection: RecognitionLanguageSelection, emitsPartials: Bool = true) {
+    init(
+        sourceSelection: RecognitionLanguageSelection,
+        emitsPartials: Bool = true,
+        prefersDolphinFinals: Bool = false
+    ) {
         self.sourceSelection = sourceSelection
         self.emitsPartials = emitsPartials
+        self.prefersDolphinFinals = prefersDolphinFinals
+    }
+
+    /// Pure gate for the finals upgrade. Never for `.auto` (Dolphin
+    /// reports no language, and hybrid always has a concrete one) and
+    /// never for English (outside Dolphin's Eastern-language set).
+    nonisolated static func usesDolphinFinals(
+        preferred: Bool, dolphinInstalled: Bool,
+        source: RecognitionLanguageSelection
+    ) -> Bool {
+        guard preferred, dolphinInstalled,
+              case .language(let language) = source else { return false }
+        return OfflineTranscriber.dolphinSupports(language)
     }
 
     /// The hybrid engine flips this back on when its Apple child fails and
@@ -72,10 +99,24 @@ actor SenseVoiceEngine: SpeechEngine {
             throw SenseVoiceError.modelMissing
         }
         let reduceHeat = UserDefaults.standard.bool(forKey: "perf.reduceHeat")
-        partialInterval = SenseVoiceTuning.partialInterval(reduceHeat: reduceHeat)
-        decoder = SenseVoiceDecoder(
-            sourceSelection: sourceSelection,
-            numThreads: SenseVoiceTuning.decoderThreads(reduceHeat: reduceHeat))
+        let dolphinFinals = Self.usesDolphinFinals(
+            preferred: prefersDolphinFinals,
+            dolphinInstalled: DolphinModelStore.isInstalled,
+            source: sourceSelection)
+        // Dolphin partials only ever run in the degraded (Apple-dead)
+        // hybrid; the heavier decode gets the longer pulse there.
+        partialInterval = SenseVoiceTuning.partialInterval(
+            reduceHeat: reduceHeat || dolphinFinals)
+        let threads = SenseVoiceTuning.decoderThreads(reduceHeat: reduceHeat)
+        if dolphinFinals {
+            let dolphin = DolphinDecoder(numThreads: threads)
+            decode = { SenseVoiceRecognitionResult(text: await dolphin.decode($0)) }
+            logger.info("finals decode via Dolphin")
+        } else {
+            let senseVoice = SenseVoiceDecoder(
+                sourceSelection: sourceSelection, numThreads: threads)
+            decode = { await senseVoice.decode($0) }
+        }
 
         // Threshold + hangover follow the user's pickup preset: far-field
         // speech is reverb-smeared (lower probability, soft tails that a
@@ -110,7 +151,7 @@ actor SenseVoiceEngine: SpeechEngine {
     }
 
     func start() async throws -> AsyncStream<TranscriptionEvent> {
-        guard vad != nil, decoder != nil else {
+        guard vad != nil, decode != nil else {
             throw TranscriptionError.notPrepared
         }
         let (events, continuation) = AsyncStream<TranscriptionEvent>.makeStream()
@@ -181,7 +222,7 @@ actor SenseVoiceEngine: SpeechEngine {
         eventContinuation?.finish()
         eventContinuation = nil
         vad = nil
-        decoder = nil
+        decode = nil
         utterance = []
         preRoll = []
     }
@@ -204,14 +245,14 @@ actor SenseVoiceEngine: SpeechEngine {
         guard emitsPartials else { return }
         guard samplesSincePartial >= partialInterval,
               !partialInFlight,
-              let decoder else { return }
+              let decode else { return }
         partialInFlight = true
         samplesSincePartial = 0
         let snapshot = utterance
         let startedGeneration = generation
         Task { [weak self] in
             let decodeStart = ContinuousClock.now
-            let result = await decoder.decode(snapshot)
+            let result = await decode(snapshot)
             let d = decodeStart.duration(to: .now)
             await self?.addDecodeActiveSeconds(d)
             await self?.deliverPartial(result, from: startedGeneration)
@@ -229,7 +270,7 @@ actor SenseVoiceEngine: SpeechEngine {
     }
 
     private func drainFinalizedSegments() {
-        guard let vad, let decoder else { return }
+        guard let vad, let decode else { return }
         while !vad.isEmpty() {
             let samples = vad.front().samples
             vad.pop()
@@ -238,7 +279,7 @@ actor SenseVoiceEngine: SpeechEngine {
             finalTail = Task { [weak self] in
                 await previous?.value
                 let decodeStart = ContinuousClock.now
-                let result = await decoder.decode(samples)
+                let result = await decode(samples)
                 let d = decodeStart.duration(to: .now)
                 await self?.addDecodeActiveSeconds(d)
                 await self?.deliverFinal(result)
@@ -353,7 +394,11 @@ actor SenseVoiceEngine: SpeechEngine {
     nonisolated let sourceSelection: RecognitionLanguageSelection
     nonisolated var language: AppLanguage { sourceSelection.fallbackLanguage }
 
-    init(sourceSelection: RecognitionLanguageSelection, emitsPartials: Bool = true) {
+    init(
+        sourceSelection: RecognitionLanguageSelection,
+        emitsPartials: Bool = true,
+        prefersDolphinFinals: Bool = false
+    ) {
         self.sourceSelection = sourceSelection
     }
 
