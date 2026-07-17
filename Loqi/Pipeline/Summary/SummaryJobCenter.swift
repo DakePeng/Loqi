@@ -644,8 +644,9 @@ final class SummaryJobCenter {
     /// of MB, not the multi-GB LLM.
     /// Auto results claiming more speakers than a real meeting are
     /// clustering failures — applying them would shred the transcript
-    /// into dozens of phantom voices.
-    nonisolated static let maxPlausibleAutoSpeakers = 12
+    /// into dozens of phantom voices. Phone recordings realistically top
+    /// out well under this.
+    nonisolated static let maxPlausibleAutoSpeakers = 8
 
     func retryDiarization(sessionID: UUID, speakerCount: Int? = nil) {
         guard !isRecording(), !isBusy(sessionID),

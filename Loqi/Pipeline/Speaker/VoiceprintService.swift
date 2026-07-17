@@ -34,12 +34,13 @@ actor VoiceprintService {
     ) -> (numClusters: Int, threshold: Float) {
         value >= 2
             ? (numClusters: value, threshold: 0)
-            // Field-tuned: sherpa's reference 0.5 over-split a real
-            // meeting into 30+ phantom speakers with the CAM++
-            // embeddings. Larger = fewer clusters; an exact picker count
-            // remains the reliable path (the job center refuses absurd
-            // Auto results instead of applying them).
-            : (numClusters: -1, threshold: 0.75)
+            // Field-tuned twice: sherpa's reference 0.5 gave 30+ phantom
+            // speakers on a real meeting, 0.75 still over-split. 0.9
+            // merges aggressively — under-splitting is the lesser evil
+            // (merged voices read fine; phantom ones don't) and the exact
+            // picker count covers precision. The real over-split fuel is
+            // micro-segments; see the minDuration knobs at the call site.
+            : (numClusters: -1, threshold: 0.9)
     }
 
     /// Whether both model files are already on disk. Lets the import flow
@@ -111,7 +112,14 @@ actor VoiceprintService {
                 numThreads: threads),
             clustering: sherpaOnnxFastClusteringConfig(
                 numClusters: clustering.numClusters,
-                threshold: clustering.threshold))
+                threshold: clustering.threshold),
+            // Sub-second speech islands produce junk CAM++ embeddings —
+            // the main driver of Auto's phantom-speaker explosions (the
+            // wrapper default keeps everything ≥0.3s). Dropping them
+            // loses no words: attribution's nearest-gap rule labels those
+            // entries from the neighboring segments.
+            minDurationOn: 1.0,
+            minDurationOff: 0.8)
         guard let diarizer = SherpaOnnxOfflineSpeakerDiarizationWrapper(config: &config)
         else { throw DiarizationError.modelLoadFailed }
 
