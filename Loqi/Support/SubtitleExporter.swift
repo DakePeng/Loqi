@@ -12,9 +12,17 @@ enum SubtitleExporter {
         var lines: [String]
     }
 
-    /// Longest a cue stays up without a successor; also the tail cue length.
+    /// Shortest hold for a cue without a successor; longer lines hold
+    /// longer (see `holdDuration`).
     static let maxCueDuration: TimeInterval = 4
     static let minCueDuration: TimeInterval = 0.5
+
+    /// How long a cue stays up without a successor bounding it: scaled by
+    /// reading length. Sentence-merged entries can span ~20s of audio; a
+    /// flat 4s cap left the screen dark for the rest of the span.
+    static func holdDuration(forCharacterCount count: Int) -> TimeInterval {
+        min(max(maxCueDuration, Double(count) / 12), 10)
+    }
 
     static func cues(for record: SessionRecord, bilingual: Bool) -> [Cue] {
         let entries = record.entries.filter { !$0.sourceText.isEmpty }
@@ -24,7 +32,8 @@ enum SubtitleExporter {
             if let last = cues.last { start = max(start, last.start + minCueDuration) }
             let next = index + 1 < entries.count
                 ? record.resolvedAudioOffset(of: entries[index + 1]) : nil
-            var end = min(next ?? start + maxCueDuration, start + maxCueDuration)
+            let hold = holdDuration(forCharacterCount: entry.sourceText.count)
+            var end = min(next ?? start + hold, start + hold)
             end = max(end, start + minCueDuration)
             var lines = [entry.sourceText]
             if bilingual, let translation = entry.translation, !translation.isEmpty {

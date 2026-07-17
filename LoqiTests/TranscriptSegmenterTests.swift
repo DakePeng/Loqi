@@ -1,3 +1,4 @@
+import Foundation
 import Testing
 @testable import Loqi
 
@@ -227,5 +228,82 @@ struct ASRKindResolutionTests {
             setting: "hybrid", senseVoiceInstalled: false, source: .language(.chinese))
         #expect(resolved.kind == "apple")
         #expect(resolved.notice == .modelMissing)
+    }
+}
+
+struct UtteranceMergerTests {
+    private func u(_ text: String, _ start: TimeInterval, _ end: TimeInterval)
+        -> UtteranceMerger.Utterance { (text, start, end) }
+
+    @Test func endsSentenceTruthTable() {
+        #expect(UtteranceMerger.endsSentence("今日は会議です。"))
+        #expect(UtteranceMerger.endsSentence("完了！"))
+        #expect(UtteranceMerger.endsSentence("そうですか？"))
+        #expect(UtteranceMerger.endsSentence("Done."))
+        #expect(UtteranceMerger.endsSentence("Really?"))
+        #expect(UtteranceMerger.endsSentence("Wait…"))
+        // Trailing closers and whitespace after the terminal mark.
+        #expect(UtteranceMerger.endsSentence("彼は「はい。」"))
+        #expect(UtteranceMerger.endsSentence("He said \"stop.\" "))
+        // Non-terminal punctuation and bare text.
+        #expect(!UtteranceMerger.endsSentence("今日は会議、"))
+        #expect(!UtteranceMerger.endsSentence("and then we"))
+        #expect(!UtteranceMerger.endsSentence("句読点なしの断片"))
+        #expect(!UtteranceMerger.endsSentence(""))
+    }
+
+    @Test func capSplitHealsIntoOneSentence() {
+        // A 12s cap split leaves ~zero gap; the tail completes the sentence.
+        let merged = UtteranceMerger.merge([
+            u("会議の予算については来年以降", 0, 12),
+            u("事業部からもらいます。", 12.05, 17),
+        ])
+        #expect(merged.count == 1)
+        #expect(merged[0].text == "会議の予算については来年以降事業部からもらいます。")
+        #expect(merged[0].start == 0)
+        #expect(merged[0].end == 17)
+    }
+
+    @Test func joinerIsCJKAware() {
+        #expect(UtteranceMerger.joiner(between: "予算は", and: "来年") == "")
+        #expect(UtteranceMerger.joiner(between: "and then", and: "we left") == " ")
+        // Mixed boundary gets a space.
+        #expect(UtteranceMerger.joiner(between: "using G1", and: "です") == " ")
+    }
+
+    @Test func mergeStopsAtBoundaries() {
+        // Terminal punctuation ends the group.
+        #expect(UtteranceMerger.merge([
+            u("終わりました。", 0, 3), u("次の話です", 3.2, 6),
+        ]).count == 2)
+        // Gap beyond maxGap ends it.
+        #expect(UtteranceMerger.merge([
+            u("それで", 0, 3), u("続きです", 4.5, 6),
+        ]).count == 2)
+        // Span beyond maxDuration ends it (12 + 12 cap split).
+        #expect(UtteranceMerger.merge([
+            u("長い話が", 0, 12), u("まだ続いていて", 12.01, 24),
+        ]).count == 2)
+        // Character cap ends it.
+        #expect(UtteranceMerger.merge([
+            u(String(repeating: "あ", count: 150), 0, 5),
+            u(String(repeating: "い", count: 80), 5.1, 9),
+        ], maxCharacters: 200).count == 2)
+    }
+
+    @Test func chainAndPassthroughAndOverlap() {
+        // Three fragments chain into one sentence.
+        let chained = UtteranceMerger.merge([
+            u("まず", 0, 2), u("予算の", 2.3, 4), u("話です。", 4.2, 6),
+        ])
+        #expect(chained.count == 1)
+        #expect(chained[0].text == "まず予算の話です。")
+        // Empty and single-element pass through.
+        #expect(UtteranceMerger.merge([]).isEmpty)
+        #expect(UtteranceMerger.merge([u("一つだけ", 0, 2)]).count == 1)
+        // Overlapping ranges (retry-halves rescue) count as zero gap.
+        #expect(UtteranceMerger.merge([
+            u("重なって", 0, 4), u("います。", 3.5, 6),
+        ]).count == 1)
     }
 }

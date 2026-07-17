@@ -109,7 +109,7 @@ struct SessionRetranscriber {
         await llm.unload()
 
         onPhase(.transcribing(0))
-        let utterances = try await OfflineTranscriber.transcribe(
+        let rawUtterances = try await OfflineTranscriber.transcribe(
             contentsOf: url,
             language: direction.source,
             backend: backend,
@@ -119,8 +119,16 @@ struct SessionRetranscriber {
         ) { fraction in
             onPhase(.transcribing(fraction))
         }
+        guard !rawUtterances.isEmpty else { throw ImportError.nothingTranscribed }
+        // Drop punctuation-only finals (imports do the same) and
+        // reassemble VAD fragments into sentences — polish indices,
+        // entries, speaker inheritance, and translation all read this
+        // one array, so merging here keeps them aligned.
+        let utterances = UtteranceMerger.merge(
+            rawUtterances.filter { $0.text.hasSpeechContent })
+        // All punctuation-only noise counts as nothing transcribed.
         guard !utterances.isEmpty else { throw ImportError.nothingTranscribed }
-        logger.info("retranscribe: \(utterances.count) utterances replace \(record.entries.count) entries")
+        logger.info("retranscribe: \(rawUtterances.count) raw -> \(utterances.count) merged utterances replace \(record.entries.count) entries")
 
         // Polish before translation drafting so Apple translates the
         // cleaned text: deterministic hotword fixup for every backend,

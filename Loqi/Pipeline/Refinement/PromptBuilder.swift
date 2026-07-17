@@ -148,9 +148,11 @@ struct PromptBuilder: Sendable {
     /// The ONE context-window knob for sentence cleanup — the live queue,
     /// the offline polisher, and the prompt trimming all read this.
     static let refineContextLimit = 3
-    /// Output ≈ input sentence; 160 gives long CJK sentences headroom
-    /// (the fidelity gate rejects truncation anyway).
-    static let refineMaxTokens = 160
+    /// Output ≈ input sentence; sized so merged offline sentences (up to
+    /// ~20s of CJK via UtteranceMerger) still fit — an over-budget
+    /// generation gets truncated and the fidelity gate then silently
+    /// keeps the raw text, which reads as "cleanup never runs".
+    static let refineMaxTokens = 220
 
     /// One sentence through the full cleanup contract — prompt, generate,
     /// parse, fidelity gate — shared by the live RefinementQueue and the

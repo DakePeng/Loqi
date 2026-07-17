@@ -191,6 +191,10 @@ final class FileImportEngine {
         duration: TimeInterval,
         onPhase: @escaping @MainActor @Sendable (Phase) -> Void
     ) async throws -> SessionRecord {
+        // Reassemble VAD fragments into sentences FIRST: every consumer
+        // below (polish indices, entries, diarization spans, translation)
+        // reads this one array, so merging here keeps them aligned.
+        let utterances = UtteranceMerger.merge(utterances)
         // Polish before the translation drafts so Apple translates the
         // cleaned text: hotword fixup for every backend, LFM2.5 cleanup
         // for the non-accuracy-pass ones. Imports keep no resident LLM

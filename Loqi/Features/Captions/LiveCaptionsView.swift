@@ -633,9 +633,13 @@ struct LiveCaptionsView: View {
                 .buttonStyle(.plain)
                 .padding(.bottom, 2)
             }
-            ForEach(segment.entries) { entry in
-                CaptionRow(entry: entry, isLatest: entry.id == lastEntryID)
-                    .id(entry.id)
+            // Continuation fragments (VAD pause/cap splits) join into one
+            // paragraph row for display; the live entry always renders
+            // alone so big-type styling and follow anchoring stay put.
+            ForEach(CaptionRunGrouping.runs(
+                entries: segment.entries, lastEntryID: lastEntryID)) { run in
+                CaptionRow(entry: run.displayEntry, isLatest: run.id == lastEntryID)
+                    .id(run.id)
             }
         }
         .padding(.horizontal, 14)

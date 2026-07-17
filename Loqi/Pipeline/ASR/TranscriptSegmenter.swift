@@ -84,3 +84,72 @@ extension StringProtocol {
         contains { $0.isLetter || $0.isNumber }
     }
 }
+
+/// Reassembles VAD-fragmented ASR utterances into sentence-shaped ones:
+/// silero closes segments at pauses ≥0.5s and force-splits at the 10-12s
+/// caps, so raw utterances end mid-sentence. Pure; hosted here rather
+/// than its own file so the xcodegen pbxproj needn't change — split out
+/// on the next project regen.
+enum UtteranceMerger {
+    /// Structurally identical to OfflineTranscriber.Utterance.
+    typealias Utterance = (text: String, start: TimeInterval, end: TimeInterval)
+
+    /// Characters that close a sentence, CJK + Latin.
+    private static let terminal: Set<Character> = ["。", "．", ".", "!", "！", "?", "？", "…"]
+    /// Closers that may trail the terminal mark ("said." → «said.» etc.).
+    private static let trailing: Set<Character> = [
+        "」", "』", "”", "’", "\"", "'", "）", ")", "】", "》", "]", "»",
+    ]
+
+    /// True when `text` ends with terminal punctuation, tolerating
+    /// trailing closing quotes/brackets and whitespace.
+    static func endsSentence(_ text: String) -> Bool {
+        for character in text.reversed() {
+            if character.isWhitespace || trailing.contains(character) { continue }
+            return terminal.contains(character)
+        }
+        return false
+    }
+
+    /// "" when both boundary characters are CJK (no space inside zh/ja
+    /// text), else " " (Latin and Korean use real spaces).
+    static func joiner(between left: String, and right: String) -> String {
+        guard let last = left.last, let first = right.first,
+              last.isCJK, first.isCJK else { return " " }
+        return ""
+    }
+
+    /// Append the next fragment onto the current one while the current
+    /// lacks terminal punctuation AND the inter-fragment gap ≤ `maxGap`
+    /// (negative gaps — overlapping retry-halves ranges — count) AND the
+    /// merged span stays ≤ `maxDuration` AND the merged text stays ≤
+    /// `maxCharacters` (the backstop for punctuation-less CTC backends
+    /// and the LFM2.5 refine token budget). Merged start = the first
+    /// fragment's, end = the last's.
+    static func merge(
+        _ utterances: [Utterance],
+        maxGap: TimeInterval = 0.8,
+        maxDuration: TimeInterval = 20,
+        maxCharacters: Int = 200
+    ) -> [Utterance] {
+        var merged: [Utterance] = []
+        for utterance in utterances {
+            guard let current = merged.last else {
+                merged.append(utterance)
+                continue
+            }
+            let joined = current.text
+                + joiner(between: current.text, and: utterance.text)
+                + utterance.text
+            if !endsSentence(current.text),
+               utterance.start - current.end <= maxGap,
+               utterance.end - current.start <= maxDuration,
+               joined.count <= maxCharacters {
+                merged[merged.count - 1] = (joined, current.start, utterance.end)
+            } else {
+                merged.append(utterance)
+            }
+        }
+        return merged
+    }
+}
