@@ -136,7 +136,6 @@ struct ModelFileDownloaderTests {
             .deletingLastPathComponent()
         let files = [
             root.appending(path: "Loqi/Pipeline/ASR/SenseVoiceModelStore.swift"),
-            root.appending(path: "Loqi/Pipeline/ASR/Qwen3ASRModelStore.swift"),
             root.appending(path: "Loqi/Pipeline/Refinement/ModelScopeDownloader.swift"),
         ]
 

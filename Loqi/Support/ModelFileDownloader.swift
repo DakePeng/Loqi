@@ -6,9 +6,9 @@ import os
 /// The download-task shell every model store shares: downloading/progress/
 /// lastError state plus the cancel-able task around
 /// `ModelFileDownloader.downloadAll`. The manifest loop was extracted long
-/// ago; this absorbs the surrounding lifecycle that SenseVoice, Qwen3-ASR,
-/// and Dolphin had each copied verbatim — a store is now its manifest, a
-/// directory, and one of these.
+/// ago; this absorbs the surrounding lifecycle that the SenseVoice and
+/// Dolphin stores had each copied verbatim — a store is now its manifest,
+/// a directory, and one of these.
 @MainActor
 @Observable
 final class ModelStoreDownloads {
@@ -652,7 +652,7 @@ final class BackgroundModelDownloader: NSObject, URLSessionDownloadDelegate, @un
 // MARK: - Shared model-file manifests
 
 /// One remote model file with a per-source path — the manifest shape shared
-/// by the SenseVoice, Qwen3-ASR, and diarizer stores. The HF and ModelScope
+/// by the SenseVoice, Dolphin, and diarizer stores. The HF and ModelScope
 /// repos hold the same bytes but differ in owner/revision, so each source
 /// carries its own full path.
 struct ModelRemoteFile: Sendable {

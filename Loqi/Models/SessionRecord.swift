@@ -99,7 +99,7 @@ struct SessionRecord: Identifiable, Codable, Sendable {
     /// killed-and-relaunched import skip audio it already decoded instead
     /// of starting the file over from zero.
     struct ImportCheckpoint: Codable, Sendable {
-        /// One transcribed SenseVoice/Qwen3-ASR segment, keyed by its exact
+        /// One transcribed SenseVoice/Dolphin segment, keyed by its exact
         /// time range — VAD segmentation is deterministic for the same
         /// audio, so replaying the file reproduces the same ranges.
         struct Segment: Codable, Sendable {
@@ -238,8 +238,8 @@ struct SessionRecord: Identifiable, Codable, Sendable {
 
     /// Resumable state for an interrupted accuracy pass (re-transcribe or
     /// new-recording post-process): segments decoded so far, reusable only
-    /// by the same backend — a SenseVoice cache must never seed a Qwen3
-    /// pass. Survives cancellation, preemption, AND failure (decoded
+    /// by the same backend — one backend's cache must never seed
+    /// another's pass. Survives cancellation, preemption, AND failure (decoded
     /// segments are paid-for work a retry reuses); only a completed pass
     /// clears it. Optional: legacy records decode as nil.
     var retranscribeCheckpoint: RetranscribeCheckpoint?
@@ -250,10 +250,9 @@ struct SessionRecord: Identifiable, Codable, Sendable {
     }
 
     /// An automatic accuracy pass (re-transcribe + re-summarize of a fresh
-    /// recording) that hasn't completed — deferred until the device is on
-    /// power, or interrupted by a kill. Swept at launch/charge; cleared
-    /// when any accuracy pass for this session completes, or on explicit
-    /// cancel. Optional: legacy records decode as nil.
+    /// recording) interrupted by a kill. Swept at launch/foreground;
+    /// cleared when any accuracy pass for this session completes, or on
+    /// explicit cancel. Optional: legacy records decode as nil.
     var pendingPostProcess: PendingPostProcess?
 
     struct PendingPostProcess: Codable, Sendable {

@@ -119,7 +119,7 @@ struct OnboardingCatalogTests {
         #expect(OnboardingItemKind.liveLLM.usesSharedLLMWorker)
         #expect(OnboardingItemKind.summaryLLM.usesSharedLLMWorker)
         #expect(!OnboardingItemKind.senseVoice.usesSharedLLMWorker)
-        #expect(!OnboardingItemKind.qwen3ASR.usesSharedLLMWorker)
+        #expect(!OnboardingItemKind.diarizer.usesSharedLLMWorker)
     }
 
     @Test func translationPackPairsCoverEveryOrderedLanguagePair() {
@@ -158,11 +158,10 @@ struct OnboardingCatalogTests {
 
     // MARK: Queue
 
-    @Test func queueRunsFallbackEngineFirstAndOptionalLast() {
+    @Test func queueRunsFallbackEngineFirstAndBigLLMLate() {
         let queue = OnboardingItemKind.queueOrder(
             selection: [
                 .translationPacks,
-                .qwen3ASR,
                 .liveLLM,
                 .summaryLLM,
                 .diarizer,
@@ -176,7 +175,6 @@ struct OnboardingCatalogTests {
             .diarizer,
             .liveLLM,
             .summaryLLM,
-            .qwen3ASR,
         ])
     }
 

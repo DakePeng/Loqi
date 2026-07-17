@@ -2,7 +2,7 @@ import Foundation
 
 /// A timestamped run of finalized text — the smallest piece carrying its own
 /// audio time range, so the diarizer can attribute it to a speaker. Engines
-/// that can't produce per-run timings (SenseVoice, Qwen3) emit `runs: nil`
+/// that can't produce per-run timings (SenseVoice, Dolphin) emit `runs: nil`
 /// and the utterance stays a single speaker-attributed entry.
 struct TimedRun: Sendable, Equatable {
     let text: String

@@ -78,7 +78,6 @@ enum OnboardingItemKind: String, CaseIterable, Identifiable {
     case diarizer
     case liveLLM
     case summaryLLM
-    case qwen3ASR
 
     var id: String { rawValue }
 
@@ -90,7 +89,6 @@ enum OnboardingItemKind: String, CaseIterable, Identifiable {
         case .diarizer: String(localized: "Speaker recognition")
         case .liveLLM: String(localized: "Live AI model (LFM2.5)")
         case .summaryLLM: String(localized: "Summary AI model (2B)")
-        case .qwen3ASR: String(localized: "Qwen3-ASR re-transcription")
         }
     }
 
@@ -108,8 +106,6 @@ enum OnboardingItemKind: String, CaseIterable, Identifiable {
             String(localized: "Tiny on-device model that cleans up the live transcript")
         case .summaryLLM:
             String(localized: "Higher-quality summaries, titles and chat")
-        case .qwen3ASR:
-            String(localized: "Slower, high-accuracy second pass for recordings")
         }
     }
 
@@ -122,14 +118,13 @@ enum OnboardingItemKind: String, CaseIterable, Identifiable {
         case .diarizer: VoiceprintService.approximateDownloadBytes
         case .liveLLM: ModelCatalog.liveRefineModel.downloadBytes
         case .summaryLLM: ModelCatalog.qwen35_2b.downloadBytes
-        case .qwen3ASR: Qwen3ASRModelStore.totalExpectedBytes
         }
     }
 
     var isRecommended: Bool {
         switch self {
         case .translationPacks, .senseVoice, .diarizer, .liveLLM, .summaryLLM: true
-        case .appleSpeech, .qwen3ASR: false
+        case .appleSpeech: false
         }
     }
 
@@ -149,7 +144,7 @@ enum OnboardingItemKind: String, CaseIterable, Identifiable {
             String(localized: "Downloading \(caption)…")
         case .translationPacks:
             String(localized: "Preparing \(caption)…")
-        case .senseVoice, .diarizer, .liveLLM, .summaryLLM, .qwen3ASR:
+        case .senseVoice, .diarizer, .liveLLM, .summaryLLM:
             caption
         }
     }
@@ -163,7 +158,6 @@ enum OnboardingItemKind: String, CaseIterable, Identifiable {
         case .diarizer: VoiceprintService.isOfflineDiarizerDownloaded
         case .liveLLM: LLMService.isDownloaded(model: ModelCatalog.liveRefineModel)
         case .summaryLLM: LLMService.isDownloaded(model: ModelCatalog.qwen35_2b)
-        case .qwen3ASR: Qwen3ASRModelStore.isInstalled
         }
     }
 

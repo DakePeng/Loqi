@@ -6,7 +6,7 @@ import os
 /// pseudo-streams for volatile captions; an import just needs clean finals
 /// with time ranges, so this drives the shared VAD segmentation over the
 /// whole file and decodes each closed segment (VADSegmentedTranscriber —
-/// the same flow the Qwen3-ASR post-pass uses).
+/// the same flow the accuracy pass uses).
 actor SenseVoiceFileTranscriber {
     typealias Utterance = VADSegmentedTranscriber.Utterance
 

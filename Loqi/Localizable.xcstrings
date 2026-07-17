@@ -120,22 +120,6 @@
         }
       }
     },
-    "Accuracy pass only while charging" : {
-      "localizations" : {
-        "ja" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "高精度パスは充電中のみ実行"
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "仅在充电时运行高精度转写"
-          }
-        }
-      }
-    },
     "Add" : {
       "extractionState" : "stale",
       "localizations" : {
@@ -537,6 +521,7 @@
       }
     },
     "Apply changes" : {
+      "extractionState" : "stale",
       "localizations" : {
         "ja" : {
           "stringUnit" : {
@@ -1493,18 +1478,18 @@
         }
       }
     },
-    "Dolphin (fast, 中/日/한)" : {
+    "Dolphin (best for 中/日/한)" : {
       "localizations" : {
         "ja" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Dolphin（高速・中/日/韓）"
+            "value" : "Dolphin（中/日/韓に最適）"
           }
         },
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Dolphin（快速，中/日/韩）"
+            "value" : "Dolphin（中/日/韩最佳）"
           }
         }
       }
@@ -1525,18 +1510,34 @@
         }
       }
     },
-    "Dolphin model (fast tier)" : {
+    "Dolphin model" : {
       "localizations" : {
         "ja" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Dolphin モデル（高速ティア）"
+            "value" : "Dolphin モデル"
           }
         },
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Dolphin 模型（快速档）"
+            "value" : "Dolphin 模型"
+          }
+        }
+      }
+    },
+    "Dolphin recognizes 中文/日本語/한국어 with the highest accuracy. Once downloaded, Re-transcribe & summarize and live Hybrid sentences use it automatically for those languages (remove it to go back to SenseVoice). Auto post-process re-transcribes and identifies speakers before the first summary for new recordings, using downloaded models only." : {
+      "localizations" : {
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Dolphin は中国語・日本語・韓国語を最高精度で認識します。ダウンロード後は、これらの言語で「再文字起こしして要約」とハイブリッドのライブ確定文が自動的に Dolphin を使用します（削除すると SenseVoice に戻ります）。自動後処理は、新しい録音の最初の要約前に、ダウンロード済みモデルのみで再文字起こしと話者識別を行います。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Dolphin 以最高准确率识别中文/日语/韩语。下载后，这些语言的“重新转写并总结”和混合模式的实时定稿会自动使用 Dolphin（删除即可恢复为 SenseVoice）。自动后处理仅使用已下载的模型，在新录音的首次总结前重新转写并识别说话人。"
           }
         }
       }
@@ -1692,23 +1693,6 @@
         }
       }
     },
-    "Download Qwen3-ASR model (~990 MB)" : {
-      "extractionState" : "stale",
-      "localizations" : {
-        "ja" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Qwen3-ASRモデルをダウンロード（約990 MB）"
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "下载 Qwen3-ASR 模型（约 990 MB）"
-          }
-        }
-      }
-    },
     "Download SenseVoice model (~230 MB)" : {
       "extractionState" : "stale",
       "localizations" : {
@@ -1789,23 +1773,6 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "请先在设置中下载 Dolphin 模型。"
-          }
-        }
-      }
-    },
-    "Download the Qwen3-ASR model in Settings first." : {
-      "extractionState" : "stale",
-      "localizations" : {
-        "ja" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "まず設定でQwen3-ASRモデルをダウンロードしてください。"
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "请先在设置中下载 Qwen3-ASR 模型。"
           }
         }
       }
@@ -2429,23 +2396,6 @@
         }
       }
     },
-    "High-accuracy Qwen3-ASR will be used — slower than live recognition, noticeably more accurate. Everything runs on this iPhone." : {
-      "extractionState" : "stale",
-      "localizations" : {
-        "ja" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "高精度のQwen3-ASRを使用します — リアルタイム認識より遅い分、精度は格段に上です。すべての処理はこのiPhone上で行われます。"
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "将使用高精度 Qwen3-ASR——比实时识别慢，但准确率明显更高。所有处理都在这台 iPhone 上完成。"
-          }
-        }
-      }
-    },
     "High-accuracy re-transcription" : {
       "localizations" : {
         "ja" : {
@@ -2475,22 +2425,6 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "更高质量的总结、标题和聊天"
-          }
-        }
-      }
-    },
-    "Highest accuracy — typically takes about as long as the recording itself. Everything runs on this iPhone." : {
-      "localizations" : {
-        "ja" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "最高精度——通常、録音と同じくらいの時間がかかります。すべてこの iPhone 上で実行されます。"
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "最高精度——通常耗时与录音时长相当。一切都在这台 iPhone 上运行。"
           }
         }
       }
@@ -3687,73 +3621,6 @@
         }
       }
     },
-    "Once downloaded, Re-transcribe & summarize and imports use Qwen3-ASR automatically: one model for 中文, English, 日本語 and 한국어, primed with your vocabulary — slower than live recognition, noticeably more accurate. Runs fully on this iPhone." : {
-      "extractionState" : "stale",
-      "localizations" : {
-        "ja" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "ダウンロード後、「再文字起こしと要約」とインポートは自動的にQwen3-ASRを使用します。1つのモデルで中国語・英語・日本語・韓国語に対応し、あなたの語彙で精度を高めます。リアルタイム認識より遅い分、精度は格段に上です。すべてこのiPhone上で動作します。"
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "下载后，“重新转写并总结”和导入会自动使用 Qwen3-ASR：一个模型覆盖中文、英语、日语和韩语，并以你的词汇表加持——比实时识别慢，但准确率明显更高。完全在这台 iPhone 上运行。"
-          }
-        }
-      }
-    },
-    "Once downloaded, Re-transcribe & summarize uses Qwen3-ASR automatically, and imports can select it: one model for 中文, English, 日本語 and 한국어, primed with your vocabulary — slower than live recognition, noticeably more accurate. Runs fully on this iPhone." : {
-      "extractionState" : "stale",
-      "localizations" : {
-        "ja" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "ダウンロード後、「再文字起こしと要約」は自動的にQwen3-ASRを使用し、インポートでも選択できます。1つのモデルで中国語・英語・日本語・韓国語に対応し、あなたの語彙で精度を高めます。リアルタイム認識より遅い分、精度は格段に上です。すべてこのiPhone上で動作します。"
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "下载后，“重新转写并总结”会自动使用 Qwen3-ASR，导入时也可选用：一个模型覆盖中文、英语、日语和韩语，并以你的词汇表加持——比实时识别慢，但准确率明显更高。完全在这台 iPhone 上运行。"
-          }
-        }
-      }
-    },
-    "Once downloaded, Re-transcribe & summarize uses Qwen3-ASR automatically, and imports can select it. Auto post-process re-transcribes and identifies speakers before the first summary for new recordings, using downloaded models only. Dolphin is an experimental fast tier for 中文/日本語/한국어 — several times quicker than Qwen3-ASR at somewhat lower accuracy; while installed it takes over those languages (remove it to go back). Live captions stay on the fast engines." : {
-      "localizations" : {
-        "ja" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "ダウンロード後、「再文字起こしして要約」は自動的に Qwen3-ASR を使用し、インポートでも選択できます。自動後処理は、新しい録音の最初の要約前に、ダウンロード済みモデルのみで再文字起こしと話者識別を行います。Dolphin は中国語・日本語・韓国語向けの実験的な高速ティアです — Qwen3-ASR より数倍高速で、精度はやや劣ります。インストール中はこれらの言語を引き受けます（元に戻すには削除してください）。ライブ字幕は引き続き高速エンジンで動作します。"
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "下载后，“重新转写并总结”会自动使用 Qwen3-ASR，导入时也可选用。自动后处理仅使用已下载的模型，在新录音的首次总结前重新转写并识别说话人。Dolphin 是面向中文/日语/韩语的实验性快速档 — 比 Qwen3-ASR 快数倍，准确率略低；安装期间将接管这些语言（删除即可恢复）。实时字幕仍使用快速引擎。"
-          }
-        }
-      }
-    },
-    "Once downloaded, Re-transcribe & summarize uses Qwen3-ASR automatically, and imports can select it. Auto post-process re-transcribes and identifies speakers before the first summary for new recordings, using downloaded models only. Live captions stay on the fast engines." : {
-      "extractionState" : "stale",
-      "localizations" : {
-        "ja" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "ダウンロード後、「再文字起こしと要約」は自動的にQwen3-ASRを使用し、インポートでも選択できます。自動後処理は、ダウンロード済みモデルだけを使って、新しい録音の最初の要約前に再文字起こしと話者識別を行います。ライブ字幕は高速エンジンのままです。"
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "下载后，“重新转写并总结”会自动使用 Qwen3-ASR，导入时也可选用。自动后处理会在新录音第一次总结前重新转写并识别说话人，且只使用已下载的模型。实时字幕仍使用快速引擎。"
-          }
-        }
-      }
-    },
     "One local model powers better translations, summaries, titles, chat and vocabulary suggestions. Turning AI features off disables all of them. The model downloads only when you ask — here, or when a feature offers it." : {
       "extractionState" : "stale",
       "localizations" : {
@@ -4098,56 +3965,6 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "处理中"
-          }
-        }
-      }
-    },
-    "Qwen3-ASR (highest accuracy)" : {
-      "localizations" : {
-        "ja" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Qwen3-ASR（最高精度）"
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Qwen3-ASR（最高精度）"
-          }
-        }
-      }
-    },
-    "Qwen3-ASR model" : {
-      "extractionState" : "stale",
-      "localizations" : {
-        "ja" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Qwen3-ASRモデル"
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Qwen3-ASR 模型"
-          }
-        }
-      }
-    },
-    "Qwen3-ASR re-transcription" : {
-      "extractionState" : "stale",
-      "localizations" : {
-        "ja" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Qwen3-ASR 再文字起こし"
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Qwen3-ASR 重新转写"
           }
         }
       }
@@ -5166,23 +4983,6 @@
         }
       }
     },
-    "Slower, high-accuracy second pass for recordings" : {
-      "extractionState" : "stale",
-      "localizations" : {
-        "ja" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "録音をより高精度に再処理（低速）"
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "较慢但高精度的录音二次转写"
-          }
-        }
-      }
-    },
     "Some downloads didn’t finish. Models stay in Settings. System packs prompt again on first use." : {
 
     },
@@ -5453,6 +5253,7 @@
       }
     },
     "Start re-transcription" : {
+      "extractionState" : "stale",
       "localizations" : {
         "ja" : {
           "stringUnit" : {

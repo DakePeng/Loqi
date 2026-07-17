@@ -1412,11 +1412,7 @@ struct RetranscribeOptionsSheet: View {
                 } footer: {
                     VStack(alignment: .leading, spacing: 6) {
                         Text("Replaces the transcript with a fresh transcription of the recording, then summarizes again.")
-                        if backend == .qwen3ASR {
-                            Text("Highest accuracy — typically takes about as long as the recording itself. Everything runs on this iPhone.")
-                        } else {
-                            Text("Runs much faster than the recording length. Everything stays on this iPhone.")
-                        }
+                        Text("Runs much faster than the recording length. Everything stays on this iPhone.")
                     }
                 }
                 if session.summaryEdited == true {

@@ -27,9 +27,7 @@ struct ImportAudioSheet: View {
     @State private var speakerCount = -1
     @AppStorage("import.sensitivity") private var sensitivityRaw
         = MicSensitivity.balanced.rawValue
-    /// Per-import engine choice. Defaults to the fast accurate option;
-    /// Qwen3-ASR decodes near realtime, so it's an explicit pick per file,
-    /// never an auto-upgrade (re-transcribe is the automatic Qwen3 pass).
+    /// Per-import engine choice. Defaults to the fast accurate option.
     @State private var importEngine = SenseVoiceModelStore.isInstalled
         ? "sensevoice" : "apple"
     /// Shown when the user asks for speaker labels but the offline
@@ -136,18 +134,11 @@ struct ImportAudioSheet: View {
                         }
                         if DolphinModelStore.isInstalled,
                            OfflineTranscriber.dolphinSupports(source) {
-                            Text("Dolphin (fast, 中/日/한)").tag("dolphin")
-                        }
-                        if Qwen3ASRModelStore.isInstalled {
-                            Text("Qwen3-ASR (highest accuracy)").tag("qwen3")
+                            Text("Dolphin (best for 中/日/한)").tag("dolphin")
                         }
                     }
                 } footer: {
-                    if importEngine == "qwen3" {
-                        Text("Highest accuracy — typically takes about as long as the recording itself. Everything runs on this iPhone.")
-                    } else {
-                        Text("Everything runs on this iPhone. Speaker separation downloads its model on first use.")
-                    }
+                    Text("Everything runs on this iPhone. Speaker separation downloads its model on first use.")
                 }
             }
             .navigationTitle("Import Audio")

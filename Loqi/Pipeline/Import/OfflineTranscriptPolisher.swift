@@ -31,15 +31,15 @@ struct OfflineTranscriptPolisher {
     private let logger = Logger(
         subsystem: "com.kunzhipeng.loqi", category: "offlinePolish")
 
-    /// LFM2.5 cleanup runs only for the non-accuracy-pass backends —
-    /// Qwen3-ASR already had decoder hotword priming and IS the accuracy
-    /// pass. Pure for testing.
+    /// Every remaining backend is CTC (no decoder biasing), so LFM2.5
+    /// cleanup applies whenever it's enabled and downloaded. Pure for
+    /// testing; keeps the seam should a future backend opt out again.
     nonisolated static func shouldRunLLMCleanup(
         backend: OfflineTranscriber.Backend,
         llmEnabled: Bool,
         refineModelDownloaded: Bool
     ) -> Bool {
-        backend != .qwen3ASR && llmEnabled && refineModelDownloaded
+        llmEnabled && refineModelDownloaded
     }
 
     /// The whole offline polish phase in one call — gate, live-refine model

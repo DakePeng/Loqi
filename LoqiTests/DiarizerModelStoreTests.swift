@@ -5,7 +5,7 @@ import Testing
 
 /// Manifest guards for the sherpa-onnx diarization bundle (pyannote
 /// segmentation-3.0 + 3D-Speaker CAM++ zh/en): file layout, sizes, and
-/// per-source URL paths — the dual-source pattern Qwen3ASRModelStore uses.
+/// per-source URL paths — the dual-source pattern the ASR stores use.
 struct DiarizerModelStoreTests {
     @Test func manifestListsSegmentationAndEmbedding() {
         let names = DiarizerModelStore.files.map(\.name)

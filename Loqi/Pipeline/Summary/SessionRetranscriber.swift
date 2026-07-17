@@ -29,7 +29,7 @@ struct SessionRetranscriber {
 
     let llm: LLMService
     let translator: TranslationCoordinator
-    /// Vocabulary that primes the Qwen3-ASR decoder when it runs the pass.
+    /// Vocabulary for the polish phase's text-level fixup.
     var hotwords: HotwordStore?
     /// Settings gate for the LFM2.5 cleanup phase. Retranscribe jobs are
     /// already gated upstream (JobError.aiDisabled); passed for correctness.
@@ -104,8 +104,9 @@ struct SessionRetranscriber {
         }
 
         // Free the LLM before ASR; the summarize that follows reloads it
-        // (its admission re-poll absorbs ONNX arena release lag). Required
-        // for the Qwen3-ASR pass: ~940MB of decoder weights.
+        // (its admission re-poll absorbs ONNX arena release lag). The
+        // decode pools size themselves against free memory, so this
+        // headroom directly buys parallel decoders.
         await llm.unload()
 
         onPhase(.transcribing(0))
@@ -113,7 +114,6 @@ struct SessionRetranscriber {
             contentsOf: url,
             language: direction.source,
             backend: backend,
-            hotwords: hotwords?.biasStrings(for: direction.source) ?? [],
             alreadyDecoded: alreadyDecoded,
             onSegmentComplete: onSegmentComplete
         ) { fraction in
@@ -131,11 +131,9 @@ struct SessionRetranscriber {
         logger.info("retranscribe: \(rawUtterances.count) raw -> \(utterances.count) merged utterances replace \(record.entries.count) entries")
 
         // Polish before translation drafting so Apple translates the
-        // cleaned text: deterministic hotword fixup for every backend,
-        // plus LFM2.5 sentence cleanup for the non-accuracy-pass ones
-        // (Qwen3-ASR already had decoder hotword priming). The LLM stays
-        // loaded afterwards — the summarize that follows swaps models
-        // itself.
+        // cleaned text: deterministic hotword fixup plus LFM2.5 sentence
+        // cleanup. The LLM stays loaded afterwards — the summarize that
+        // follows swaps models itself.
         let (polished, _) = try await OfflineTranscriptPolisher.run(
             texts: utterances.map(\.text),
             language: direction.source,

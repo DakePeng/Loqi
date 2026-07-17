@@ -37,9 +37,6 @@ struct OnboardingDownloadStep: View {
         .onChange(of: model.senseVoiceStore.progress) { _, fraction in
             model.item(for: .senseVoice)?.speedometer.update(fraction)
         }
-        .onChange(of: model.qwen3Store.progress) { _, fraction in
-            model.item(for: .qwen3ASR)?.speedometer.update(fraction)
-        }
         .background {
             OnboardingTranslationPackHost(model: model)
         }

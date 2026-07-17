@@ -140,59 +140,12 @@ final class SummaryJobCenter {
         self.translator = translator
         self.voiceprint = voiceprint
         self.isRecording = isRecording
-        #if os(iOS)
-        // The accuracy pass defers to the charger; hear about plug-ins.
-        UIDevice.current.isBatteryMonitoringEnabled = true
-        NotificationCenter.default.addObserver(
-            forName: UIDevice.batteryStateDidChangeNotification,
-            object: nil, queue: .main
-        ) { [weak self] _ in
-            Task { @MainActor [weak self] in
-                self?.resumePendingPostProcesses()
-            }
-        }
-        #endif
     }
-
-    /// Whether the automatic accuracy pass waits for external power.
-    /// OFF by default: deferral moves the 20-30 hot minutes to the
-    /// charger but doesn't shrink them — the speed/heat fixes are the
-    /// thermal pause, checkpoints, and the Dolphin tier. The toggle
-    /// remains for battery courtesy (Settings).
-    nonisolated static var accuracyPassRequiresCharger: Bool {
-        UserDefaults.standard.bool(forKey: "summary.accuracyPassRequiresCharger")
-    }
-
-    /// Defer only when the user opted into charge-gating AND the device
-    /// is off power. Pure for testing.
-    nonisolated static func shouldDeferAccuracyPass(
-        requiresCharger: Bool, pluggedIn: Bool
-    ) -> Bool {
-        requiresCharger && !pluggedIn
-    }
-
-    /// True when the device is on external power. `.unknown` fails
-    /// CLOSED (defer) while charge-gating is on: a cold launch reads
-    /// .unknown before the first battery sample, and running the hot
-    /// pass on battery is the exact failure the opt-in exists to
-    /// prevent. A deferral never strands the pass — the battery observer
-    /// re-sweeps the moment the state becomes known. (Simulator reports
-    /// .unknown; manual Re-transcribe stays available there.) Pure
-    /// mapping split for testing.
-    static func isPluggedIn() -> Bool {
-        #if os(iOS)
-        UIDevice.current.isBatteryMonitoringEnabled = true
-        return pluggedIn(UIDevice.current.batteryState)
-        #else
-        return true
-        #endif
-    }
-
-    #if os(iOS)
-    nonisolated static func pluggedIn(_ state: UIDevice.BatteryState) -> Bool {
-        state == .charging || state == .full
-    }
-    #endif
+    // The charge gate that once deferred the accuracy pass to external
+    // power left with Qwen3-ASR (2026-07): with only the fast CTC
+    // backends remaining there's nothing worth deferring. The
+    // pendingPostProcess marker below stays — it also powers
+    // kill-mid-pass recovery, which is backend-independent.
 
     /// Await any in-flight heavy job unwinding. The live pipeline calls this
     /// right after `yieldToRecording()` so live capture never shares the GPU
@@ -214,7 +167,7 @@ final class SummaryJobCenter {
         suspendedSummaries[sessionID] = nil
         backgroundPausedRetranscribeTasks[sessionID] = nil
         // An explicit cancel must not resurrect the summary — or the
-        // deferred accuracy pass — at the next launch/charge sweep.
+        // pending accuracy pass — at the next launch/foreground sweep.
         clearPendingSummary(sessionID)
         clearPendingPostProcess(sessionID)
         if let index = retranscribeQueue.firstIndex(where: { $0.sessionID == sessionID }) {
@@ -305,7 +258,7 @@ final class SummaryJobCenter {
         }
         drainRetranscribeQueue()
         resumeUnfinishedImports()
-        // A recording blocks the sweeps; on-charger pending passes can go now.
+        // A recording blocks the sweeps; pending passes can go now.
         resumePendingPostProcesses()
     }
 
@@ -448,7 +401,7 @@ final class SummaryJobCenter {
         // Catch-all sweep for summaries whose job died without a held
         // activity (e.g. cancelled by a memory-warning unload).
         resumeUnfinishedSummaries()
-        // Accuracy passes deferred to the charger, or orphaned by a kill.
+        // Accuracy passes orphaned by a kill.
         resumePendingPostProcesses()
     }
 
@@ -740,7 +693,6 @@ final class SummaryJobCenter {
         let backend = OfflineTranscriber.postProcessBackend(
             sourceLanguages: session.accuracyPassLanguages,
             senseVoiceInstalled: SenseVoiceModelStore.isInstalled,
-            qwen3Installed: Qwen3ASRModelStore.isInstalled,
             dolphinInstalled: DolphinModelStore.isInstalled)
         let speakerCount: Int?
         if VoiceprintService.isOfflineDiarizerDownloaded,
@@ -756,7 +708,7 @@ final class SummaryJobCenter {
         else {
             // Nothing heavy applies (also the swept-marker case after the
             // user removed the models) — consume any pending marker so the
-            // charge sweep stops re-visiting this session.
+            // resume sweep stops re-visiting this session.
             clearPendingPostProcess(sessionID)
             summarize(
                 sessionID: sessionID, style: style, length: length,
@@ -764,26 +716,12 @@ final class SummaryJobCenter {
             return
         }
 
-        // Persist the intent BEFORE running: a kill mid-pass (or the
-        // deferral below) restarts it at the next launch/charge sweep, and
-        // the retranscribe checkpoint makes that restart cheap.
+        // Persist the intent BEFORE running: a kill mid-pass restarts it
+        // at the next launch/foreground sweep, and the retranscribe
+        // checkpoint makes that restart cheap.
         markPendingPostProcess(
             sessionID: sessionID, style: style, length: length,
             suggestVocabulary: suggestVocabulary)
-
-        // Opt-in charge gating: summarize the live transcript now and run
-        // the pass when the charger connects. Vocabulary suggestions wait
-        // for the accuracy pass (better text, better suggestions).
-        guard !Self.shouldDeferAccuracyPass(
-            requiresCharger: Self.accuracyPassRequiresCharger,
-            pluggedIn: Self.isPluggedIn())
-        else {
-            logger.info("accuracy pass deferred to charger: \(sessionID, privacy: .public)")
-            summarize(
-                sessionID: sessionID, style: style, length: length,
-                allowDownload: allowDownload, suggestVocabulary: false)
-            return
-        }
 
         errors[sessionID] = nil
         activities[sessionID] = .queuedRetranscribe
@@ -940,7 +878,7 @@ final class SummaryJobCenter {
             try Task.checkCancellation()
             archive.update(updated)
             // Any completed accuracy pass (auto or manual) satisfies a
-            // pending marker — the charge sweep must not run it again.
+            // pending marker — the resume sweep must not run it again.
             clearPendingPostProcess(sessionID)
             // The transcript is archived; from here it's an LLM summarize that
             // backgrounding can cancel and restart on its own — persist that
@@ -1100,25 +1038,15 @@ final class SummaryJobCenter {
         }
     }
 
-    /// Starts accuracy passes that are waiting for power — deferred at
-    /// recording time, or orphaned by a mid-pass kill. Called at launch,
-    /// on foreground resume, and when the charger connects. Each hit
-    /// re-runs the normal post-process decision, so model installs/removals
-    /// since the marker was written are honored (and a marker with nothing
-    /// left to do is consumed there).
+    /// Starts accuracy passes orphaned by a mid-pass kill. Called at
+    /// launch and on foreground resume. Each hit re-runs the normal
+    /// post-process decision, so model installs/removals since the marker
+    /// was written are honored (and a marker with nothing left to do is
+    /// consumed there).
     func resumePendingPostProcesses() {
-        // Cheap early-out before touching UIDevice: battery notifications
-        // can bounce (plug/unplug, charge/full) and most fires find
-        // nothing pending.
         guard archive.sessions.contains(where: { $0.pendingPostProcess != nil })
         else { return }
         guard !isRecording(), !isBackgrounded else { return }
-        // With charge-gating off, pending markers (kill-recovery) run on
-        // any power state.
-        guard !Self.shouldDeferAccuracyPass(
-            requiresCharger: Self.accuracyPassRequiresCharger,
-            pluggedIn: Self.isPluggedIn())
-        else { return }
         for session in archive.sessions
         where session.pendingPostProcess != nil && session.importing != true
             && !isBusy(session.id) {
@@ -1447,11 +1375,10 @@ final class SummaryJobCenter {
         // guards (foreground, not recording, no badge, checkpoint
         // present) make this a no-op in every other case.
         resumeUnfinishedImports()
-        // Same rationale for deferred accuracy passes: the charger can
-        // connect while the battery-time summarize is still running — the
-        // battery observer's sweep skips the busy session, and no later
-        // battery event may come. Re-sweep now that this job's slot is
-        // clear; the sweep's own guards no-op every other case.
+        // Same rationale for pending accuracy passes: a foreground sweep
+        // that found this session busy never comes back on its own.
+        // Re-sweep now that this job's slot is clear; the sweep's own
+        // guards no-op every other case.
         resumePendingPostProcesses()
     }
 

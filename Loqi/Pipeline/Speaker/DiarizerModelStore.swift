@@ -6,7 +6,7 @@ import os
 /// 3D-Speaker's bilingual zh/en CAM++ embedding — chosen over the old
 /// FluidAudio bundle because both files mirror to ModelScope and the
 /// embedding is trained on exactly this app's two primary languages.
-/// Same dual-source RemoteFile pattern as Qwen3ASRModelStore; downloads
+/// Same dual-source RemoteFile pattern as the ASR stores; downloads
 /// go through the resumable, retrying ModelFileDownloader.
 enum DiarizerModelStore {
     /// The ModelScope paths are community mirrors verified byte-identical

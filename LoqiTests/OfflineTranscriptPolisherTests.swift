@@ -14,11 +14,11 @@ struct OfflineTranscriptPolisherTests {
         OfflineTranscriptPolisher(matcher: HotwordMatcher(hotwords: [qwen]))
     }
 
-    @Test func llmCleanupGateSkipsQwen3AndRespectsSettings() {
-        #expect(!OfflineTranscriptPolisher.shouldRunLLMCleanup(
-            backend: .qwen3ASR, llmEnabled: true, refineModelDownloaded: true))
+    @Test func llmCleanupGateRespectsSettings() {
         #expect(OfflineTranscriptPolisher.shouldRunLLMCleanup(
             backend: .senseVoice, llmEnabled: true, refineModelDownloaded: true))
+        #expect(OfflineTranscriptPolisher.shouldRunLLMCleanup(
+            backend: .dolphin, llmEnabled: true, refineModelDownloaded: true))
         #expect(OfflineTranscriptPolisher.shouldRunLLMCleanup(
             backend: .apple, llmEnabled: true, refineModelDownloaded: true))
         #expect(!OfflineTranscriptPolisher.shouldRunLLMCleanup(

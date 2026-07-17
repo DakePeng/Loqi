@@ -15,15 +15,8 @@ struct SettingsView: View {
     @AppStorage("asr.source") private var asrSourceRaw = ASRModelSource.modelScope.rawValue
     @AppStorage("summary.autoPostProcessNewRecordings")
     private var autoPostProcessNewRecordings = false
-    /// Battery courtesy, not a heat fix — deferral moves the pass to the
-    /// charger without shrinking it, so it ships OFF.
-    @AppStorage("summary.accuracyPassRequiresCharger")
-    private var accuracyPassRequiresCharger = false
     @State private var senseVoiceStore = SenseVoiceModelStore()
     @State private var senseVoiceInstalled = SenseVoiceModelStore.isInstalled
-    @State private var qwen3Store = Qwen3ASRModelStore()
-    @State private var qwen3Installed = Qwen3ASRModelStore.isInstalled
-    @State private var qwen3Speedometer = DownloadSpeedometer()
     @State private var dolphinStore = DolphinModelStore()
     @State private var dolphinInstalled = DolphinModelStore.isInstalled
     @State private var dolphinSpeedometer = DownloadSpeedometer()
@@ -117,48 +110,8 @@ struct SettingsView: View {
                         "Auto post-process new recordings",
                         isOn: $autoPostProcessNewRecordings)
 
-                    if autoPostProcessNewRecordings {
-                        Toggle(
-                            "Accuracy pass only while charging",
-                            isOn: $accuracyPassRequiresCharger)
-                    }
-
                     LabeledContent(
-                        "Qwen3-ASR model",
-                        value: qwen3Installed
-                            ? localized("Downloaded")
-                            : localized("Not downloaded"))
-
-                    if !qwen3Installed {
-                        Picker("Download from", selection: $asrSourceRaw) {
-                            ForEach(ASRModelSource.allCases) { source in
-                                Text(source.displayName).tag(source.rawValue)
-                            }
-                        }
-                        if qwen3Store.downloading {
-                            DownloadProgressRow(
-                                speedometer: qwen3Speedometer,
-                                onStop: { qwen3Store.cancelDownload() })
-                        } else {
-                            Button("Download Qwen3-ASR model (~990 MB)") {
-                                qwen3Speedometer.start(
-                                    totalBytes: Qwen3ASRModelStore.totalExpectedBytes)
-                                Task {
-                                    let source = ASRModelSource(
-                                        rawValue: asrSourceRaw) ?? .modelScope
-                                    await qwen3Store.download(from: source)
-                                    qwen3Installed = Qwen3ASRModelStore.isInstalled
-                                }
-                            }
-                        }
-                        if let error = qwen3Store.lastError {
-                            Text(error)
-                                .font(.footnote)
-                                .foregroundStyle(.red)
-                        }
-                    }
-                    LabeledContent(
-                        "Dolphin model (fast tier)",
+                        "Dolphin model",
                         value: dolphinInstalled
                             ? localized("Downloaded")
                             : localized("Not downloaded"))
@@ -173,6 +126,11 @@ struct SettingsView: View {
                             speedometer: dolphinSpeedometer,
                             onStop: { dolphinStore.cancelDownload() })
                     } else {
+                        Picker("Download from", selection: $asrSourceRaw) {
+                            ForEach(ASRModelSource.allCases) { source in
+                                Text(source.displayName).tag(source.rawValue)
+                            }
+                        }
                         Button("Download Dolphin model (~250 MB)") {
                             dolphinSpeedometer.start(
                                 totalBytes: DolphinModelStore.totalExpectedBytes)
@@ -192,7 +150,7 @@ struct SettingsView: View {
                 } header: {
                     Text("High-accuracy re-transcription")
                 } footer: {
-                    Text("Once downloaded, Re-transcribe & summarize uses Qwen3-ASR automatically, and imports can select it. Auto post-process re-transcribes and identifies speakers before the first summary for new recordings, using downloaded models only. Dolphin is an experimental fast tier for 中文/日本語/한국어 — several times quicker than Qwen3-ASR at somewhat lower accuracy; while installed it takes over those languages (remove it to go back). Live captions stay on the fast engines.")
+                    Text("Dolphin recognizes 中文/日本語/한국어 with the highest accuracy. Once downloaded, Re-transcribe & summarize and live Hybrid sentences use it automatically for those languages (remove it to go back to SenseVoice). Auto post-process re-transcribes and identifies speakers before the first summary for new recordings, using downloaded models only.")
                 }
 
                 Section {
@@ -406,9 +364,6 @@ struct SettingsView: View {
             .onChange(of: senseVoiceStore.progress) { _, p in
                 senseVoiceSpeedometer.update(p)
             }
-            .onChange(of: qwen3Store.progress) { _, p in
-                qwen3Speedometer.update(p)
-            }
             .onChange(of: dolphinStore.progress) { _, p in
                 dolphinSpeedometer.update(p)
             }
@@ -512,7 +467,6 @@ struct SettingsView: View {
         asrActiveSeconds = await pipeline.activeSenseVoiceDecodeSeconds()
         thermalTransitions = pipeline.thermal.transitions.count
         senseVoiceInstalled = SenseVoiceModelStore.isInstalled
-        qwen3Installed = Qwen3ASRModelStore.isInstalled
         dolphinInstalled = DolphinModelStore.isInstalled
 
         diarizerInstalled = VoiceprintService.isOfflineDiarizerDownloaded

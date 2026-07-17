@@ -36,6 +36,10 @@ struct LoqiApp: App {
         #if os(iOS)
         Task { await RecordingActivityController.endAllStale() }
         #endif
+        // Retired Qwen3-ASR weights (~990 MB) reclaim themselves off-main.
+        Task.detached(priority: .utility) {
+            Qwen3ASRModelStore.deleteLeftoverFiles()
+        }
     }
 
     var body: some Scene {

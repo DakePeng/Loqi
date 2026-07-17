@@ -100,7 +100,8 @@ actor VoiceprintService {
         // Both ONNX sessions default to ONE thread — on an hour of audio
         // that made the sherpa pass minutes-slow where the old CoreML/ANE
         // path felt instant. This batch job owns the device (same
-        // rationale as the Qwen3 pass), so give the sessions real cores.
+        // rationale as the offline decode pools), so give the sessions
+        // real cores.
         let threads = max(2, min(4, ProcessInfo.processInfo.activeProcessorCount - 2))
         var config = sherpaOnnxOfflineSpeakerDiarizationConfig(
             segmentation: sherpaOnnxOfflineSpeakerSegmentationModelConfig(

@@ -2,7 +2,7 @@ import Foundation
 import os
 
 #if os(iOS)
-/// Shared offline flow behind SenseVoice and Qwen3-ASR file transcription:
+/// Shared offline flow behind SenseVoice and Dolphin file transcription:
 /// silero VAD chops a whole decoded file into speech segments and each
 /// closed segment gets one decode by the supplied recognizer. The VAD
 /// reports every segment's global sample offset, so the time ranges line
@@ -117,8 +117,8 @@ enum VADSegmentedTranscriber {
     }
 
     /// Transcribe a file already decoded to 16 kHz mono float.
-    /// `maxSpeechDuration` caps a segment so monologues still split (and,
-    /// for Qwen3-ASR, stay inside the decoder's token budget); `onProgress`
+    /// `maxSpeechDuration` caps a segment so monologues still split;
+    /// `onProgress`
     /// reports 0…1 by samples consumed. Segments decode concurrently across
     /// the `decoders` pool (a 1-element pool is exactly serial); the in-flight
     /// bound paces the VAD producer to decode throughput, so progress stays
@@ -164,7 +164,7 @@ enum VADSegmentedTranscriber {
         // maxSpeechDuration only tightens the VAD's gate; steady noise or
         // music keeps a segment open forever and the buffer grows without
         // bound. Force a split at 2× so decodes stay near the intended
-        // length (a too-long Qwen3 decode comes back empty and the
+        // length (a too-long decode can come back empty and the
         // retry-halves rescue re-splits it anyway).
         var runLimiter = SpeechRunLimiter(
             limit: Int(maxSpeechDuration * 2) * sampleRate)

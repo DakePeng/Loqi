@@ -52,7 +52,6 @@ final class OnboardingDownloadModel {
     /// Exposed so the download step can mirror SettingsView's
     /// `.onChange(of: store.progress)` wiring.
     let senseVoiceStore = SenseVoiceModelStore()
-    let qwen3Store = Qwen3ASRModelStore()
 
     private let pipeline: CaptionPipeline
     private let assets = AssetManager()
@@ -145,7 +144,6 @@ final class OnboardingDownloadModel {
         modelWorkers.values.forEach { $0.cancel() }
         modelWorkers.removeAll()
         senseVoiceStore.cancelDownload()
-        qwen3Store.cancelDownload()
         cancelTranslationPreparation()
         let llm = pipeline.llm
         Task { await llm.cancelLoad() }
@@ -204,7 +202,6 @@ final class OnboardingDownloadModel {
         case .diarizer: await downloadDiarizer(item)
         case .liveLLM: await downloadSingleLLM(item, model: ModelCatalog.liveRefineModel)
         case .summaryLLM: await downloadSingleLLM(item, model: ModelCatalog.qwen35_2b)
-        case .qwen3ASR: await downloadQwen3ASR(item)
         }
     }
 
@@ -342,18 +339,6 @@ final class OnboardingDownloadModel {
         }
     }
 
-    private func downloadQwen3ASR(_ item: Item) async {
-        item.speedometer.start(totalBytes: Qwen3ASRModelStore.totalExpectedBytes)
-        await qwen3Store.download(from: region.asrSource)
-        if Qwen3ASRModelStore.isInstalled {
-            item.status = .done
-        } else if let error = qwen3Store.lastError {
-            item.status = .failed(error)
-        } else {
-            item.status = .skipped
-        }
-    }
-
     private func downloadDiarizer(_ item: Item) async {
         item.speedometer.start(totalBytes: VoiceprintService.approximateDownloadBytes)
         do {
@@ -370,7 +355,7 @@ final class OnboardingDownloadModel {
 
     /// One LLM tier in isolation: bytes to disk, then unloaded — onboarding
     /// wants the file present, not 0.8/1.75 GB resident while later items
-    /// (the other tier, Qwen3-ASR) may still download. The pipeline warm-loads
+    /// (the other tier) may still download. The pipeline warm-loads
     /// lazily when a session needs it.
     private func downloadSingleLLM(_ item: Item, model: ModelOption) async {
         item.speedometer.start(totalBytes: model.downloadBytes)

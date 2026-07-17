@@ -83,11 +83,11 @@ final class SenseVoiceModelStore {
     func cancelDownload() { downloads.cancelDownload() }
 }
 
-/// Manages the on-disk Dolphin-small CTC files — the FAST offline tier
-/// behind Re-transcribe/imports: non-autoregressive, so a decode pool
-/// chews through a file several times faster than the Qwen3-ASR pass, at
-/// somewhat lower accuracy and without decoder hotword priming. Eastern
-/// languages only (中文/日本語/한국어 here) — never offered for English.
+/// Manages the on-disk Dolphin-small CTC files — the high-accuracy tier
+/// behind Re-transcribe/imports and the hybrid engine's live finals:
+/// non-autoregressive, so a decode pool chews through a file far faster
+/// than realtime. Eastern languages only (中文/日本語/한국어 here) —
+/// never offered for English.
 /// ponytail: hosted in this file, not its own, so the xcodegen-generated
 /// pbxproj (which has pending local edits) needn't change; split it out
 /// on the next project regen.
@@ -143,8 +143,8 @@ final class DolphinModelStore {
     func download(from source: ASRModelSource) async { await downloads.download(from: source) }
     func cancelDownload() { downloads.cancelDownload() }
 
-    /// Removes the installed files — also how the user leaves the fast
-    /// tier: with Dolphin gone, backend selection returns to Qwen3-ASR.
+    /// Removes the installed files — also how the user leaves Dolphin:
+    /// with it gone, backend selection returns to SenseVoice/Apple.
     func removeInstalled() {
         try? FileManager.default.removeItem(at: Self.directory)
     }

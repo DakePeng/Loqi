@@ -215,7 +215,7 @@ final class CaptionPipeline {
     /// Speaker separation for recordings is configuration-free: the offline
     /// post-process pass runs in Auto mode (discovers the speaker count)
     /// whenever the speaker model is downloaded — downloading it IS the
-    /// opt-in, same rule as Qwen3-ASR. The old live speaker picker is gone
+    /// opt-in, same rule as Dolphin. The old live speaker picker is gone
     /// with live diarization.
     static let postProcessSpeakerCount = -1
 

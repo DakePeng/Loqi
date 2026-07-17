@@ -20,11 +20,11 @@ final class FileImportEngine {
     private let translator: TranslationCoordinator
     private let voiceprint: VoiceprintService
     /// Unloaded before every offline decode: the resident summary model is
-    /// pure reclaimable headroom next to the ASR weights (mandatory for
-    /// Qwen3-ASR's ~940MB). The cleanup phase then briefly loads the 230M
-    /// live-refine model; drafts still come from the system translator.
+    /// pure reclaimable headroom next to the ASR weights and decode-pool
+    /// arenas. The cleanup phase then briefly loads the 230M live-refine
+    /// model; drafts still come from the system translator.
     private let llm: LLMService?
-    /// Vocabulary that primes the Qwen3-ASR decoder and the polish passes.
+    /// Vocabulary for the polish passes' text-level fixup.
     private let hotwords: HotwordStore?
     /// Settings gate for the LFM2.5 cleanup phase (imports have no
     /// upstream AI gate, unlike re-transcribe jobs).
@@ -107,7 +107,6 @@ final class FileImportEngine {
             choice: engine,
             source: direction.source,
             senseVoiceInstalled: SenseVoiceModelStore.isInstalled,
-            qwen3Installed: Qwen3ASRModelStore.isInstalled,
             dolphinInstalled: DolphinModelStore.isInstalled)
         await llm?.unload()
         let rawUtterances = try await OfflineTranscriber.transcribe(
@@ -115,7 +114,6 @@ final class FileImportEngine {
             language: direction.source,
             backend: backend,
             sensitivity: sensitivity,
-            hotwords: hotwords?.biasStrings(for: direction.source) ?? [],
             onSegmentComplete: onSegmentComplete
         ) { fraction in
             onPhase(.transcribing(fraction))
@@ -151,7 +149,6 @@ final class FileImportEngine {
             choice: checkpoint.engine,
             source: direction.source,
             senseVoiceInstalled: SenseVoiceModelStore.isInstalled,
-            qwen3Installed: Qwen3ASRModelStore.isInstalled,
             dolphinInstalled: DolphinModelStore.isInstalled)
         await llm?.unload()
         let rawUtterances = try await OfflineTranscriber.transcribe(
@@ -159,7 +156,6 @@ final class FileImportEngine {
             language: direction.source,
             backend: backend,
             sensitivity: sensitivity,
-            hotwords: hotwords?.biasStrings(for: direction.source) ?? [],
             alreadyDecoded: checkpoint.segments,
             onSegmentComplete: onSegmentComplete
         ) { fraction in

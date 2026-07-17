@@ -49,9 +49,8 @@ final class OnboardingFlowUITests: XCTestCase {
             "Translation language packs",
             "SenseVoice live recognition",
             "Speaker recognition",
-            "Live AI model (0.8B)",
+            "Live AI model (LFM2.5)",
             "Summary AI model (2B)",
-            "Qwen3-ASR re-transcription",
         ] {
             XCTAssertTrue(app.staticTexts[title].exists, "missing row: \(title)")
         }
@@ -107,10 +106,10 @@ final class OnboardingFlowUITests: XCTestCase {
         XCTAssertTrue(
             app.staticTexts["Choose what to download"].waitForExistence(timeout: 5))
 
-        // Leave only SenseVoice checked (Qwen3-ASR starts unchecked).
+        // Leave only SenseVoice checked.
         app.staticTexts["Translation language packs"].tap()
         app.staticTexts["Speaker recognition"].tap()
-        app.staticTexts["Live AI model (0.8B)"].tap()
+        app.staticTexts["Live AI model (LFM2.5)"].tap()
         app.staticTexts["Summary AI model (2B)"].tap()
         app.buttons["Download"].tap()
 

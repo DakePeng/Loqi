@@ -3,19 +3,20 @@ import Foundation
 import Speech
 
 /// Shared offline transcription backends — file-based Apple SpeechAnalyzer,
-/// SenseVoice, or the Qwen3-ASR post-processing model — returning finals
-/// with time ranges. Extracted from FileImportEngine so session
-/// re-transcription runs the exact pipeline that imports do.
+/// SenseVoice, or Dolphin — returning finals with time ranges. Extracted
+/// from FileImportEngine so session re-transcription runs the exact
+/// pipeline that imports do.
 @MainActor
 enum OfflineTranscriber {
     typealias Utterance = (text: String, start: TimeInterval, end: TimeInterval)
 
     /// Raw values are persisted in `SessionRecord.RetranscribeCheckpoint`
-    /// — keep them stable.
+    /// — keep them stable. ("qwen3asr" was retired 2026-07: too slow/hot
+    /// on device. Stale persisted values simply never match a current
+    /// backend, which discards the checkpoint — the intended behavior.)
     enum Backend: String, Equatable {
         case apple
         case senseVoice = "sensevoice"
-        case qwen3ASR = "qwen3asr"
         case dolphin
 
         /// Engine names are proper nouns — shown as-is in every language.
@@ -23,7 +24,6 @@ enum OfflineTranscriber {
             switch self {
             case .apple: "Apple"
             case .senseVoice: "SenseVoice"
-            case .qwen3ASR: "Qwen3-ASR"
             case .dolphin: "Dolphin"
             }
         }
@@ -45,21 +45,19 @@ enum OfflineTranscriber {
         !sourceLanguages.isEmpty && !sourceLanguages.contains(.english)
     }
 
-    /// Which backend Re-transcribe & summarize should use. Installing a
-    /// post-process model IS the opt-in. Dolphin (the fast tier) outranks
-    /// Qwen3-ASR while installed and every session language fits — trying
-    /// it is the point; delete it in Settings to return to the accuracy
-    /// pass. Otherwise the live-engine choice applies (SenseVoice when
-    /// chosen AND installed), falling back to Apple. Pure for testing.
+    /// Which backend Re-transcribe & summarize should use. Installing
+    /// Dolphin IS the opt-in — while installed it takes every session
+    /// whose languages fit; delete it in Settings to fall back. Otherwise
+    /// the live-engine choice applies (SenseVoice when chosen AND
+    /// installed), falling back to Apple. Pure for testing.
     nonisolated static func effectiveBackend(
         engineChoice: String, sourceLanguages: Set<AppLanguage>,
-        senseVoiceInstalled: Bool, qwen3Installed: Bool, dolphinInstalled: Bool
+        senseVoiceInstalled: Bool, dolphinInstalled: Bool
     ) -> Backend {
         #if os(macOS)
         return .apple
         #else
         if dolphinInstalled, dolphinSupports(sourceLanguages) { return .dolphin }
-        if qwen3Installed { return .qwen3ASR }
         // Hybrid's record layer IS SenseVoice — same re-transcribe backend.
         if engineChoice == "sensevoice" || engineChoice == "hybrid",
            senseVoiceInstalled { return .senseVoice }
@@ -67,20 +65,16 @@ enum OfflineTranscriber {
         #endif
     }
 
-    /// Which backend an import should use. Imports never auto-upgrade:
-    /// Qwen3-ASR decodes near realtime, so a long file would turn the
-    /// import sheet into an hour-long wait — it runs only when the user
-    /// picks it in the import options. Unavailable picks fall back to
-    /// Apple. Pure for testing.
+    /// Which backend an import should use. The user picks per file;
+    /// unavailable picks fall back to Apple. Pure for testing.
     nonisolated static func importBackend(
         choice: String, source: AppLanguage,
-        senseVoiceInstalled: Bool, qwen3Installed: Bool, dolphinInstalled: Bool
+        senseVoiceInstalled: Bool, dolphinInstalled: Bool
     ) -> Backend {
         #if os(macOS)
         return .apple
         #else
         switch choice {
-        case "qwen3" where qwen3Installed: .qwen3ASR
         case "dolphin" where dolphinInstalled && dolphinSupports(source): .dolphin
         case "sensevoice" where senseVoiceInstalled: .senseVoice
         default: .apple
@@ -90,17 +84,16 @@ enum OfflineTranscriber {
 
     /// Auto post-process for new recordings: use downloaded high-accuracy
     /// engines only. nil means keep the live transcript and summarize.
-    /// Same priority as `effectiveBackend`: fast Dolphin tier first when
-    /// installed and every session language fits.
+    /// Same priority as `effectiveBackend`: Dolphin first when installed
+    /// and every session language fits.
     nonisolated static func postProcessBackend(
         sourceLanguages: Set<AppLanguage>,
-        senseVoiceInstalled: Bool, qwen3Installed: Bool, dolphinInstalled: Bool
+        senseVoiceInstalled: Bool, dolphinInstalled: Bool
     ) -> Backend? {
         #if os(macOS)
         return nil
         #else
         if dolphinInstalled, dolphinSupports(sourceLanguages) { return .dolphin }
-        if qwen3Installed { return .qwen3ASR }
         if senseVoiceInstalled { return .senseVoice }
         return nil
         #endif
@@ -112,34 +105,27 @@ enum OfflineTranscriber {
             engineChoice: UserDefaults.standard.string(forKey: "asr.engine") ?? "apple",
             sourceLanguages: sourceLanguages,
             senseVoiceInstalled: SenseVoiceModelStore.isInstalled,
-            qwen3Installed: Qwen3ASRModelStore.isInstalled,
             dolphinInstalled: DolphinModelStore.isInstalled)
     }
 
-    /// `onProgress` reports 0...1 through the file. `hotwords` reach only
-    /// the Qwen3-ASR decoder (the other backends have no biasing).
-    /// `alreadyDecoded`/`onSegmentComplete` let a resumed import skip and
-    /// checkpoint VAD segments; the Apple backend has no segment
-    /// boundaries, so both are no-ops there. Takes a URL, not an open
-    /// AVAudioFile: the sherpa backends decode the whole file to 16k
-    /// first, and that convert loop must run off the main actor
-    /// (ISSUES.md: large imports blocked the UI).
+    /// `onProgress` reports 0...1 through the file. No backend has
+    /// decoder hotword biasing (CTC can't) — the text-level fixup
+    /// downstream covers vocabulary. `alreadyDecoded`/`onSegmentComplete`
+    /// let a resumed import skip and checkpoint VAD segments; the Apple
+    /// backend has no segment boundaries, so both are no-ops there. Takes
+    /// a URL, not an open AVAudioFile: the sherpa backends decode the
+    /// whole file to 16k first, and that convert loop must run off the
+    /// main actor (ISSUES.md: large imports blocked the UI).
     static func transcribe(
         contentsOf url: URL,
         language: AppLanguage,
         backend: Backend,
         sensitivity: MicSensitivity = .balanced,
-        hotwords: [String] = [],
         alreadyDecoded: [SessionRecord.ImportCheckpoint.Segment] = [],
         onSegmentComplete: (@MainActor @Sendable (SessionRecord.ImportCheckpoint.Segment) -> Void)? = nil,
         onProgress: @escaping (Double) -> Void
     ) async throws -> [Utterance] {
         switch backend {
-        case .qwen3ASR:
-            return try await transcribeWithQwen3ASR(
-                url, sensitivity: sensitivity, hotwords: hotwords,
-                alreadyDecoded: alreadyDecoded, onSegmentComplete: onSegmentComplete,
-                onProgress: onProgress)
         case .dolphin:
             return try await transcribeWithDolphin(
                 url, sensitivity: sensitivity,
@@ -215,27 +201,6 @@ enum OfflineTranscriber {
         try await analyzer.start(inputAudioFile: audioFile, finishAfterFile: true)
         try await collector.value
         return utterances
-    }
-
-    /// Qwen3-ASR post-pass: highest accuracy, language auto-detected,
-    /// hotword-primed. Same decode-to-16k + VAD flow as SenseVoice.
-    private static func transcribeWithQwen3ASR(
-        _ url: URL,
-        sensitivity: MicSensitivity,
-        hotwords: [String],
-        alreadyDecoded: [SessionRecord.ImportCheckpoint.Segment] = [],
-        onSegmentComplete: (@MainActor @Sendable (SessionRecord.ImportCheckpoint.Segment) -> Void)? = nil,
-        onProgress: @escaping (Double) -> Void
-    ) async throws -> [Utterance] {
-        let samples = try await decodeMono16k(contentsOf: url)
-        let transcriber = Qwen3ASRFileTranscriber(hotwords: hotwords)
-        let utterances = try await transcriber.transcribe(
-            samples16k: samples, sensitivity: sensitivity,
-            alreadyDecoded: alreadyDecoded, onSegmentComplete: onSegmentComplete
-        ) { fraction in
-            onProgress(fraction)
-        }
-        return utterances.map { ($0.text, $0.start, $0.end) }
     }
 
     /// SenseVoice offline: decode the file to 16 kHz mono, then run the VAD +
