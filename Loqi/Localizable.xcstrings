@@ -2714,6 +2714,22 @@
     "Keep the camera open and try again." : {
 
     },
+    "Keeps current labels" : {
+      "localizations" : {
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "現在のラベルを維持"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "保留当前标签"
+          }
+        }
+      }
+    },
     "Landscape" : {
       "extractionState" : "stale",
       "localizations" : {
@@ -3487,6 +3503,22 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "未加载"
+          }
+        }
+      }
+    },
+    "Not separated" : {
+      "localizations" : {
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "分離しません"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "不区分说话人"
           }
         }
       }
@@ -4488,6 +4520,22 @@
         }
       }
     },
+    "Replaces the transcript with a fresh transcription of the recording, then summarizes again." : {
+      "localizations" : {
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "録音を新たに文字起こししてトランスクリプトを置き換え、要約をやり直します。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "用录音的全新转写替换文字记录，然后重新生成总结。"
+          }
+        }
+      }
+    },
     "Replaces the transcript with a fresh transcription of the recording, then summarizes again. Edits to the old summary are lost." : {
       "localizations" : {
         "ja" : {
@@ -4551,6 +4599,22 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "会议室"
+          }
+        }
+      }
+    },
+    "Runs much faster than the recording length. Everything stays on this iPhone." : {
+      "localizations" : {
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "録音の長さよりずっと速く完了します。すべてこの iPhone 上で処理されます。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "远快于录音时长。全部在这台 iPhone 上完成。"
           }
         }
       }
@@ -5270,6 +5334,22 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "开始会话后，实时翻译字幕会显示在这里。"
+          }
+        }
+      }
+    },
+    "Start re-transcription" : {
+      "localizations" : {
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "再文字起こしを開始"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "开始重新转写"
           }
         }
       }
@@ -6482,6 +6562,22 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "从哪里下载模型？"
+          }
+        }
+      }
+    },
+    "Will be identified" : {
+      "localizations" : {
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "識別されます"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "将会识别"
           }
         }
       }

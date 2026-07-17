@@ -33,7 +33,7 @@ struct SessionDetailView: View {
     @State private var isEditingSummary = false
     @State private var summaryDraft = ""
     @State private var confirmRegenerate = false
-    @State private var confirmRetranscribe = false
+    @State private var showingRetranscribeOptions = false
     @State private var timelineExpanded = false
     @State private var confirmDeleteAudio = false
     @State private var showingChat = false
@@ -171,6 +171,11 @@ struct SessionDetailView: View {
                 applySummaryPreferences(style: $0, length: $1)
             }
         }
+        .sheet(isPresented: $showingRetranscribeOptions) {
+            RetranscribeOptionsSheet(pipeline: pipeline, sessionID: sessionID) {
+                requestRetranscribe()
+            }
+        }
         #if os(iOS)
         .fullScreenCover(isPresented: $showingCamera) {
             CameraCaptureView { image in
@@ -257,18 +262,6 @@ struct SessionDetailView: View {
             Button("Cancel", role: .cancel) {}
         } message: {
             Text("You edited this summary. Summarizing again will replace your changes.")
-        }
-        .confirmationDialog(
-            "Re-transcribe this session?",
-            isPresented: $confirmRetranscribe,
-            titleVisibility: .visible
-        ) {
-            Button("Re-transcribe", role: .destructive) {
-                requestRetranscribe()
-            }
-            Button("Cancel", role: .cancel) {}
-        } message: {
-            Text("Replaces the transcript with a fresh transcription of the recording, then summarizes again. Edits to the old summary are lost.")
         }
         .confirmationDialog(
             "Delete this session's audio?",
@@ -483,7 +476,7 @@ struct SessionDetailView: View {
             .disabled(jobRunning || isEditingSummary)
             if let session, SessionRetranscriber.canRetranscribe(session) {
                 Button {
-                    confirmRetranscribe = true
+                    showingRetranscribeOptions = true
                 } label: {
                     Label("Re-transcribe & summarize",
                           systemImage: "arrow.trianglehead.2.clockwise.rotate.90")
@@ -1354,5 +1347,86 @@ struct SummaryOptionsSheet: View {
             && (!pipeline.llmEnabled || !pipeline.llmDownloaded)
         apply(style, length)
         if needsHost { dismiss() }
+    }
+}
+
+/// Pre-flight for Re-transcribe & summarize — the bare "are you sure?"
+/// dialog told the user nothing. This sheet shows exactly what will run:
+/// the engine (picked from installed models + the session's languages),
+/// how speakers are handled, the translation target, and what the pass
+/// costs, with the edited-summary warning inline.
+struct RetranscribeOptionsSheet: View {
+    @Bindable var pipeline: CaptionPipeline
+    let sessionID: UUID
+    /// Host's requestRetranscribe (handles the AI gates + download consent).
+    let start: () -> Void
+    @Environment(\.dismiss) private var dismiss
+
+    private var session: SessionRecord? {
+        pipeline.archive.sessions.first { $0.id == sessionID }
+    }
+
+    private var backend: OfflineTranscriber.Backend {
+        OfflineTranscriber.currentBackend(
+            sourceLanguages: session?.accuracyPassLanguages ?? [])
+    }
+
+    var body: some View {
+        SelectorSheet(title: "Re-transcribe & summarize") {
+            if let session {
+                Section {
+                    LabeledContent("Engine", value: backend.displayName)
+                    LabeledContent("Speakers", value: speakersText(session))
+                    LabeledContent("Translate to", value: translationText(session))
+                } footer: {
+                    VStack(alignment: .leading, spacing: 6) {
+                        Text("Replaces the transcript with a fresh transcription of the recording, then summarizes again.")
+                        if backend == .qwen3ASR {
+                            Text("Highest accuracy — typically takes about as long as the recording itself. Everything runs on this iPhone.")
+                        } else {
+                            Text("Runs much faster than the recording length. Everything stays on this iPhone.")
+                        }
+                    }
+                }
+                if session.summaryEdited == true {
+                    Section {
+                        Label(
+                            "You edited this summary. Summarizing again will replace your changes.",
+                            systemImage: "exclamationmark.triangle")
+                            .font(.footnote)
+                            .foregroundStyle(.orange)
+                    }
+                }
+                Section {
+                    Button {
+                        dismiss()
+                        start()
+                    } label: {
+                        Text("Start re-transcription")
+                            .fontWeight(.semibold)
+                            .frame(maxWidth: .infinity)
+                    }
+                }
+            }
+        }
+    }
+
+    private func speakersText(_ session: SessionRecord) -> String {
+        if session.entries.contains(where: { $0.speaker != nil }) {
+            return String(localized: "Keeps current labels")
+        }
+        if VoiceprintService.isOfflineDiarizerDownloaded,
+           VoiceprintService.separationEnabled(
+            forPickerValue: session.recordingSpeakerCount ?? -1) {
+            return String(localized: "Will be identified")
+        }
+        return String(localized: "Not separated")
+    }
+
+    private func translationText(_ session: SessionRecord) -> String {
+        guard let direction = SessionRetranscriber.languageDirection(for: session),
+              direction.source != direction.target
+        else { return String(localized: "Off") }
+        return direction.target.displayName
     }
 }

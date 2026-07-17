@@ -17,6 +17,16 @@ enum OfflineTranscriber {
         case senseVoice = "sensevoice"
         case qwen3ASR = "qwen3asr"
         case dolphin
+
+        /// Engine names are proper nouns — shown as-is in every language.
+        var displayName: String {
+            switch self {
+            case .apple: "Apple"
+            case .senseVoice: "SenseVoice"
+            case .qwen3ASR: "Qwen3-ASR"
+            case .dolphin: "Dolphin"
+            }
+        }
     }
 
     /// Dolphin covers Eastern languages only — 中文/日本語/한국어 among the

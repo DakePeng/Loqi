@@ -198,6 +198,13 @@ struct SessionRecord: Identifiable, Codable, Sendable {
     var summaryLanguageOverride: AppLanguage? {
         summaryLanguageRaw.flatMap(AppLanguage.init(rawValue:))
     }
+
+    /// Languages the accuracy pass must cover: the spoken override wins;
+    /// otherwise every language the entries detected. Drives backend
+    /// selection (Dolphin only when the whole set fits).
+    var accuracyPassLanguages: Set<AppLanguage> {
+        spokenLanguageOverride.map { [$0] } ?? Set(entries.map(\.direction.source))
+    }
     /// Photos attached to the session. Optional: legacy records decode.
     var attachments: [Attachment]?
     /// True until the user opens the session — the Sessions list shows a

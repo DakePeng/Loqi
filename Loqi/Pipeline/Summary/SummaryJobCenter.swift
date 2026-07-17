@@ -719,8 +719,7 @@ final class SummaryJobCenter {
         else { return }
 
         let backend = OfflineTranscriber.postProcessBackend(
-            sourceLanguages: session.spokenLanguageOverride.map { [$0] }
-                ?? Set(session.entries.map(\.direction.source)),
+            sourceLanguages: session.accuracyPassLanguages,
             senseVoiceInstalled: SenseVoiceModelStore.isInstalled,
             qwen3Installed: Qwen3ASRModelStore.isInstalled,
             dolphinInstalled: DolphinModelStore.isInstalled)
@@ -871,8 +870,7 @@ final class SummaryJobCenter {
             switch request.kind {
             case .manual:
                 let backend = OfflineTranscriber.currentBackend(
-                    sourceLanguages: session.spokenLanguageOverride.map { [$0] }
-                        ?? Set(session.entries.map(\.direction.source)))
+                    sourceLanguages: session.accuracyPassLanguages)
                 var record = try await retranscriber.retranscribe(
                     session,
                     backend: backend,
