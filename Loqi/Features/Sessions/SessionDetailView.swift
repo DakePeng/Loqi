@@ -1140,100 +1140,128 @@ struct SummaryTextView: View {
     }
 }
 
-/// Per-record language controls in a labeled form — a sheet instead of
-/// menu-embedded pickers, which rendered as an unlabeled run of language
-/// names with checkmarks. Each row names its selector, shows the current
-/// value, and carries a footer saying exactly what it drives.
+/// Per-record language controls in a labeled form. Selection is STAGED:
+/// browsing the pickers changes nothing — the record persists and the
+/// re-translate job runs only when the user taps Apply. Closing the
+/// sheet without applying discards the staged choices.
 struct SessionLanguagesSheet: View {
-    @Bindable var pipeline: CaptionPipeline
+    let pipeline: CaptionPipeline
     let sessionID: UUID
+    @Environment(\.dismiss) private var dismiss
+
+    @State private var stagedSpoken: String
+    @State private var stagedTranslate: String
+    @State private var stagedSummary: String
+
+    init(pipeline: CaptionPipeline, sessionID: UUID) {
+        self.pipeline = pipeline
+        self.sessionID = sessionID
+        let record = pipeline.archive.sessions.first { $0.id == sessionID }
+        _stagedSpoken = State(initialValue: Self.currentSpokenRaw(record))
+        _stagedTranslate = State(initialValue: Self.currentTranslateRaw(record))
+        _stagedSummary = State(initialValue: record?.summaryLanguageRaw ?? "")
+    }
 
     private var session: SessionRecord? {
         pipeline.archive.sessions.first { $0.id == sessionID }
     }
 
-    /// Changes are applied live but paused controls avoid racing a
-    /// running job (retranslate no-ops while the session is busy).
     private var locked: Bool {
         pipeline.jobs.isBusy(sessionID) || pipeline.isRunning
     }
 
+    private var spokenChanged: Bool {
+        stagedSpoken != Self.currentSpokenRaw(session)
+    }
+    private var translateChanged: Bool {
+        stagedTranslate != Self.currentTranslateRaw(session)
+    }
+    private var summaryChanged: Bool {
+        stagedSummary != (session?.summaryLanguageRaw ?? "")
+    }
+    private var hasChanges: Bool {
+        spokenChanged || translateChanged || summaryChanged
+    }
+
     var body: some View {
         SelectorSheet(title: "Languages", locked: locked) {
-                if let session {
-                    Section {
-                        Picker("Spoken language", selection: Binding(
-                            get: {
-                                session.spokenLanguageRaw
-                                    ?? session.entries.first?.direction.source.rawValue
-                                    ?? AppLanguage.english.rawValue
-                            },
-                            set: { setSpokenLanguage($0) })) {
-                            ForEach(AppLanguage.allCases) { language in
-                                Text(language.displayName).tag(language.rawValue)
-                            }
-                        }
-                    } footer: {
-                        Text("What the recording is in. Fixes a wrong or misdetected language — re-transcription, translation, and transcript cleanup all follow it.")
-                    }
-                    Section {
-                        Picker("Translate to", selection: Binding(
-                            get: { session.translateToRaw ?? Self.inheritedTargetRaw(session) },
-                            set: { setTranslateTo($0) })) {
-                            Text("Off").tag("")
-                            ForEach(AppLanguage.allCases) { language in
-                                Text(language.displayName).tag(language.rawValue)
-                            }
-                        }
-                    } footer: {
-                        Text("Shows a translation under each transcript line. Changing this re-translates the whole transcript right away.")
-                    }
-                    Section {
-                        Picker("Summary language", selection: Binding(
-                            get: { session.summaryLanguageRaw ?? "" },
-                            set: { setSummaryLanguage($0) })) {
-                            Text("Auto").tag("")
-                            ForEach(AppLanguage.allCases) { language in
-                                Text(language.displayName).tag(language.rawValue)
-                            }
-                        }
-                    } footer: {
-                        Text("The language summaries are written in. Auto follows your device language. Applies the next time you summarize.")
+            Section {
+                Picker("Spoken language", selection: $stagedSpoken) {
+                    ForEach(AppLanguage.allCases) { language in
+                        Text(language.displayName).tag(language.rawValue)
                     }
                 }
+            } footer: {
+                Text("What the recording is in. Fixes a wrong or misdetected language — re-transcription, translation, and transcript cleanup all follow it.")
+            }
+            Section {
+                Picker("Translate to", selection: $stagedTranslate) {
+                    Text("Off").tag("")
+                    ForEach(AppLanguage.allCases) { language in
+                        Text(language.displayName).tag(language.rawValue)
+                    }
+                }
+            } footer: {
+                Text("Shows a translation under each transcript line.")
+            }
+            Section {
+                Picker("Summary language", selection: $stagedSummary) {
+                    Text("Auto").tag("")
+                    ForEach(AppLanguage.allCases) { language in
+                        Text(language.displayName).tag(language.rawValue)
+                    }
+                }
+            } footer: {
+                Text("The language summaries are written in. Auto follows your device language. Applies the next time you summarize.")
+            }
+            if hasChanges {
+                Section {
+                    Button {
+                        applyStaged()
+                    } label: {
+                        Text("Apply changes")
+                            .fontWeight(.semibold)
+                            .frame(maxWidth: .infinity)
+                    }
+                } footer: {
+                    if spokenChanged || translateChanged {
+                        Text("Applying re-translates the transcript with the new languages.")
+                    }
+                }
+            }
         }
     }
 
+    /// The value each picker shows before any staging, with the same
+    /// fallbacks the pipeline uses.
+    private static func currentSpokenRaw(_ record: SessionRecord?) -> String {
+        record?.spokenLanguageRaw
+            ?? record?.entries.first?.direction.source.rawValue
+            ?? AppLanguage.english.rawValue
+    }
+
     /// The target the record was made with; transcribe-only shows as Off.
-    private static func inheritedTargetRaw(_ session: SessionRecord) -> String {
-        guard let base = session.entries.first?.direction,
+    private static func currentTranslateRaw(_ record: SessionRecord?) -> String {
+        if let explicit = record?.translateToRaw { return explicit }
+        guard let base = record?.entries.first?.direction,
               base.source != base.target else { return "" }
         return base.target.rawValue
     }
 
-    private func setSpokenLanguage(_ raw: String) {
-        guard var session else { return }
-        session.spokenLanguageRaw = raw
-        pipeline.archive.update(session)
-        // Existing drafts were made from the old source legs; refresh them
-        // whenever a translation target is active.
-        if let direction = SessionRetranscriber.languageDirection(for: session),
-           direction.source != direction.target {
+    private func applyStaged() {
+        guard var updated = session else { return }
+        let translationAffected = spokenChanged || translateChanged
+        if spokenChanged { updated.spokenLanguageRaw = stagedSpoken }
+        if translateChanged { updated.translateToRaw = stagedTranslate }
+        if summaryChanged {
+            updated.summaryLanguageRaw = stagedSummary.isEmpty ? nil : stagedSummary
+        }
+        pipeline.archive.update(updated)
+        if translationAffected {
             pipeline.jobs.retranslate(sessionID: sessionID)
         }
-    }
-
-    private func setTranslateTo(_ raw: String) {
-        guard var session else { return }
-        session.translateToRaw = raw
-        pipeline.archive.update(session)
-        pipeline.jobs.retranslate(sessionID: sessionID)
-    }
-
-    private func setSummaryLanguage(_ raw: String) {
-        guard var session else { return }
-        session.summaryLanguageRaw = raw.isEmpty ? nil : raw
-        pipeline.archive.update(session)
+        // The retranslate progress shows on the detail view — hand back.
+        dismiss()
     }
 }
 

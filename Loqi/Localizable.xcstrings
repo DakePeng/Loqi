@@ -520,6 +520,38 @@
         }
       }
     },
+    "Apply changes" : {
+      "localizations" : {
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "変更を適用"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "应用更改"
+          }
+        }
+      }
+    },
+    "Applying re-translates the transcript with the new languages." : {
+      "localizations" : {
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "適用すると、新しい言語設定でトランスクリプトが再翻訳されます。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "应用后会按新的语言设置重新翻译文字记录。"
+          }
+        }
+      }
+    },
     "Ask about this session" : {
       "extractionState" : "stale",
       "localizations" : {
@@ -1477,38 +1509,6 @@
         }
       }
     },
-    "Download Dolphin model (~250 MB)" : {
-      "localizations" : {
-        "ja" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Dolphin モデルをダウンロード（約 250 MB）"
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "下载 Dolphin 模型（约 250 MB）"
-          }
-        }
-      }
-    },
-    "Download the Dolphin model in Settings first." : {
-      "localizations" : {
-        "ja" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "先に設定で Dolphin モデルをダウンロードしてください。"
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "请先在设置中下载 Dolphin 模型。"
-          }
-        }
-      }
-    },
     "Done" : {
       "extractionState" : "stale",
       "localizations" : {
@@ -1556,6 +1556,22 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "下载 %@ 并继续"
+          }
+        }
+      }
+    },
+    "Download Dolphin model (~250 MB)" : {
+      "localizations" : {
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Dolphin モデルをダウンロード（約 250 MB）"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "下载 Dolphin 模型（约 250 MB）"
           }
         }
       }
@@ -1725,6 +1741,22 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "下载 AI 模型？"
+          }
+        }
+      }
+    },
+    "Download the Dolphin model in Settings first." : {
+      "localizations" : {
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "先に設定で Dolphin モデルをダウンロードしてください。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "请先在设置中下载 Dolphin 模型。"
           }
         }
       }
@@ -4537,6 +4569,7 @@
       }
     },
     "Replaces the transcript with a fresh transcription of the recording, then summarizes again. Edits to the old summary are lost." : {
+      "extractionState" : "stale",
       "localizations" : {
         "ja" : {
           "stringUnit" : {
@@ -4966,6 +4999,22 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "在每条字幕下方显示翻译。录音过程中也可以更改。"
+          }
+        }
+      }
+    },
+    "Shows a translation under each transcript line." : {
+      "localizations" : {
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "各行の下に翻訳を表示します。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "在每行文字下方显示翻译。"
           }
         }
       }
