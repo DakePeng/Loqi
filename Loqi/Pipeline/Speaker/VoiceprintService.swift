@@ -34,9 +34,12 @@ actor VoiceprintService {
     ) -> (numClusters: Int, threshold: Float) {
         value >= 2
             ? (numClusters: value, threshold: 0)
-            // ponytail: 0.5 is sherpa's reference default; tune on device
-            // if Auto over/under-splits.
-            : (numClusters: -1, threshold: 0.5)
+            // Field-tuned: sherpa's reference 0.5 over-split a real
+            // meeting into 30+ phantom speakers with the CAM++
+            // embeddings. Larger = fewer clusters; an exact picker count
+            // remains the reliable path (the job center refuses absurd
+            // Auto results instead of applying them).
+            : (numClusters: -1, threshold: 0.75)
     }
 
     /// Whether both model files are already on disk. Lets the import flow

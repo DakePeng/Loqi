@@ -34,6 +34,7 @@ struct SessionDetailView: View {
     @State private var summaryDraft = ""
     @State private var confirmRegenerate = false
     @State private var showingRetranscribeOptions = false
+    @State private var showingIdentifySpeakers = false
     @State private var timelineExpanded = false
     @State private var confirmDeleteAudio = false
     @State private var showingChat = false
@@ -175,6 +176,9 @@ struct SessionDetailView: View {
             RetranscribeOptionsSheet(pipeline: pipeline, sessionID: sessionID) {
                 requestRetranscribe()
             }
+        }
+        .sheet(isPresented: $showingIdentifySpeakers) {
+            IdentifySpeakersSheet(pipeline: pipeline, sessionID: sessionID)
         }
         #if os(iOS)
         .fullScreenCover(isPresented: $showingCamera) {
@@ -484,17 +488,13 @@ struct SessionDetailView: View {
                 .disabled(jobRunning || isEditingSummary || pipeline.isRunning)
                 // Run/redo diarization alone: labels a session that never
                 // got them, or re-clusters one that split badly — without
-                // paying for a re-transcribe. Re-clustering reassigns
-                // slots, so custom speaker names may need re-mapping.
-                if VoiceprintService.separationEnabled(
-                    forPickerValue: session.recordingSpeakerCount ?? -1) {
-                    Button {
-                        pipeline.jobs.retryDiarization(sessionID: sessionID)
-                    } label: {
-                        Label("Identify speakers", systemImage: "person.2.wave.2")
-                    }
-                    .disabled(jobRunning || isEditingSummary || pipeline.isRunning)
+                // paying for a re-transcribe.
+                Button {
+                    showingIdentifySpeakers = true
+                } label: {
+                    Label("Identify speakers", systemImage: "person.2.wave.2")
                 }
+                .disabled(jobRunning || isEditingSummary || pipeline.isRunning)
             }
             if session != nil {
                 Button {
@@ -1396,7 +1396,14 @@ struct RetranscribeOptionsSheet: View {
     }
 
     var body: some View {
-        SelectorSheet(title: "Re-transcribe & summarize") {
+        SelectorSheet(
+            title: "Re-transcribe & summarize",
+            primaryActionTitle: "Start",
+            primaryAction: {
+                dismiss()
+                start()
+            }
+        ) {
             if let session {
                 Section {
                     LabeledContent("Engine", value: backend.displayName)
@@ -1421,16 +1428,6 @@ struct RetranscribeOptionsSheet: View {
                             .foregroundStyle(.orange)
                     }
                 }
-                Section {
-                    Button {
-                        dismiss()
-                        start()
-                    } label: {
-                        Text("Start re-transcription")
-                            .fontWeight(.semibold)
-                            .frame(maxWidth: .infinity)
-                    }
-                }
             }
         }
     }
@@ -1452,5 +1449,51 @@ struct RetranscribeOptionsSheet: View {
               direction.source != direction.target
         else { return String(localized: "Off") }
         return direction.target.displayName
+    }
+}
+
+/// Pre-flight for Identify speakers: pick how many voices to look for
+/// before the pass runs. Auto discovers the count but can over-split on
+/// hard audio; an exact count is the reliable path when the user knows
+/// how many people were in the room.
+struct IdentifySpeakersSheet: View {
+    let pipeline: CaptionPipeline
+    let sessionID: UUID
+    @Environment(\.dismiss) private var dismiss
+
+    @State private var speakerCount: Int
+
+    init(pipeline: CaptionPipeline, sessionID: UUID) {
+        self.pipeline = pipeline
+        self.sessionID = sessionID
+        let stored = pipeline.archive.sessions
+            .first { $0.id == sessionID }?.recordingSpeakerCount
+        _speakerCount = State(initialValue: stored.flatMap {
+            VoiceprintService.separationEnabled(forPickerValue: $0) ? $0 : nil
+        } ?? -1)
+    }
+
+    var body: some View {
+        SelectorSheet(
+            title: "Identify speakers",
+            primaryActionTitle: "Start",
+            primaryAction: {
+                pipeline.jobs.retryDiarization(
+                    sessionID: sessionID, speakerCount: speakerCount)
+                dismiss()
+            }
+        ) {
+            Section {
+                Picker("Speakers", selection: $speakerCount) {
+                    Text("Auto").tag(-1)
+                    ForEach(2...6, id: \.self) { Text("\($0) speakers").tag($0) }
+                }
+            } footer: {
+                VStack(alignment: .leading, spacing: 6) {
+                    Text("Auto discovers the count from the audio. If it finds too many, set the exact number of people.")
+                    Text("Re-identifying reassigns speaker slots, so custom speaker names may move.")
+                }
+            }
+        }
     }
 }

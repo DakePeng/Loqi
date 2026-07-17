@@ -634,6 +634,22 @@
         }
       }
     },
+    "Auto discovers the count from the audio. If it finds too many, set the exact number of people." : {
+      "localizations" : {
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "「自動」は音声から人数を推定します。多く検出されすぎる場合は、正確な人数を指定してください。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "“自动”从音频中推断人数。如果检测出的人数过多，请指定确切人数。"
+          }
+        }
+      }
+    },
     "Auto post-process new recordings" : {
       "localizations" : {
         "ja" : {
@@ -4185,6 +4201,22 @@
         }
       }
     },
+    "Re-identifying reassigns speaker slots, so custom speaker names may move." : {
+      "localizations" : {
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "再識別すると話者スロットが再割り当てされるため、カスタムの話者名がずれることがあります。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "重新识别会重新分配说话人位置，自定义的说话人名称可能会移位。"
+          }
+        }
+      }
+    },
     "Re-summarize" : {
       "extractionState" : "stale",
       "localizations" : {
@@ -5387,6 +5419,22 @@
         }
       }
     },
+    "Start" : {
+      "localizations" : {
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "開始"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "开始"
+          }
+        }
+      }
+    },
     "Start a session and live translated captions will appear here." : {
       "extractionState" : "stale",
       "localizations" : {
@@ -6260,6 +6308,22 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "标题"
+          }
+        }
+      }
+    },
+    "Too many speakers were detected. Set an exact speaker count and try again." : {
+      "localizations" : {
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "検出された話者が多すぎます。正確な人数を指定して、もう一度お試しください。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "检测到的说话人过多。请指定确切人数后重试。"
           }
         }
       }

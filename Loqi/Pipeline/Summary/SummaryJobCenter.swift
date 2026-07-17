@@ -642,7 +642,12 @@ final class SummaryJobCenter {
     /// action for sessions that never got labels or need a re-cluster.
     /// Tapping is implied download consent — the offline diarizer is tens
     /// of MB, not the multi-GB LLM.
-    func retryDiarization(sessionID: UUID) {
+    /// Auto results claiming more speakers than a real meeting are
+    /// clustering failures — applying them would shred the transcript
+    /// into dozens of phantom voices.
+    nonisolated static let maxPlausibleAutoSpeakers = 12
+
+    func retryDiarization(sessionID: UUID, speakerCount: Int? = nil) {
         guard !isRecording(), !isBusy(sessionID),
               let session = archive.sessions.first(where: { $0.id == sessionID }),
               let fileName = session.audioFileName
@@ -651,7 +656,7 @@ final class SummaryJobCenter {
             return
         }
         let url = SessionArchive.recordingURL(fileName: fileName)
-        let speakerCount = session.recordingSpeakerCount ?? -1
+        let speakerCount = speakerCount ?? session.recordingSpeakerCount ?? -1
         guard FileManager.default.fileExists(atPath: url.path),
               VoiceprintService.separationEnabled(forPickerValue: speakerCount)
         else {
@@ -684,6 +689,16 @@ final class SummaryJobCenter {
                 try Task.checkCancellation()
                 guard var record = archive.sessions.first(where: { $0.id == sessionID })
                 else { return }
+                // Refuse an implausible Auto result instead of shredding
+                // the transcript into dozens of phantom voices — the user
+                // can set an exact count and rerun.
+                let distinctSpeakers = Set(segments.map(\.slot)).count
+                if speakerCount == -1, distinctSpeakers > Self.maxPlausibleAutoSpeakers {
+                    logger.warning("diarize rejected result: \(distinctSpeakers) auto speakers")
+                    errors[sessionID] = String(localized:
+                        "Too many speakers were detected. Set an exact speaker count and try again.")
+                    return
+                }
                 SessionRetranscriber.applyDiarizationSegments(segments, to: &record)
                 let labeled = record.entries.count(where: { $0.speaker != nil })
                 logger.info("diarize applied: \(segments.count) segments -> \(labeled)/\(record.entries.count) entries labeled")
@@ -695,6 +710,9 @@ final class SummaryJobCenter {
                     return
                 }
                 record.speakerSeparationFailed = nil
+                // Remember the count that produced this labeling — future
+                // auto passes and re-runs start from it.
+                record.recordingSpeakerCount = speakerCount
                 archive.update(record)
             } catch is CancellationError {
                 // User cancelled: no error row.
