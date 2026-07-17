@@ -1184,7 +1184,13 @@ struct SessionLanguagesSheet: View {
     }
 
     var body: some View {
-        SelectorSheet(title: "Languages", locked: locked) {
+        SelectorSheet(
+            title: "Languages",
+            locked: locked,
+            primaryActionTitle: "Apply",
+            primaryActionDisabled: !hasChanges || locked,
+            primaryAction: { applyStaged() }
+        ) {
             Section {
                 Picker("Spoken language", selection: $stagedSpoken) {
                     ForEach(AppLanguage.allCases) { language in
@@ -1202,7 +1208,12 @@ struct SessionLanguagesSheet: View {
                     }
                 }
             } footer: {
-                Text("Shows a translation under each transcript line.")
+                VStack(alignment: .leading, spacing: 6) {
+                    Text("Shows a translation under each transcript line.")
+                    if spokenChanged || translateChanged {
+                        Text("Applying re-translates the transcript with the new languages.")
+                    }
+                }
             }
             Section {
                 Picker("Summary language", selection: $stagedSummary) {
@@ -1213,21 +1224,6 @@ struct SessionLanguagesSheet: View {
                 }
             } footer: {
                 Text("The language summaries are written in. Auto follows your device language. Applies the next time you summarize.")
-            }
-            if hasChanges {
-                Section {
-                    Button {
-                        applyStaged()
-                    } label: {
-                        Text("Apply changes")
-                            .fontWeight(.semibold)
-                            .frame(maxWidth: .infinity)
-                    }
-                } footer: {
-                    if spokenChanged || translateChanged {
-                        Text("Applying re-translates the transcript with the new languages.")
-                    }
-                }
             }
         }
     }

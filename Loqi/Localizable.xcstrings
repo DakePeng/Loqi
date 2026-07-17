@@ -520,6 +520,22 @@
         }
       }
     },
+    "Apply" : {
+      "localizations" : {
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "適用"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "应用"
+          }
+        }
+      }
+    },
     "Apply changes" : {
       "localizations" : {
         "ja" : {
@@ -5020,6 +5036,7 @@
       }
     },
     "Shows a translation under each transcript line. Changing this re-translates the whole transcript right away." : {
+      "extractionState" : "stale",
       "localizations" : {
         "ja" : {
           "stringUnit" : {
