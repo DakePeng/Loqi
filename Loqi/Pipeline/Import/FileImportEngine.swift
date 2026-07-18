@@ -260,9 +260,10 @@ final class FileImportEngine {
                         }
                     }
                 }
-                let slots = SpeakerAttribution.attribute(
-                    utterances: utterances.map { ($0.start, $0.end) },
-                    to: segments)
+                let slots = SpeakerAttribution.denselyRenumbered(
+                    SpeakerAttribution.attribute(
+                        utterances: utterances.map { ($0.start, $0.end) },
+                        to: segments))
                 for index in entries.indices {
                     entries[index].speaker = slots[index]
                 }

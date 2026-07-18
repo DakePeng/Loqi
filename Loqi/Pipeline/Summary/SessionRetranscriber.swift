@@ -309,7 +309,8 @@ struct SessionRetranscriber {
                 : max(start + 3, segments.last?.end ?? start + 3)
             return (start: start, end: end)
         }
-        let slots = SpeakerAttribution.attribute(utterances: utterances, to: segments)
+        let slots = SpeakerAttribution.denselyRenumbered(
+            SpeakerAttribution.attribute(utterances: utterances, to: segments))
         for index in record.entries.indices {
             record.entries[index].speaker = slots[index]
         }
