@@ -913,12 +913,10 @@ struct SessionDetailView: View {
 
     private func requestRetranscribe() {
         guard !pipeline.isRunning else { return }
-        guard pipeline.llmEnabled else {
-            showNotice(String(
-                localized: "AI features are off — turn them on in Settings to summarize."))
-            return
-        }
-        guard pipeline.llmDownloaded else {
+        // ASR + fixup need no LLM; only the re-summary does. With AI on but
+        // the model absent, prompt to download it (for the summary). With
+        // AI off, re-transcribe runs ASR-only and skips the summary.
+        if pipeline.llmEnabled, !pipeline.llmDownloaded {
             pendingDownload = .retranscribe
             return
         }
@@ -1427,7 +1425,11 @@ struct RetranscribeOptionsSheet: View {
                     LabeledContent("Translate to", value: translationText(session))
                 } footer: {
                     VStack(alignment: .leading, spacing: 6) {
-                        Text("Replaces the transcript with a fresh transcription of the recording, then summarizes again.")
+                        if pipeline.llmEnabled {
+                            Text("Replaces the transcript with a fresh transcription of the recording, then summarizes again.")
+                        } else {
+                            Text("Replaces the transcript with a fresh transcription of the recording. AI features are off, so it skips cleanup and doesn't re-summarize.")
+                        }
                         Text("Runs much faster than the recording length. Everything stays on this iPhone.")
                     }
                 }

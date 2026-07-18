@@ -31,8 +31,9 @@ struct SessionRetranscriber {
     let translator: TranslationCoordinator
     /// Vocabulary for the polish phase's text-level fixup.
     var hotwords: HotwordStore?
-    /// Settings gate for the LFM2.5 cleanup phase. Retranscribe jobs are
-    /// already gated upstream (JobError.aiDisabled); passed for correctness.
+    /// Settings gate for the LFM2.5 cleanup phase. False when AI is off:
+    /// re-transcribe then runs ASR + deterministic fixup only (no LLM
+    /// cleanup), and the job skips the re-summary.
     var llmCleanupEnabled = true
     private let logger = Logger(subsystem: "com.kunzhipeng.loqi", category: "retranscribe")
 

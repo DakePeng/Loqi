@@ -1,36 +1,10 @@
 {
   "sourceLanguage" : "en",
   "strings" : {
-    "Show original recognition" : {
+    "Replaces the transcript with a fresh transcription of the recording. AI features are off, so it skips cleanup and doesn't re-summarize." : {
       "localizations" : {
-        "ja" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "元の認識結果を表示"
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "显示原始识别结果"
-          }
-        }
-      }
-    },
-    "Under each transcript line, show the raw speech-recognition text before AI cleanup when they differ. If a word is here but missing above, the cleanup dropped it; if it's missing from both, recognition never caught it." : {
-      "localizations" : {
-        "ja" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "各文字起こし行の下に、AIクリーンアップ前の生の音声認識テキストを（相違がある場合のみ）表示します。ここに単語があって上にない場合はクリーンアップが削除したもの、どちらにもない場合は認識が拾えなかったものです。"
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "在每行文字下方显示 AI 清理前的原始语音识别文本（仅当二者不同时）。若某词在此处出现但上方缺失，说明是清理删除的；若两处都缺失，则是识别未捕捉到。"
-          }
-        }
+        "ja" : { "stringUnit" : { "state" : "translated", "value" : "録音を新しく文字起こしし直して置き換えます。AI機能はオフのため、クリーンアップは行わず、要約もし直しません。" } },
+        "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "用录音的全新转写替换文字稿。AI 功能已关闭，因此跳过清理，也不会重新生成摘要。" } }
       }
     },
     "· %@" : {
@@ -1442,7 +1416,6 @@
       }
     },
     "Diagnostics" : {
-      "extractionState" : "stale",
       "localizations" : {
         "ja" : {
           "stringUnit" : {
@@ -4905,6 +4878,22 @@
         }
       }
     },
+    "Show original recognition" : {
+      "localizations" : {
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "元の認識結果を表示"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "显示原始识别结果"
+          }
+        }
+      }
+    },
     "Shows a translation under each caption. You can change this during a recording." : {
       "localizations" : {
         "ja" : {
@@ -6363,6 +6352,22 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "翻译、摘要、标题与对话"
+          }
+        }
+      }
+    },
+    "Under each transcript line, show the raw speech-recognition text before AI cleanup when they differ. If a word is here but missing above, the cleanup dropped it; if it's missing from both, recognition never caught it." : {
+      "localizations" : {
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "各文字起こし行の下に、AIクリーンアップ前の生の音声認識テキストを（相違がある場合のみ）表示します。ここに単語があって上にない場合はクリーンアップが削除したもの、どちらにもない場合は認識が拾えなかったものです。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "在每行文字下方显示 AI 清理前的原始语音识别文本（仅当二者不同时）。若某词在此处出现但上方缺失，说明是清理删除的；若两处都缺失，则是识别未捕捉到。"
           }
         }
       }

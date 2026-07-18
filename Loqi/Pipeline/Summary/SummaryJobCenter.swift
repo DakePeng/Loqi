@@ -837,15 +837,20 @@ final class SummaryJobCenter {
         do { try await heavyGate.acquire() } catch { return }
         defer { heavyGate.release() }
         do {
-            // The summarize that follows needs the model; check its
-            // gates BEFORE the expensive re-transcription, not after.
-            guard llmEnabled else { throw JobError.aiDisabled }
-            if !request.allowDownload, !LLMService.isDownloaded(model: ModelCatalog.current) {
+            // ASR + deterministic fixup + diarization + Apple translation
+            // need no LLM; only the LFM2.5 cleanup and the re-summary do.
+            // With AI on, check the summarize's gates BEFORE the expensive
+            // re-transcription, not after. With AI off, re-transcribe runs
+            // ASR-only and skips both cleanup and the re-summary.
+            let cleanupAndSummarize = llmEnabled
+            if cleanupAndSummarize,
+               !request.allowDownload,
+               !LLMService.isDownloaded(model: ModelCatalog.current) {
                 throw LLMServiceError.modelNotDownloaded
             }
             let retranscriber = SessionRetranscriber(
                 llm: llm, translator: translator, hotwords: hotwords,
-                llmCleanupEnabled: llmEnabled)
+                llmCleanupEnabled: cleanupAndSummarize)
             let updated: SessionRecord
             let suggestVocabulary: Bool
             switch request.kind {
@@ -904,6 +909,11 @@ final class SummaryJobCenter {
             // Any completed accuracy pass (auto or manual) satisfies a
             // pending marker — the resume sweep must not run it again.
             clearPendingPostProcess(sessionID)
+            // AI off: the transcript is refreshed (ASR + fixup); there is
+            // no cleanup or re-summary to run. The old summary was cleared
+            // with the replaced entries — the user can summarize once AI
+            // is back on.
+            guard cleanupAndSummarize else { return }
             // The transcript is archived; from here it's an LLM summarize that
             // backgrounding can cancel and restart on its own — persist that
             // intent so even a process kill restarts it at next launch.
