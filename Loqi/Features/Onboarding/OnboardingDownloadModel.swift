@@ -94,12 +94,6 @@ final class OnboardingDownloadModel {
         for item in items where installed.contains(item.kind) {
             item.status = .done
         }
-        // A previous aborted run may have downloaded SenseVoice but died
-        // before the engine write. The rule: SenseVoice selected and settled
-        // done ⇒ it becomes the live engine.
-        if selection.contains(.senseVoice), installed.contains(.senseVoice) {
-            UserDefaults.standard.set("sensevoice", forKey: "asr.engine")
-        }
 
         let pending = OnboardingItemKind.queueOrder(selection: selection, installed: installed)
         systemAssetQueue = pending.filter(\.usesSystemAssetProgress)
@@ -330,7 +324,6 @@ final class OnboardingDownloadModel {
         await senseVoiceStore.download(from: region.asrSource)
         if SenseVoiceModelStore.isInstalled {
             item.status = .done
-            UserDefaults.standard.set("sensevoice", forKey: "asr.engine")
         } else if let error = senseVoiceStore.lastError {
             item.status = .failed(error)
         } else {

@@ -11,7 +11,7 @@ struct SettingsView: View {
     @AppStorage("audio.saveRecordings") private var saveRecordings = true
     @AppStorage("display.keepScreenOn") private var keepScreenOn = true
     @AppStorage("perf.reduceHeat") private var reduceHeat = false
-    @AppStorage("asr.engine") private var asrEngine = "apple"
+    @AppStorage("asr.finalsModel") private var asrFinalsModel = "auto"
     @AppStorage("asr.source") private var asrSourceRaw = ASRModelSource.modelScope.rawValue
     @AppStorage("summary.autoPostProcessNewRecordings")
     private var autoPostProcessNewRecordings = false
@@ -57,52 +57,49 @@ struct SettingsView: View {
                 }
 
                 Section {
-                    Picker("Engine", selection: $asrEngine) {
-                        Text("Apple (instant)").tag("apple")
-                        Text("SenseVoice (accurate)").tag("sensevoice")
-                        Text("Hybrid (responsive + accurate)").tag("hybrid")
-                    }
+                    LabeledContent(
+                        "Recognition model",
+                        value: senseVoiceInstalled
+                            ? localized("Downloaded")
+                            : localized("Not downloaded"))
 
-                    if asrEngine == "sensevoice" || asrEngine == "hybrid" {
-                        LabeledContent(
-                            "Recognition model",
-                            value: senseVoiceInstalled
-                                ? localized("Downloaded")
-                                : localized("Not downloaded"))
-
-                        if !senseVoiceInstalled {
-                            Picker("Download from", selection: $asrSourceRaw) {
-                                ForEach(ASRModelSource.allCases) { source in
-                                    Text(source.displayName).tag(source.rawValue)
+                    if !senseVoiceInstalled {
+                        Picker("Download from", selection: $asrSourceRaw) {
+                            ForEach(ASRModelSource.allCases) { source in
+                                Text(source.displayName).tag(source.rawValue)
+                            }
+                        }
+                        if senseVoiceStore.downloading {
+                            DownloadProgressRow(
+                                speedometer: senseVoiceSpeedometer,
+                                onStop: { senseVoiceStore.cancelDownload() })
+                        } else {
+                            Button("Download SenseVoice model (~230 MB)") {
+                                senseVoiceSpeedometer.start(
+                                    totalBytes: SenseVoiceModelStore.totalExpectedBytes)
+                                Task {
+                                    let source = ASRModelSource(
+                                        rawValue: asrSourceRaw) ?? .modelScope
+                                    await senseVoiceStore.download(from: source)
+                                    senseVoiceInstalled = SenseVoiceModelStore.isInstalled
                                 }
                             }
-                            if senseVoiceStore.downloading {
-                                DownloadProgressRow(
-                                    speedometer: senseVoiceSpeedometer,
-                                    onStop: { senseVoiceStore.cancelDownload() })
-                            } else {
-                                Button("Download SenseVoice model (~230 MB)") {
-                                    senseVoiceSpeedometer.start(
-                                        totalBytes: SenseVoiceModelStore.totalExpectedBytes)
-                                    Task {
-                                        let source = ASRModelSource(
-                                            rawValue: asrSourceRaw) ?? .modelScope
-                                        await senseVoiceStore.download(from: source)
-                                        senseVoiceInstalled = SenseVoiceModelStore.isInstalled
-                                    }
-                                }
-                            }
-                            if let error = senseVoiceStore.lastError {
-                                Text(error)
-                                    .font(.footnote)
-                                    .foregroundStyle(.red)
-                            }
+                        }
+                        if let error = senseVoiceStore.lastError {
+                            Text(error)
+                                .font(.footnote)
+                                .foregroundStyle(.red)
+                        }
+                    } else {
+                        Picker("Finals model", selection: $asrFinalsModel) {
+                            Text("Auto (Dolphin for 中/日/한)").tag("auto")
+                            Text("SenseVoice").tag("sensevoice")
                         }
                     }
                 } header: {
                     Text("Speech recognition")
                 } footer: {
-                    Text("SenseVoice recognizes 中文, English, 日本語 and 한국어 with much higher accuracy — captions update in ~1-second pulses instead of word-by-word. Hybrid shows Apple's instant word-by-word captions while SenseVoice finalizes each sentence for the saved transcript — the coolest-running option; needs a specific language (not Auto). Everything runs fully on this iPhone.")
+                    Text("Live captions always run in Hybrid mode: Apple shows instant word-by-word captions while the finals model finalizes each sentence for the saved transcript. Auto upgrades 中文/日本語/한국어 finals to Dolphin once that model is downloaded below; English sessions and Auto language detection always use SenseVoice. Everything runs fully on this iPhone.")
                 }
 
                 Section {
@@ -150,7 +147,7 @@ struct SettingsView: View {
                 } header: {
                     Text("High-accuracy re-transcription")
                 } footer: {
-                    Text("Dolphin recognizes 中文/日本語/한국어 with the highest accuracy. Once downloaded, Re-transcribe & summarize and live Hybrid sentences use it automatically for those languages (remove it to go back to SenseVoice). Auto post-process re-transcribes and identifies speakers before the first summary for new recordings, using downloaded models only.")
+                    Text("Dolphin recognizes 中文/日本語/한국어 with the highest accuracy. Once downloaded, Re-transcribe & summarize and live Hybrid finals use it automatically for those languages (set Finals model to SenseVoice above, or remove the model, to go back). Auto post-process re-transcribes and identifies speakers before the first summary for new recordings, using downloaded models only.")
                 }
 
                 Section {

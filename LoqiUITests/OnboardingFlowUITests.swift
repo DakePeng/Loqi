@@ -91,9 +91,9 @@ final class OnboardingFlowUITests: XCTestCase {
     }
 
     /// Real network: SenseVoice alone (~240 MB from ModelScope) downloads to
-    /// completion, which must flip the live engine to it. Named to sort
-    /// last; verify afterwards with
-    ///   xcrun simctl spawn booted defaults read com.kunzhipeng.loqi asr.engine
+    /// completion. Install state alone now enables the SenseVoice/hybrid
+    /// live path — there is no engine defaults key left to verify.
+    /// Named to sort last.
     func testSenseVoiceOnlyDownloadCompletes() throws {
         guard ProcessInfo.processInfo.environment["LOQI_RUN_NETWORK_UI_TESTS"] == "1" else {
             throw XCTSkip("Set LOQI_RUN_NETWORK_UI_TESTS=1 to download SenseVoice.")

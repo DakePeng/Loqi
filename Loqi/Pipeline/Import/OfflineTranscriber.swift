@@ -48,10 +48,9 @@ enum OfflineTranscriber {
     /// Which backend Re-transcribe & summarize should use. Installing
     /// Dolphin IS the opt-in — while installed it takes every session
     /// whose languages fit; delete it in Settings to fall back. Otherwise
-    /// the live-engine choice applies (SenseVoice when chosen AND
-    /// installed), falling back to Apple. Pure for testing.
+    /// SenseVoice when installed, falling back to Apple. Pure for testing.
     nonisolated static func effectiveBackend(
-        engineChoice: String, sourceLanguages: Set<AppLanguage>,
+        sourceLanguages: Set<AppLanguage>,
         senseVoiceInstalled: Bool, dolphinInstalled: Bool
     ) -> Backend {
         #if os(macOS)
@@ -59,8 +58,7 @@ enum OfflineTranscriber {
         #else
         if dolphinInstalled, dolphinSupports(sourceLanguages) { return .dolphin }
         // Hybrid's record layer IS SenseVoice — same re-transcribe backend.
-        if engineChoice == "sensevoice" || engineChoice == "hybrid",
-           senseVoiceInstalled { return .senseVoice }
+        if senseVoiceInstalled { return .senseVoice }
         return .apple
         #endif
     }
@@ -102,7 +100,6 @@ enum OfflineTranscriber {
     /// The Re-transcribe backend for the current device + settings state.
     static func currentBackend(sourceLanguages: Set<AppLanguage>) -> Backend {
         effectiveBackend(
-            engineChoice: UserDefaults.standard.string(forKey: "asr.engine") ?? "apple",
             sourceLanguages: sourceLanguages,
             senseVoiceInstalled: SenseVoiceModelStore.isInstalled,
             dolphinInstalled: DolphinModelStore.isInstalled)

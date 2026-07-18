@@ -10,11 +10,11 @@ struct ImportEngineTests {
     /// session keeps the multilingual backends.
     @Test func dolphinTakesItsLanguagesWhileInstalled() {
         #expect(OfflineTranscriber.effectiveBackend(
-            engineChoice: "apple", sourceLanguages: [.japanese],
+            sourceLanguages: [.japanese],
             senseVoiceInstalled: false, dolphinInstalled: true)
             == .dolphin)
         #expect(OfflineTranscriber.effectiveBackend(
-            engineChoice: "apple", sourceLanguages: [.english],
+            sourceLanguages: [.english],
             senseVoiceInstalled: false, dolphinInstalled: true)
             == .apple)
         #expect(OfflineTranscriber.postProcessBackend(
@@ -36,29 +36,17 @@ struct ImportEngineTests {
         #expect(OfflineTranscriber.dolphinSupports(.korean))
     }
 
-    @Test func senseVoiceUsedOnlyWhenChosenAndInstalled() {
+    /// No live-engine choice remains (hybrid is the only live engine):
+    /// SenseVoice is the re-transcribe backend whenever it's installed.
+    @Test func senseVoiceUsedWheneverInstalled() {
         #expect(OfflineTranscriber.effectiveBackend(
-            engineChoice: "sensevoice", sourceLanguages: [.japanese],
+            sourceLanguages: [.japanese],
             senseVoiceInstalled: true, dolphinInstalled: false)
             == .senseVoice)
-        // Hybrid's record layer IS SenseVoice — same backend.
+        // Not downloaded → fall back to Apple.
         #expect(OfflineTranscriber.effectiveBackend(
-            engineChoice: "hybrid", sourceLanguages: [.japanese],
-            senseVoiceInstalled: true, dolphinInstalled: false)
-            == .senseVoice)
-        // Chosen but not downloaded → fall back to Apple.
-        #expect(OfflineTranscriber.effectiveBackend(
-            engineChoice: "sensevoice", sourceLanguages: [.japanese],
+            sourceLanguages: [.japanese],
             senseVoiceInstalled: false, dolphinInstalled: false)
-            == .apple)
-        // Apple chosen → never SenseVoice, even if installed.
-        #expect(OfflineTranscriber.effectiveBackend(
-            engineChoice: "apple", sourceLanguages: [.japanese],
-            senseVoiceInstalled: true, dolphinInstalled: false)
-            == .apple)
-        #expect(OfflineTranscriber.effectiveBackend(
-            engineChoice: "", sourceLanguages: [.japanese],
-            senseVoiceInstalled: true, dolphinInstalled: false)
             == .apple)
     }
 

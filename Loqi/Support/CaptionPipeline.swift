@@ -1038,10 +1038,9 @@ final class CaptionPipeline {
 
     // MARK: Turn plumbing
 
-    /// Engine selection: "asr.engine" == "sensevoice" uses the SenseVoice
-    /// backend when its model is installed, falling back to Apple with a
-    /// status pill otherwise. Changing the setting invalidates cached
-    /// engines (they are rebuilt per session via prepare anyway).
+    /// Engine caching: the resolved kind picks the cache key shape.
+    /// Install-state changes invalidate cached engines (they are rebuilt
+    /// per session via prepare anyway).
     private func engineKey(
         for source: RecognitionLanguageSelection, kind: String? = nil
     ) -> RecognitionLanguageSelection {
@@ -1052,49 +1051,35 @@ final class CaptionPipeline {
     /// Why a chosen live engine couldn't be used as-is.
     enum ASRFallbackNotice: Equatable {
         case modelMissing
-        case hybridNeedsConcreteLanguage
     }
 
-    /// Resolve the Settings engine choice to the kind that can actually
-    /// run. Hybrid needs the SenseVoice model AND a concrete source
-    /// language (its Apple display child is single-locale); with Auto it
-    /// falls back to pure SenseVoice so per-utterance language detection
-    /// keeps working. Pure for testing.
+    /// Hybrid is the only live engine — there is no Settings choice.
+    /// It needs the SenseVoice model AND a concrete source language (its
+    /// Apple display child is single-locale): with Auto it silently drops
+    /// to pure SenseVoice so per-utterance language detection keeps
+    /// working, and without the model it falls back to Apple with a
+    /// status pill. Pure for testing.
     nonisolated static func resolveASRKind(
-        setting: String?,
         senseVoiceInstalled: Bool,
         source: RecognitionLanguageSelection
     ) -> (kind: String, notice: ASRFallbackNotice?) {
-        switch setting {
-        case "sensevoice":
-            return senseVoiceInstalled
-                ? ("sensevoice", nil) : ("apple", .modelMissing)
-        case "hybrid":
-            guard senseVoiceInstalled else { return ("apple", .modelMissing) }
-            return source == .auto
-                ? ("sensevoice", .hybridNeedsConcreteLanguage) : ("hybrid", nil)
-        default:
-            return ("apple", nil)
-        }
+        guard senseVoiceInstalled else { return ("apple", .modelMissing) }
+        return source == .auto ? ("sensevoice", nil) : ("hybrid", nil)
     }
 
     private func ensureEngine(for source: RecognitionLanguageSelection) {
         #if os(macOS)
-        let setting: String? = nil
+        // No sherpa runtime in the native Mac app — Apple is all there is.
+        let (kind, notice): (String, ASRFallbackNotice?) = ("apple", nil)
         #else
-        let setting = UserDefaults.standard.string(forKey: "asr.engine")
-        #endif
         let (kind, notice) = Self.resolveASRKind(
-            setting: setting,
             senseVoiceInstalled: SenseVoiceModelStore.isInstalled,
             source: source)
+        #endif
         switch notice {
         case .modelMissing:
             setStatus(.asr, String(
                 localized: "SenseVoice model not downloaded — using Apple recognition."))
-        case .hybridNeedsConcreteLanguage:
-            setStatus(.asr, String(
-                localized: "Hybrid needs a specific language — using SenseVoice for Auto."))
         case nil:
             setStatus(.asr, nil)
         }

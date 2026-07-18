@@ -181,68 +181,58 @@ struct HybridVolatileComposerTests {
 }
 
 struct ASRKindResolutionTests {
-    @Test func appleSettingResolvesApple() {
+    @Test func installedConcreteResolvesHybrid() {
         let resolved = CaptionPipeline.resolveASRKind(
-            setting: "apple", senseVoiceInstalled: true, source: .language(.japanese))
-        #expect(resolved.kind == "apple")
-        #expect(resolved.notice == nil)
-    }
-
-    @Test func nilSettingResolvesApple() {
-        let resolved = CaptionPipeline.resolveASRKind(
-            setting: nil, senseVoiceInstalled: true, source: .auto)
-        #expect(resolved.kind == "apple")
-        #expect(resolved.notice == nil)
-    }
-
-    @Test func senseVoiceInstalledResolvesSenseVoice() {
-        let resolved = CaptionPipeline.resolveASRKind(
-            setting: "sensevoice", senseVoiceInstalled: true, source: .auto)
-        #expect(resolved.kind == "sensevoice")
-        #expect(resolved.notice == nil)
-    }
-
-    @Test func senseVoiceMissingFallsBackToAppleWithNotice() {
-        let resolved = CaptionPipeline.resolveASRKind(
-            setting: "sensevoice", senseVoiceInstalled: false, source: .auto)
-        #expect(resolved.kind == "apple")
-        #expect(resolved.notice == .modelMissing)
-    }
-
-    @Test func hybridInstalledConcreteResolvesHybrid() {
-        let resolved = CaptionPipeline.resolveASRKind(
-            setting: "hybrid", senseVoiceInstalled: true, source: .language(.japanese))
+            senseVoiceInstalled: true, source: .language(.japanese))
         #expect(resolved.kind == "hybrid")
         #expect(resolved.notice == nil)
     }
 
-    @Test func hybridWithAutoFallsBackToSenseVoiceWithNotice() {
+    @Test func installedAutoFallsBackToSenseVoiceSilently() {
+        // Auto keeps per-utterance language detection on pure SenseVoice —
+        // no status pill; the fallback is the intended Auto behavior.
         let resolved = CaptionPipeline.resolveASRKind(
-            setting: "hybrid", senseVoiceInstalled: true, source: .auto)
+            senseVoiceInstalled: true, source: .auto)
         #expect(resolved.kind == "sensevoice")
-        #expect(resolved.notice == .hybridNeedsConcreteLanguage)
+        #expect(resolved.notice == nil)
     }
 
-    @Test func hybridMissingModelFallsBackToAppleWithNotice() {
+    @Test func missingModelFallsBackToAppleWithNotice() {
         let resolved = CaptionPipeline.resolveASRKind(
-            setting: "hybrid", senseVoiceInstalled: false, source: .language(.chinese))
+            senseVoiceInstalled: false, source: .language(.chinese))
+        #expect(resolved.kind == "apple")
+        #expect(resolved.notice == .modelMissing)
+    }
+
+    @Test func missingModelAutoFallsBackToAppleWithNotice() {
+        let resolved = CaptionPipeline.resolveASRKind(
+            senseVoiceInstalled: false, source: .auto)
         #expect(resolved.kind == "apple")
         #expect(resolved.notice == .modelMissing)
     }
 
     @Test func dolphinFinalsGate() {
-        // Upgrades only for the hybrid record role (preferred), with the
-        // model installed, on a concrete non-English language.
+        // Auto (the default) upgrades 中/日/한 finals when the model is
+        // installed; "sensevoice" vetoes the upgrade; English and .auto
+        // never upgrade regardless of choice.
         #expect(SenseVoiceEngine.usesDolphinFinals(
-            preferred: true, dolphinInstalled: true, source: .language(.japanese)))
+            choice: "auto", preferred: true, dolphinInstalled: true,
+            source: .language(.japanese)))
         #expect(!SenseVoiceEngine.usesDolphinFinals(
-            preferred: false, dolphinInstalled: true, source: .language(.japanese)))
+            choice: "sensevoice", preferred: true, dolphinInstalled: true,
+            source: .language(.japanese)))
         #expect(!SenseVoiceEngine.usesDolphinFinals(
-            preferred: true, dolphinInstalled: false, source: .language(.japanese)))
+            choice: "auto", preferred: false, dolphinInstalled: true,
+            source: .language(.japanese)))
         #expect(!SenseVoiceEngine.usesDolphinFinals(
-            preferred: true, dolphinInstalled: true, source: .language(.english)))
+            choice: "auto", preferred: true, dolphinInstalled: false,
+            source: .language(.japanese)))
         #expect(!SenseVoiceEngine.usesDolphinFinals(
-            preferred: true, dolphinInstalled: true, source: .auto))
+            choice: "auto", preferred: true, dolphinInstalled: true,
+            source: .language(.english)))
+        #expect(!SenseVoiceEngine.usesDolphinFinals(
+            choice: "auto", preferred: true, dolphinInstalled: true,
+            source: .auto))
     }
 }
 

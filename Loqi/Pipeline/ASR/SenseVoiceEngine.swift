@@ -76,14 +76,16 @@ actor SenseVoiceEngine: SpeechEngine {
         self.prefersDolphinFinals = prefersDolphinFinals
     }
 
-    /// Pure gate for the finals upgrade. Never for `.auto` (Dolphin
-    /// reports no language, and hybrid always has a concrete one) and
-    /// never for English (outside Dolphin's Eastern-language set).
+    /// Pure gate for the finals upgrade. The Settings "Finals model" choice
+    /// (`asr.finalsModel`: "auto" default, or "sensevoice" to veto) is the
+    /// user's say; the rest is hard constraint — never for `.auto` (Dolphin
+    /// reports no language, and hybrid always has a concrete one) and never
+    /// for English (outside Dolphin's Eastern-language set).
     nonisolated static func usesDolphinFinals(
-        preferred: Bool, dolphinInstalled: Bool,
+        choice: String, preferred: Bool, dolphinInstalled: Bool,
         source: RecognitionLanguageSelection
     ) -> Bool {
-        guard preferred, dolphinInstalled,
+        guard choice != "sensevoice", preferred, dolphinInstalled,
               case .language(let language) = source else { return false }
         return OfflineTranscriber.dolphinSupports(language)
     }
@@ -99,7 +101,9 @@ actor SenseVoiceEngine: SpeechEngine {
             throw SenseVoiceError.modelMissing
         }
         let reduceHeat = UserDefaults.standard.bool(forKey: "perf.reduceHeat")
+        let finalsChoice = UserDefaults.standard.string(forKey: "asr.finalsModel") ?? "auto"
         let dolphinFinals = Self.usesDolphinFinals(
+            choice: finalsChoice,
             preferred: prefersDolphinFinals,
             dolphinInstalled: DolphinModelStore.isInstalled,
             source: sourceSelection)
