@@ -4523,20 +4523,10 @@
         }
       }
     },
-    "Runs much faster than the recording length. Everything stays on this iPhone." : {
+    "Mic pickup should match how the recording was made — pick a wider setting if distant speakers were missed. Runs much faster than the recording length. Everything stays on this iPhone." : {
       "localizations" : {
-        "ja" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "録音の長さよりずっと速く完了します。すべてこの iPhone 上で処理されます。"
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "远快于录音时长。全部在这台 iPhone 上完成。"
-          }
-        }
+        "ja" : { "stringUnit" : { "state" : "translated", "value" : "マイクの拾い方は録音時の設定に合わせてください — 遠くの話者が抜けていた場合は広めの設定を選びます。録音の長さよりずっと速く完了し、すべてこの iPhone 上で処理されます。" } },
+        "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "麦克风拾音应与录音时的设置一致 — 若漏掉了较远的说话人，请选择更广的档位。远快于录音时长，全部在这台 iPhone 上完成。" } }
       }
     },
     "Same language selected: the recording will be transcribed without translation." : {

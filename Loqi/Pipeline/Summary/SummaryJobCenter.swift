@@ -104,6 +104,10 @@ final class SummaryJobCenter {
         let style: SummaryStyle
         let length: SummaryLength
         let allowDownload: Bool
+        /// VAD sensitivity for the offline pass — recordings don't store
+        /// their preset, so manual re-transcribe carries the user's pick
+        /// and the auto pass uses the current preset.
+        let sensitivity: MicSensitivity
         let kind: Kind
     }
 
@@ -553,11 +557,12 @@ final class SummaryJobCenter {
         sessionID: UUID,
         style: SummaryStyle,
         length: SummaryLength,
+        sensitivity: MicSensitivity = .current,
         allowDownload: Bool = false
     ) {
         enqueueRetranscribe(
             ids: [sessionID], style: style, length: length,
-            allowDownload: allowDownload)
+            sensitivity: sensitivity, allowDownload: allowDownload)
     }
 
     /// Re-draft every entry's translation to the record's current
@@ -752,6 +757,9 @@ final class SummaryJobCenter {
         retranscribeQueue.append(RetranscribeRequest(
             sessionID: sessionID, style: style, length: length,
             allowDownload: allowDownload,
+            // The recording's preset isn't stored; the current one is the
+            // best proxy (it's what live capture just used).
+            sensitivity: MicSensitivity.current,
             kind: .newRecording(
                 backend: backend,
                 speakerCount: speakerCount,
@@ -766,6 +774,7 @@ final class SummaryJobCenter {
         ids: [UUID],
         style: SummaryStyle,
         length: SummaryLength,
+        sensitivity: MicSensitivity = .current,
         allowDownload: Bool = false
     ) {
         guard !isRecording() else {
@@ -784,7 +793,8 @@ final class SummaryJobCenter {
             activities[id] = .queuedRetranscribe
             retranscribeQueue.append(RetranscribeRequest(
                 sessionID: id, style: style, length: length,
-                allowDownload: allowDownload, kind: .manual))
+                allowDownload: allowDownload, sensitivity: sensitivity,
+                kind: .manual))
         }
         drainRetranscribeQueue()
     }
@@ -860,6 +870,7 @@ final class SummaryJobCenter {
                 var record = try await retranscriber.retranscribe(
                     session,
                     backend: backend,
+                    sensitivity: request.sensitivity,
                     alreadyDecoded: seedRetranscribeCheckpoint(
                         sessionID: sessionID, backend: backend),
                     onSegmentComplete: retranscribeSegmentRecorder(
@@ -891,6 +902,7 @@ final class SummaryJobCenter {
                     backend: backend,
                     speakerCount: speakerCount,
                     voiceprint: voiceprint,
+                    sensitivity: request.sensitivity,
                     alreadyDecoded: backend.map {
                         seedRetranscribeCheckpoint(sessionID: sessionID, backend: $0)
                     } ?? [],

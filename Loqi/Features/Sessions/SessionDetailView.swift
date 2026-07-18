@@ -178,8 +178,8 @@ struct SessionDetailView: View {
             }
         }
         .sheet(isPresented: $showingRetranscribeOptions) {
-            RetranscribeOptionsSheet(pipeline: pipeline, sessionID: sessionID) {
-                requestRetranscribe()
+            RetranscribeOptionsSheet(pipeline: pipeline, sessionID: sessionID) { sensitivity in
+                requestRetranscribe(sensitivity: sensitivity)
             }
         }
         .sheet(isPresented: $showingIdentifySpeakers) {
@@ -911,7 +911,7 @@ struct SessionDetailView: View {
             suggestVocabulary: suggestVocabulary)
     }
 
-    private func requestRetranscribe() {
+    private func requestRetranscribe(sensitivity: MicSensitivity) {
         guard !pipeline.isRunning else { return }
         // ASR + fixup need no LLM; only the re-summary does. With AI on but
         // the model absent, prompt to download it (for the summary). With
@@ -921,7 +921,8 @@ struct SessionDetailView: View {
             return
         }
         pipeline.jobs.retranscribeAndSummarize(
-            sessionID: sessionID, style: selectedStyle, length: selectedLength)
+            sessionID: sessionID, style: selectedStyle, length: selectedLength,
+            sensitivity: sensitivity)
     }
 
     private func requestSuggestHotwords() {
@@ -1397,8 +1398,18 @@ struct RetranscribeOptionsSheet: View {
     @Bindable var pipeline: CaptionPipeline
     let sessionID: UUID
     /// Host's requestRetranscribe (handles the AI gates + download consent).
-    let start: () -> Void
+    let start: (MicSensitivity) -> Void
     @Environment(\.dismiss) private var dismiss
+
+    /// Recordings don't store their preset, so let the user pick the VAD
+    /// sensitivity for this pass — a quiet/far meeting needs "Meeting room"
+    /// or the offline VAD drops distant utterances. Defaults to the
+    /// current live preset.
+    @State private var sensitivityRaw = MicSensitivity.current.rawValue
+
+    private var sensitivity: MicSensitivity {
+        MicSensitivity(rawValue: sensitivityRaw) ?? .current
+    }
 
     private var session: SessionRecord? {
         pipeline.archive.sessions.first { $0.id == sessionID }
@@ -1415,7 +1426,7 @@ struct RetranscribeOptionsSheet: View {
             primaryActionTitle: "Start",
             primaryAction: {
                 dismiss()
-                start()
+                start(sensitivity)
             }
         ) {
             if let session {
@@ -1423,6 +1434,12 @@ struct RetranscribeOptionsSheet: View {
                     LabeledContent("Engine", value: backend.displayName)
                     LabeledContent("Speakers", value: speakersText(session))
                     LabeledContent("Translate to", value: translationText(session))
+                    Picker("Mic pickup", selection: $sensitivityRaw) {
+                        ForEach(MicSensitivity.allCases) { preset in
+                            Label(preset.displayName, systemImage: preset.symbolName)
+                                .tag(preset.rawValue)
+                        }
+                    }
                 } footer: {
                     VStack(alignment: .leading, spacing: 6) {
                         if pipeline.llmEnabled {
@@ -1430,7 +1447,7 @@ struct RetranscribeOptionsSheet: View {
                         } else {
                             Text("Replaces the transcript with a fresh transcription of the recording. AI features are off, so it skips cleanup and doesn't re-summarize.")
                         }
-                        Text("Runs much faster than the recording length. Everything stays on this iPhone.")
+                        Text("Mic pickup should match how the recording was made — pick a wider setting if distant speakers were missed. Runs much faster than the recording length. Everything stays on this iPhone.")
                     }
                 }
                 if session.summaryEdited == true {

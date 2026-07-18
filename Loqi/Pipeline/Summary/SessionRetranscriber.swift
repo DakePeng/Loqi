@@ -92,6 +92,7 @@ struct SessionRetranscriber {
     func retranscribe(
         _ record: SessionRecord,
         backend: OfflineTranscriber.Backend,
+        sensitivity: MicSensitivity = .balanced,
         alreadyDecoded: [SessionRecord.ImportCheckpoint.Segment] = [],
         onSegmentComplete: (@MainActor @Sendable (SessionRecord.ImportCheckpoint.Segment) -> Void)? = nil,
         onPhase: @escaping @MainActor @Sendable (Phase) -> Void
@@ -115,6 +116,7 @@ struct SessionRetranscriber {
             contentsOf: url,
             language: direction.source,
             backend: backend,
+            sensitivity: sensitivity,
             alreadyDecoded: alreadyDecoded,
             onSegmentComplete: onSegmentComplete
         ) { fraction in
@@ -185,6 +187,7 @@ struct SessionRetranscriber {
         backend: OfflineTranscriber.Backend?,
         speakerCount: Int?,
         voiceprint: VoiceprintService,
+        sensitivity: MicSensitivity = .balanced,
         alreadyDecoded: [SessionRecord.ImportCheckpoint.Segment] = [],
         onSegmentComplete: (@MainActor @Sendable (SessionRecord.ImportCheckpoint.Segment) -> Void)? = nil,
         onPhase: @escaping @MainActor @Sendable (Phase) -> Void
@@ -194,6 +197,7 @@ struct SessionRetranscriber {
             do {
                 updated = try await retranscribe(
                     updated, backend: backend,
+                    sensitivity: sensitivity,
                     alreadyDecoded: alreadyDecoded,
                     onSegmentComplete: onSegmentComplete,
                     onPhase: onPhase)
