@@ -299,23 +299,23 @@ struct ImportAudioSheetTests {
     }
 }
 
-/// Empty-decode rescue: suspicious segments split into exact halves so a
-/// blanked autoregressive decode can't silently eat transcript content.
-struct RetryHalvesTests {
-    @Test func halvesCoverTheSegmentExactly() {
-        let halves = VADSegmentedTranscriber.retryHalves(start: 16_000, count: 161_000)
-        #expect(halves.count == 2)
-        #expect(halves[0].start == 16_000)
-        #expect(halves[0].count == 80_500)
-        #expect(halves[1].start == 96_500)
-        #expect(halves[1].count == 80_500)
-        #expect(halves[0].count + halves[1].count == 161_000)
+/// Empty-decode rescue: a CTC (Dolphin) blank is re-decoded with silence
+/// padding — not split into shorter halves, which blanks harder.
+struct SilencePadRescueTests {
+    @Test func wrapsSamplesWithSilenceBothSides() {
+        let pad = VADSegmentedTranscriber.emptyRetryPadSamples
+        let speech = [Float](repeating: 0.5, count: 8_000)
+        let padded = VADSegmentedTranscriber.silencePadded(speech)
+        #expect(padded.count == speech.count + 2 * pad)
+        // Silence at the head and tail; the speech survives in the middle.
+        #expect(padded.prefix(pad).allSatisfy { $0 == 0 })
+        #expect(padded.suffix(pad).allSatisfy { $0 == 0 })
+        #expect(Array(padded[pad..<(pad + speech.count)]) == speech)
     }
 
-    @Test func oddCountsLoseNothing() {
-        let halves = VADSegmentedTranscriber.retryHalves(start: 0, count: 33)
-        #expect(halves[0].count + halves[1].count == 33)
-        #expect(halves[1].start == 16)
+    @Test func padIsAQuarterSecondScaleAt16k() {
+        // 0.3s each side at 16 kHz — enough CTC settling frames.
+        #expect(VADSegmentedTranscriber.emptyRetryPadSamples == 4_800)
     }
 }
 

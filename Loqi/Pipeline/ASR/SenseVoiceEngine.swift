@@ -283,7 +283,14 @@ actor SenseVoiceEngine: SpeechEngine {
             finalTail = Task { [weak self] in
                 await previous?.value
                 let decodeStart = ContinuousClock.now
-                let result = await decode(samples)
+                var result = await decode(samples)
+                // A CTC final (Dolphin) can come back all-blank when the
+                // VAD cropped the segment tight or it's short; re-decode
+                // padded with silence before dropping it. Offline mirrors
+                // this in VADSegmentedTranscriber.decodeSegment.
+                if result.text.isEmpty {
+                    result = await decode(VADSegmentedTranscriber.silencePadded(samples))
+                }
                 let d = decodeStart.duration(to: .now)
                 await self?.addDecodeActiveSeconds(d)
                 await self?.deliverFinal(result)

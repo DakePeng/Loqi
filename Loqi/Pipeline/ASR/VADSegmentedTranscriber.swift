@@ -35,23 +35,23 @@ enum VADSegmentedTranscriber {
         alreadyDecoded.first(where: { $0.start == start && $0.end == end })?.text
     }
 
-    /// A decode that comes back empty for a clearly-speech-length segment
-    /// is suspicious (autoregressive decoders can blank out near their
-    /// token budget); retrying the halves rescues the content instead of
-    /// silently dropping it from the transcript. Pure split for testing.
-    static func retryHalves(start: Int, count: Int) -> [(start: Int, count: Int)] {
-        let firstHalf = count / 2
-        return [(start, firstHalf), (start + firstHalf, count - firstHalf)]
+    /// Silence prepended and appended when re-decoding a segment that came
+    /// back empty. A CTC model (Dolphin) emits an all-blank path when the
+    /// speech is cropped tight at the segment boundaries or the clip is too
+    /// short; padding gives it settling frames and un-clips the edges — the
+    /// standard CTC rescue. 0.3s each side. (This replaced a retry-halves
+    /// rescue built for autoregressive token-budget blanks: halving a CTC
+    /// segment makes it SHORTER, which blanks harder — exactly wrong.)
+    static let emptyRetryPadSamples = sampleRate * 3 / 10
+    static func silencePadded(_ samples: [Float]) -> [Float] {
+        let pad = [Float](repeating: 0, count: emptyRetryPadSamples)
+        return pad + samples + pad
     }
-
-    /// Segments at least this long should never legitimately decode to
-    /// nothing — below it, empty just means noise.
-    private static let suspiciousEmptySamples = sampleRate * 2
 
     private static let logger = Logger(
         subsystem: "com.kunzhipeng.loqi", category: "import")
 
-    /// Decode one VAD segment, splitting once on a suspicious empty result.
+    /// Decode one VAD segment, re-decoding padded once on an empty result.
     private static func decodeSegment(
         samples: [Float], start: Int,
         decode: ([Float]) async -> String
@@ -61,18 +61,13 @@ enum VADSegmentedTranscriber {
             let (s, e) = timeRange(start: start, n: samples.count, sampleRate: sampleRate)
             return [Utterance(text: text, start: s, end: e)]
         }
-        guard samples.count >= suspiciousEmptySamples else { return [] }
-        logger.warning("empty decode for \(samples.count) samples; retrying halves")
-        var rescued: [Utterance] = []
-        for half in retryHalves(start: start, count: samples.count) {
-            let slice = Array(samples[(half.start - start)..<(half.start - start + half.count)])
-            let halfText = await decode(slice)
-            if !halfText.isEmpty {
-                let (s, e) = timeRange(start: half.start, n: half.count, sampleRate: sampleRate)
-                rescued.append(Utterance(text: halfText, start: s, end: e))
-            }
-        }
-        return rescued
+        // Silence-pad rescue, keeping the ORIGINAL VAD time range (only the
+        // decoder input is padded, so diarization/seek are unaffected).
+        let padded = await decode(silencePadded(samples))
+        guard !padded.isEmpty else { return [] }
+        logger.warning("empty decode for \(samples.count) samples; silence-pad rescue recovered it")
+        let (s, e) = timeRange(start: start, n: samples.count, sampleRate: sampleRate)
+        return [Utterance(text: padded, start: s, end: e)]
     }
 
     /// Maximum decoders the pool helper will ever return — two extra
@@ -131,11 +126,8 @@ enum VADSegmentedTranscriber {
     /// function of the same audio, so a replay reproduces the same
     /// ranges). `onSegmentComplete` reports each freshly-decoded (non-empty)
     /// segment as it lands, so a caller can checkpoint it immediately.
-    /// ponytail: a segment rescued by `retryHalves` caches under its two
-    /// half-ranges, not the parent range, so a resume re-decodes it once
-    /// more instead of matching — harmless (same deterministic result),
-    /// just not a free skip; only worth precise sub-range matching if that
-    /// shows up as a real resume-time cost.
+    /// A silence-pad rescue keeps the segment's original time range, so it
+    /// checkpoints and resumes exactly like a normal decode.
     static func transcribe(
         samples16k samples: [Float],
         vadModelPath: String,
@@ -164,8 +156,8 @@ enum VADSegmentedTranscriber {
         // maxSpeechDuration only tightens the VAD's gate; steady noise or
         // music keeps a segment open forever and the buffer grows without
         // bound. Force a split at 2× so decodes stay near the intended
-        // length (a too-long decode can come back empty and the
-        // retry-halves rescue re-splits it anyway).
+        // length (a too-long decode can come back empty; the silence-pad
+        // rescue re-decodes it anyway).
         var runLimiter = SpeechRunLimiter(
             limit: Int(maxSpeechDuration * 2) * sampleRate)
 
@@ -265,10 +257,7 @@ enum VADSegmentedTranscriber {
         return (Double(start) / rate, Double(start + n) / rate)
     }
 
-    static func retryHalves(start: Int, count: Int) -> [(start: Int, count: Int)] {
-        let firstHalf = count / 2
-        return [(start, firstHalf), (start + firstHalf, count - firstHalf)]
-    }
+    static func silencePadded(_ samples: [Float]) -> [Float] { samples }
 
     static func decoderPoolSize(
         freeBytes: UInt64, perInstanceBytes: UInt64, coreCount: Int, hardCap: Int
