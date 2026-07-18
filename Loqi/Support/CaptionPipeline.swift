@@ -1460,6 +1460,32 @@ final class CaptionPipeline {
         }
     }
 
+    /// Apply a new spoken language live — the same turn-restart machinery
+    /// as a translation-target change: endTurn's drain finalizes in-flight
+    /// speech, then the rebuilt engine/translation stack binds the new
+    /// route. The caller pre-adjusts the target (translating into the
+    /// spoken language makes no sense). Idle sessions pick the value up
+    /// at the next start.
+    func updateSource(_ source: RecognitionLanguageSelection, target: AppLanguage?) {
+        guard isRunning else { return }
+        Task {
+            try? await self.serialized { [self] in
+                guard case .listening(let route) = phase else { return }
+                let next = RecognitionRoute(source: source, target: target)
+                guard next != route else { return }
+                logger.info("restarting turn: spoken language changed")
+                await endTurn()
+                do {
+                    try await beginTurn(route: next)
+                    liveActivity.update(statusLabel: next.displayName, isPaused: false)
+                } catch {
+                    lastError = error.localizedDescription
+                    await endSession()
+                }
+            }
+        }
+    }
+
     // MARK: LLM + thermal management
 
     private func llmIsReady() async -> Bool {

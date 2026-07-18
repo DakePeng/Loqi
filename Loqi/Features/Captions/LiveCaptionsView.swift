@@ -801,8 +801,8 @@ private struct SummarySoFarSheet: View {
 
 /// The Record surface's three selectors as labeled rows with footers —
 /// one sheet opened by the idle chips AND the recording-bar buttons.
-/// Spoken language locks while recording (the route is fixed at start);
-/// translation and mic pickup apply live.
+/// All three apply live: the spoken language and mic pickup restart the
+/// turn (captions pause for a beat), translation redirects in place.
 private struct RecordingOptionsSheet: View {
     @Bindable var pipeline: CaptionPipeline
     @AppStorage("captions.source") private var sourceRaw
@@ -826,13 +826,8 @@ private struct RecordingOptionsSheet: View {
                         Text(language.displayName).tag(language.rawValue)
                     }
                 }
-                .disabled(pipeline.isRunning)
             } footer: {
-                if pipeline.isRunning {
-                    Text("Locked while recording — stop the session to change the spoken language.")
-                } else {
-                    Text("The language being spoken. Auto detects it as you talk.")
-                }
+                Text("The language being spoken. Auto detects it as you talk. Changing it mid-recording pauses captions for a moment.")
             }
             Section {
                 Picker("Translate to", selection: Binding(
@@ -868,8 +863,10 @@ private struct RecordingOptionsSheet: View {
         // Translating into the spoken language makes no sense.
         if sourceSelection != .auto, translationRaw == sourceSelection.rawValue {
             translationRaw = ""
-            pipeline.updateTranslationTarget(nil)
         }
+        // Live sessions restart the turn on the new route; idle is a no-op.
+        pipeline.updateSource(
+            sourceSelection, target: AppLanguage(rawValue: translationRaw))
     }
 
     private func setTranslation(_ raw: String) {

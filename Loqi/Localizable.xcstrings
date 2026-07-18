@@ -5936,6 +5936,22 @@
         }
       }
     },
+    "The language being spoken. Auto detects it as you talk. Changing it mid-recording pauses captions for a moment." : {
+      "localizations" : {
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "話される言語です。「自動」は話し始めると自動的に検出します。録音中に変更すると、字幕が一時的に止まります。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "说话所用的语言。“自动”会在你开口时自动检测。录音中更改会让字幕暂停片刻。"
+          }
+        }
+      }
+    },
     "The language summaries are written in. Auto follows your device language. Applies the next time you summarize." : {
       "localizations" : {
         "ja" : {
