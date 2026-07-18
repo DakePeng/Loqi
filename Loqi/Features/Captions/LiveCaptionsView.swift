@@ -30,6 +30,10 @@ struct LiveCaptionsView: View {
     @AppStorage("captions.translation") private var translationRaw = ""
     @AppStorage(MicSensitivity.defaultsKey) private var sensitivityRaw
         = MicSensitivity.far.rawValue
+    /// Same opt-out SessionDetailView.requestAutoSummarize honors: off means
+    /// the stop-flow summary must NOT re-transcribe or run the diarizer.
+    @AppStorage("summary.autoPostProcessNewRecordings")
+    private var autoPostProcessNewRecordings = false
     @State private var errorMessage: String?
     /// Start failed on the mic permission: the alert offers Open Settings
     /// instead of describing the journey.
@@ -98,12 +102,24 @@ struct LiveCaptionsView: View {
                             // speaker labels from the saved audio), then
                             // summarize — recordings have no live labels
                             // anymore, so plain summarize here would ship
-                            // every stop-flow session unlabeled.
-                            pipeline.jobs.postProcessAndSummarizeNewSession(
-                                sessionID: finishedID,
-                                style: style,
-                                length: length,
-                                suggestVocabulary: true)
+                            // every stop-flow session unlabeled. But honor
+                            // the opt-out: with auto post-process off, the
+                            // user does not want a re-transcribe/diarize
+                            // pass, so summarize the live transcript as-is
+                            // (same branch as requestAutoSummarize).
+                            if autoPostProcessNewRecordings {
+                                pipeline.jobs.postProcessAndSummarizeNewSession(
+                                    sessionID: finishedID,
+                                    style: style,
+                                    length: length,
+                                    suggestVocabulary: true)
+                            } else {
+                                pipeline.jobs.summarize(
+                                    sessionID: finishedID,
+                                    style: style,
+                                    length: length,
+                                    suggestVocabulary: true)
+                            }
                             pipeline.clearLastFinishedSession()
                             switchToSessions()
                         },

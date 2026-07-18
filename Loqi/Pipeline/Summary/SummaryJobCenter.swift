@@ -207,9 +207,19 @@ final class SummaryJobCenter {
             case .retranscribing:
                 if let req = activeRetranscribeRequest[sessionID] {
                     retranscribeQueue.insert(req, at: 0)
+                    activities[sessionID] = .pausedForRecording
+                    tasks[sessionID]?.cancel()
+                } else {
+                    // Direct retranslate / retryDiarization jobs wear a
+                    // .retranscribing badge but have no queued request to
+                    // restart from; the paused→queued path would strand
+                    // them (nothing drains the queue for them), leaving the
+                    // session busy forever. They persist nothing until they
+                    // finish, so cancel and clear — the user re-taps to run
+                    // them again after the recording.
+                    tasks[sessionID]?.cancel()
+                    activities[sessionID] = nil
                 }
-                activities[sessionID] = .pausedForRecording
-                tasks[sessionID]?.cancel()
             case .summarizing, .downloadingModel:
                 // A live summary would hold the 2B model the recording needs
                 // freed for the 0.8B tier. Suspend and restart after, exactly
@@ -347,6 +357,20 @@ final class SummaryJobCenter {
     private func suspendBackgroundUnsafeJobs() {
         for (sessionID, activity) in activities {
             guard Self.shouldSuspendForBackground(activity) else { continue }
+            // Direct retranslate / retryDiarization jobs wear a
+            // .retranscribing badge but have no queued request to resume
+            // from — the paused→queued resume path only restarts jobs with
+            // a retranscribeQueue entry, so these would stay stuck
+            // .pausedForBackground and keep the session busy. They persist
+            // nothing until they finish; cancel and clear so the user can
+            // re-run them on foreground.
+            if case .retranscribing = activity,
+               activeRetranscribeRequest[sessionID] == nil {
+                logger.info("bg suspend: dropping direct job \(sessionID, privacy: .public)")
+                tasks[sessionID]?.cancel()
+                activities[sessionID] = nil
+                continue
+            }
             logger.info("bg suspend: \(sessionID, privacy: .public) activity=\(String(describing: activity), privacy: .public)")
             if case .summarizing = activity,
                let req = activeSummarizeRequest[sessionID] {

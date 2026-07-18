@@ -1157,7 +1157,7 @@ struct SessionLanguagesSheet: View {
         self.pipeline = pipeline
         self.sessionID = sessionID
         let record = pipeline.archive.sessions.first { $0.id == sessionID }
-        _stagedSpoken = State(initialValue: Self.currentSpokenRaw(record))
+        _stagedSpoken = State(initialValue: record?.spokenLanguageRaw ?? "")
         _stagedTranslate = State(initialValue: Self.currentTranslateRaw(record))
         _stagedSummary = State(initialValue: record?.summaryLanguageRaw ?? "")
     }
@@ -1171,7 +1171,12 @@ struct SessionLanguagesSheet: View {
     }
 
     private var spokenChanged: Bool {
-        stagedSpoken != Self.currentSpokenRaw(session)
+        // Compare against the EXPLICIT override ("" = Auto/no override),
+        // NOT an inherited display value: for an Auto session the picker
+        // shows "Auto", so picking the first entry's own language still
+        // registers as a change and becomes an explicit override — the
+        // fix for forcing a whole misdetected session to one language.
+        stagedSpoken != (session?.spokenLanguageRaw ?? "")
     }
     private var translateChanged: Bool {
         stagedTranslate != Self.currentTranslateRaw(session)
@@ -1193,12 +1198,13 @@ struct SessionLanguagesSheet: View {
         ) {
             Section {
                 Picker("Spoken language", selection: $stagedSpoken) {
+                    Text("Auto").tag("")
                     ForEach(AppLanguage.allCases) { language in
                         Text(language.displayName).tag(language.rawValue)
                     }
                 }
             } footer: {
-                Text("What the recording is in. Fixes a wrong or misdetected language — re-transcription, translation, and transcript cleanup all follow it.")
+                Text("What the recording is in. Auto detects each line on its own; picking a language forces the whole recording to it — fixing a wrong or misdetected language. Re-transcription, translation, and transcript cleanup all follow it.")
             }
             Section {
                 Picker("Translate to", selection: $stagedTranslate) {
@@ -1228,14 +1234,6 @@ struct SessionLanguagesSheet: View {
         }
     }
 
-    /// The value each picker shows before any staging, with the same
-    /// fallbacks the pipeline uses.
-    private static func currentSpokenRaw(_ record: SessionRecord?) -> String {
-        record?.spokenLanguageRaw
-            ?? record?.entries.first?.direction.source.rawValue
-            ?? AppLanguage.english.rawValue
-    }
-
     /// The target the record was made with; transcribe-only shows as Off.
     private static func currentTranslateRaw(_ record: SessionRecord?) -> String {
         if let explicit = record?.translateToRaw { return explicit }
@@ -1247,7 +1245,10 @@ struct SessionLanguagesSheet: View {
     private func applyStaged() {
         guard var updated = session else { return }
         let translationAffected = spokenChanged || translateChanged
-        if spokenChanged { updated.spokenLanguageRaw = stagedSpoken }
+        // "" (Auto) clears the override back to per-line detection.
+        if spokenChanged {
+            updated.spokenLanguageRaw = stagedSpoken.isEmpty ? nil : stagedSpoken
+        }
         if translateChanged { updated.translateToRaw = stagedTranslate }
         if summaryChanged {
             updated.summaryLanguageRaw = stagedSummary.isEmpty ? nil : stagedSummary

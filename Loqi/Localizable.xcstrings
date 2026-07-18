@@ -6452,18 +6452,18 @@
         }
       }
     },
-    "What the recording is in. Fixes a wrong or misdetected language — re-transcription, translation, and transcript cleanup all follow it." : {
+    "What the recording is in. Auto detects each line on its own; picking a language forces the whole recording to it — fixing a wrong or misdetected language. Re-transcription, translation, and transcript cleanup all follow it." : {
       "localizations" : {
         "ja" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "録音の言語です。誤選択・誤検出された言語を修正します — 再文字起こし・翻訳・文字起こしのクリーンアップがこれに従います。"
+            "value" : "録音の言語です。「自動」は各行を個別に検出します。言語を選ぶと録音全体をその言語に固定し、誤選択・誤検出された言語を修正します。再文字起こし・翻訳・文字起こしのクリーンアップがこれに従います。"
           }
         },
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "录音所用的语言。用于纠正选错或误检测的语言 — 重新转写、翻译和文字清理都会遵循它。"
+            "value" : "录音所用的语言。“自动”会逐行单独检测；选择某种语言会将整个录音固定为该语言，用于纠正选错或误检测的语言。重新转写、翻译和文字清理都会遵循它。"
           }
         }
       }

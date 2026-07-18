@@ -296,6 +296,22 @@ struct UtteranceMergerTests {
         ], maxCharacters: 200).count == 2)
     }
 
+    @Test func turnChangeGapDoesNotMerge() {
+        // A silence-closed segment sits ≥0.5s (VAD minSilence) past the
+        // previous one — this is EVERY speaker turn change. It must not
+        // fuse into the prior fragment even without terminal punctuation,
+        // or diarization would attribute both turns to one speaker. (Under
+        // the old 0.8s gap this 0.5s pair merged into one.)
+        #expect(UtteranceMerger.merge([
+            u("はいそうです", 0, 3), u("私もそう思います", 3.5, 6),
+        ]).count == 2)
+        // A forced mid-speech cap-split (~0 gap, same speaker continuing)
+        // still heals into one sentence.
+        #expect(UtteranceMerger.merge([
+            u("まだ話が続いていて", 0, 12), u("終わりました。", 12.03, 15),
+        ]).count == 1)
+    }
+
     @Test func chainAndPassthroughAndOverlap() {
         // Three fragments chain into one sentence.
         let chained = UtteranceMerger.merge([

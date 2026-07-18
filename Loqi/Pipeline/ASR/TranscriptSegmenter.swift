@@ -126,9 +126,19 @@ enum UtteranceMerger {
     /// `maxCharacters` (the backstop for punctuation-less CTC backends
     /// and the LFM2.5 refine token budget). Merged start = the first
     /// fragment's, end = the last's.
+    ///
+    /// `maxGap` is deliberately below the VAD's minimum
+    /// `minSilenceDuration` (0.5s, MicSensitivity). A segment only closes
+    /// on silence OR the forced max-speech cap: silence-closed segments —
+    /// which is EVERY speaker turn change (the first speaker stops, the
+    /// VAD waits out its silence, the next speaker starts) — are therefore
+    /// ≥0.5s apart and never merge, while a forced mid-speech cap-split
+    /// leaves the same speaker continuing at a ~0s gap and still heals.
+    /// This keeps a fast back-and-forth from being fused into one speaker
+    /// before diarization attributes the merged span to a single slot.
     static func merge(
         _ utterances: [Utterance],
-        maxGap: TimeInterval = 0.8,
+        maxGap: TimeInterval = 0.4,
         maxDuration: TimeInterval = 20,
         maxCharacters: Int = 200
     ) -> [Utterance] {
