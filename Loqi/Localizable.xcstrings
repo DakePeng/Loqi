@@ -2527,40 +2527,6 @@
         }
       }
     },
-    "Hybrid (responsive + accurate)" : {
-      "extractionState" : "stale",
-      "localizations" : {
-        "ja" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "ハイブリッド（高速 + 高精度）"
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "混合（灵敏 + 高精度）"
-          }
-        }
-      }
-    },
-    "Hybrid needs a specific language — using SenseVoice for Auto." : {
-      "extractionState" : "stale",
-      "localizations" : {
-        "ja" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "ハイブリッドには言語の指定が必要です — 自動検出では SenseVoice を使用します。"
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "混合模式需要指定语言 — 自动检测时使用 SenseVoice。"
-          }
-        }
-      }
-    },
     "I speak" : {
       "extractionState" : "stale",
       "localizations" : {
@@ -3041,23 +3007,6 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "加载中"
-          }
-        }
-      }
-    },
-    "Locked while recording — stop the session to change the spoken language." : {
-      "extractionState" : "stale",
-      "localizations" : {
-        "ja" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "録音中はロックされます — 話す言語を変えるには録音を停止してください。"
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "录音期间已锁定 — 要更改说话语言，请先停止录音。"
           }
         }
       }
@@ -5915,23 +5864,6 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "AI 模型尚未加载——它会在说话间隙预热。请稍后再试。"
-          }
-        }
-      }
-    },
-    "The language being spoken. Auto detects it as you talk." : {
-      "extractionState" : "stale",
-      "localizations" : {
-        "ja" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "話される言語です。「自動」は話し始めると自動的に検出します。"
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "说话所用的语言。“自动”会在你开口时自动检测。"
           }
         }
       }
