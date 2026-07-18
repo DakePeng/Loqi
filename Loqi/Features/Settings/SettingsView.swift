@@ -11,6 +11,8 @@ struct SettingsView: View {
     @AppStorage("audio.saveRecordings") private var saveRecordings = true
     @AppStorage("display.keepScreenOn") private var keepScreenOn = true
     @AppStorage("perf.reduceHeat") private var reduceHeat = false
+    @AppStorage("debug.showOriginalRecognition")
+    private var showOriginalRecognition = false
     @AppStorage("asr.finalsModel") private var asrFinalsModel = "auto"
     @AppStorage("asr.source") private var asrSourceRaw = ASRModelSource.modelScope.rawValue
     @AppStorage("summary.autoPostProcessNewRecordings")
@@ -307,7 +309,7 @@ struct SettingsView: View {
                     Text("Lowers sustained heat during long recordings: slower live-caption updates, fewer speech recognition threads, and refinement only on longer sentences. Takes effect on the next recording.")
                 }
 
-                Section("Diagnostics") {
+                Section {
                     LabeledContent("Model state", value: llmState)
                     LabeledContent("Available memory", value: availableMemory)
                     LabeledContent("Thermal state", value: thermalLabel)
@@ -336,6 +338,11 @@ struct SettingsView: View {
                         "Heat driver",
                         value: SessionHeatStats.dominant(
                             llmSeconds: llmActiveSeconds, asrSeconds: asrActiveSeconds))
+                    Toggle("Show original recognition", isOn: $showOriginalRecognition)
+                } header: {
+                    Text("Diagnostics")
+                } footer: {
+                    Text("Under each transcript line, show the raw speech-recognition text before AI cleanup when they differ. If a word is here but missing above, the cleanup dropped it; if it's missing from both, recognition never caught it.")
                 }
 
                 Section {

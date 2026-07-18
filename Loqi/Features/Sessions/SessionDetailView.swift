@@ -57,6 +57,11 @@ struct SessionDetailView: View {
     @AppStorage("record.autoSuggest") private var autoSuggest = true
     @AppStorage("summary.autoPostProcessNewRecordings")
     private var autoPostProcessNewRecordings = false
+    /// Diagnostic: render each entry's pre-cleanup ASR text (`rawSourceText`)
+    /// under the displayed line when they differ, to tell whether the
+    /// LFM2.5 cleanup dropped words vs the decoder never producing them.
+    @AppStorage("debug.showOriginalRecognition")
+    private var showOriginalRecognition = false
 
     /// What to run once the user consents to downloading the model.
     private enum DownloadAction: Equatable {
@@ -728,6 +733,16 @@ struct SessionDetailView: View {
                     Text(entry.sourceText)
                         .font(.caption)
                         .foregroundStyle(.secondary)
+                    // Diagnostic: the pre-cleanup ASR text, shown only when
+                    // it differs from the displayed line. Words present here
+                    // but missing above = the LFM2.5 cleanup dropped them.
+                    if showOriginalRecognition,
+                       let raw = entry.rawSourceText, raw != entry.sourceText {
+                        Text(raw)
+                            .font(.caption2.monospaced())
+                            .foregroundStyle(.orange)
+                            .textSelection(.enabled)
+                    }
                     if let translation = entry.translation {
                         Text(translation)
                     }

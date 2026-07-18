@@ -1,6 +1,38 @@
 {
   "sourceLanguage" : "en",
   "strings" : {
+    "Show original recognition" : {
+      "localizations" : {
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "元の認識結果を表示"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "显示原始识别结果"
+          }
+        }
+      }
+    },
+    "Under each transcript line, show the raw speech-recognition text before AI cleanup when they differ. If a word is here but missing above, the cleanup dropped it; if it's missing from both, recognition never caught it." : {
+      "localizations" : {
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "各文字起こし行の下に、AIクリーンアップ前の生の音声認識テキストを（相違がある場合のみ）表示します。ここに単語があって上にない場合はクリーンアップが削除したもの、どちらにもない場合は認識が拾えなかったものです。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "在每行文字下方显示 AI 清理前的原始语音识别文本（仅当二者不同时）。若某词在此处出现但上方缺失，说明是清理删除的；若两处都缺失，则是识别未捕捉到。"
+          }
+        }
+      }
+    },
     "· %@" : {
 
     },
