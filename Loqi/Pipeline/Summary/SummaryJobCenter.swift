@@ -2074,6 +2074,12 @@ enum BackgroundProcessingScheduler {
         do {
             try BGTaskScheduler.shared.submit(request)
             logger.notice("bg-asr: scheduled")
+            // Confirm the daemon actually holds it — a submit can succeed
+            // locally yet show 0 pending if the daemon dropped it (the
+            // `_simulateLaunch` "no task request scheduled" case).
+            BGTaskScheduler.shared.getPendingTaskRequests { requests in
+                logger.notice("bg-asr: pending requests now \(requests.count)")
+            }
         } catch {
             logger.error("bg-asr: schedule failed \(error.localizedDescription, privacy: .public)")
         }
