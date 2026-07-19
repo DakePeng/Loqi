@@ -216,11 +216,21 @@ final class FileImportEngine {
                         }
                     }
                 }
-                slots = SpeakerAttribution.denselyRenumbered(
-                    SpeakerAttribution.attribute(
-                        utterances: utterances.map { ($0.start, $0.end) },
-                        to: segments))
-                logger.info("import: \(Set(segments.map(\.slot)).count) speakers across \(segments.count) segments")
+                // Refuse an over-split Auto result — long/noisy imports can
+                // otherwise archive dozens of phantom speakers. Same bound
+                // the re-transcribe and standalone-retry paths apply; the
+                // flag drives the Retry affordance (slots stay nil).
+                if SessionRetranscriber.isImplausibleAutoResult(
+                    segments: segments, speakerCount: speakerCount) {
+                    speakerSeparationFailed = true
+                    logger.warning("import diarize rejected: \(Set(segments.map(\.slot)).count) auto speakers")
+                } else {
+                    slots = SpeakerAttribution.denselyRenumbered(
+                        SpeakerAttribution.attribute(
+                            utterances: utterances.map { ($0.start, $0.end) },
+                            to: segments))
+                    logger.info("import: \(Set(segments.map(\.slot)).count) speakers across \(segments.count) segments")
+                }
             } catch is CancellationError {
                 // A background/yield preempt mid-diarization must stop the
                 // whole import (checkpointed, resumed on foreground) — not

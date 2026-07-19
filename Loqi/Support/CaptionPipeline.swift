@@ -1294,7 +1294,7 @@ final class CaptionPipeline {
         // backgrounded entry marked refining would spin forever. It takes the
         // draft path instead.
         if wantsRefinement, llmEnabled, !isBackgrounded,
-           thermal.policy == .full, await llmIsReady() {
+           thermal.policy == .full, await liveRefineReady() {
             store.markRefining(entry.id)
             await refinement?.enqueue(RefinementQueue.Job(
                 entryID: entry.id,
@@ -1501,6 +1501,16 @@ final class CaptionPipeline {
     private func llmIsReady() async -> Bool {
         if case .ready = await llm.loadState { return true }
         return false
+    }
+
+    /// Ready to run LIVE sentence cleanup specifically: the resident model
+    /// must be the live-refine model. A summary/photo model left loaded
+    /// from before the recording is also `.ready`, but the RefinementQueue
+    /// would then clean early utterances on that wrong, heavy model until
+    /// the first silence-gap load swaps it — gate those out.
+    private func liveRefineReady() async -> Bool {
+        guard await llm.model == ModelCatalog.liveRefineModel else { return false }
+        return await llmIsReady()
     }
 
     /// One-shot upgrade migration: the live role is locked to LFM2.5, but

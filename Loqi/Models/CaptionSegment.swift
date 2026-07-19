@@ -155,6 +155,11 @@ enum CaptionRunGrouping {
                entry.state != .volatile,
                previous.id != lastEntryID,
                entry.id != lastEntryID,
+               // A mid-recording spoken/translation-language change gives
+               // adjacent entries different directions; folding them would
+               // stamp the run with the first entry's direction and hide or
+               // truncate the later translations.
+               previous.direction == entry.direction,
                last.entries.reduce(entry.sourceText.count, { $0 + $1.sourceText.count })
                    <= maxCharacters,
                entry.createdAt.timeIntervalSince(previous.createdAt) <= joinGap {

@@ -115,6 +115,24 @@ struct CaptionRunGroupingTests {
         #expect(runs[0].displayEntry.sourceText == "会議の予算は来年からです。次の議題。")
     }
 
+    @Test func differentDirectionsDoNotFold() {
+        // A mid-recording language/target change makes adjacent entries
+        // carry different directions; folding them would stamp the run with
+        // the first direction and hide the later translation.
+        func directed(_ text: String, _ direction: LanguagePair, at offset: TimeInterval)
+            -> CaptionEntry {
+            CaptionEntry(
+                sourceText: text, direction: direction, state: .finalized,
+                createdAt: Date(timeIntervalSince1970: offset))
+        }
+        let a = directed("会議の予算は", LanguagePair(source: .japanese, target: .chinese), at: 0)
+        let b = directed("来年からです", LanguagePair(source: .japanese, target: .english), at: 3)
+        #expect(CaptionRunGrouping.runs(entries: [a, b], lastEntryID: nil).count == 2)
+        // Same direction still folds.
+        let c = directed("来年からです", LanguagePair(source: .japanese, target: .chinese), at: 3)
+        #expect(CaptionRunGrouping.runs(entries: [a, c], lastEntryID: nil).count == 1)
+    }
+
     @Test func characterBudgetBoundsARun() {
         let a = entry(String(repeating: "あ", count: 250), at: 0)
         let b = entry("続きです", at: 5)
