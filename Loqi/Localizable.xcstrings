@@ -2565,7 +2565,6 @@
       }
     },
     "Identifying speakers…" : {
-      "extractionState" : "stale",
       "localizations" : {
         "ja" : {
           "stringUnit" : {
@@ -3690,6 +3689,9 @@
           }
         }
       }
+    },
+    "Only one recording or session can be processed at a time. Stop the other task to start this one." : {
+
     },
     "Open Settings" : {
       "extractionState" : "stale",

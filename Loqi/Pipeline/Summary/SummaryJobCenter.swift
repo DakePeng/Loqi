@@ -2046,10 +2046,13 @@ enum BackgroundProcessingScheduler {
     /// later register, or an identifier missing from the plist, crashes.
     static func register(jobs: SummaryJobCenter) {
         self.jobs = jobs
+        // `using: .main` runs the launch handler on the main queue, so the
+        // MainActor.assumeIsolated below is valid. With `using: nil` iOS
+        // delivers it on a BACKGROUND queue and assumeIsolated traps
+        // (libdispatch "not expected to execute on queue" — a crash).
         BGTaskScheduler.shared.register(
-            forTaskWithIdentifier: taskIdentifier, using: nil
+            forTaskWithIdentifier: taskIdentifier, using: .main
         ) { task in
-            // The handler is delivered on the main queue; hop to the actor.
             guard let task = task as? BGProcessingTask else {
                 task.setTaskCompleted(success: false)
                 return
