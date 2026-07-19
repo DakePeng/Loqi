@@ -460,6 +460,16 @@ struct ImportResumeTests {
             recordedAt: .now, duration: 60)
         archive.update(importing)
         #expect(jobs.hasResumableBackgroundASR)
+
+        // Progress mark = decoded segment count; the window re-arms only
+        // while it grows (more audio to decode), not once ASR is done.
+        #expect(jobs.backgroundASRProgressMark() == 0)
+        importing.importCheckpoint?.segments = [
+            .init(start: 0, end: 4, text: "one"),
+            .init(start: 4, end: 8, text: "two"),
+        ]
+        archive.update(importing)
+        #expect(jobs.backgroundASRProgressMark() == 2)
     }
 
     @Test func cancelClearsThePendingSummaryMarker() {

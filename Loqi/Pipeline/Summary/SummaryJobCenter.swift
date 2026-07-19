@@ -381,6 +381,19 @@ final class SummaryJobCenter {
         return importPending || postProcessPending || retranscribePending
     }
 
+    /// Monotonic count of decoded ASR segments across every resumable job.
+    /// The background window compares this before/after: if it grew, there
+    /// is more audio to decode and re-arming is worthwhile; if it didn't,
+    /// ASR is complete (only the foreground-only LLM phase remains) and
+    /// another window would replay the cache + redo diarization for nothing.
+    func backgroundASRProgressMark() -> Int {
+        archive.sessions.reduce(0) { total, session in
+            let imported = session.importing == true
+                ? (session.importCheckpoint?.segments.count ?? 0) : 0
+            return total + imported + (session.retranscribeCheckpoint?.segments.count ?? 0)
+        }
+    }
+
     /// Run the CPU stages of any in-flight import/re-transcribe inside a
     /// BGProcessingTask window. The scheduler cancels the surrounding task
     /// (this call) when iOS reclaims the window; the per-segment checkpoints
@@ -391,9 +404,14 @@ final class SummaryJobCenter {
         backgroundProcessingActive = true
         // Cap the decode to a single decoder for the window — gentler on
         // battery/energy than a full parallel pass. The decode loop reads
-        // this off-main, so it's a lock; cleared below when the window ends
-        // (and the pool lifts back to full for the foreground continuation).
+        // this off-main, so it's a lock; cleared with the flag below (in a
+        // defer so neither can leak) — the pool lifts back to full for the
+        // foreground continuation.
         VADSegmentedTranscriber.backgroundWindowActive.withLock { $0 = true }
+        defer {
+            backgroundProcessingActive = false
+            VADSegmentedTranscriber.backgroundWindowActive.withLock { $0 = false }
+        }
         // Un-pause the ASR-first jobs the background suspend parked, exactly
         // as resumeBackgroundJobs does on foreground — otherwise
         // resumeUnfinishedImports (which needs a nil badge) skips them and
@@ -415,11 +433,10 @@ final class SummaryJobCenter {
         while !Task.isCancelled, isBackgrounded {
             try? await Task.sleep(for: .seconds(2))
         }
-        backgroundProcessingActive = false
-        VADSegmentedTranscriber.backgroundWindowActive.withLock { $0 = false }
         // Only re-suspend if we're STILL backgrounded (OS expiry). If the
         // app foregrounded, resumeBackgroundJobs already owns these jobs —
         // suspending them here would cancel a foreground-running import.
+        // (The flags are cleared by the defer above.)
         if isBackgrounded { suspendBackgroundUnsafeJobs() }
     }
 
@@ -2109,12 +2126,6 @@ enum BackgroundProcessingScheduler {
         do {
             try BGTaskScheduler.shared.submit(request)
             logger.notice("bg-asr: scheduled")
-            // Confirm the daemon actually holds it — a submit can succeed
-            // locally yet show 0 pending if the daemon dropped it (the
-            // `_simulateLaunch` "no task request scheduled" case).
-            BGTaskScheduler.shared.getPendingTaskRequests { requests in
-                logger.notice("bg-asr: pending requests now \(requests.count)")
-            }
         } catch {
             logger.error("bg-asr: schedule failed \(error.localizedDescription, privacy: .public)")
         }
@@ -2123,6 +2134,8 @@ enum BackgroundProcessingScheduler {
     private static func run(_ task: BGProcessingTask) {
         guard let jobs else { task.setTaskCompleted(success: false); return }
         logger.notice("bg-asr: window started")
+        // Decoded-segment count before the window; re-arm only if it grew.
+        let progressBefore = jobs.backgroundASRProgressMark()
         let work = Task { @MainActor in await jobs.runBackgroundASRWindow() }
         // iOS calls this shortly before the window ends; cancelling stops
         // the decode at its next segment boundary (checkpoint persisted).
@@ -2132,9 +2145,16 @@ enum BackgroundProcessingScheduler {
         }
         Task { @MainActor in
             await work.value
-            // Re-arm if the window ended with work still pending, so the
-            // next idle window continues it.
-            scheduleIfNeeded(jobs: jobs)
+            // Re-arm ONLY if the window actually decoded new segments —
+            // otherwise ASR is done and only the foreground LLM phase
+            // remains, so another window would just replay the cache and
+            // redo diarization for nothing (battery). The single
+            // setTaskCompleted site is here (not the expiration handler)
+            // because runBackgroundASRWindow's cleanup is prompt — it
+            // fire-and-forgets the decode cancel, never awaits it.
+            if jobs.backgroundASRProgressMark() > progressBefore {
+                scheduleIfNeeded(jobs: jobs)
+            }
             task.setTaskCompleted(success: true)
             logger.notice("bg-asr: window done")
         }
