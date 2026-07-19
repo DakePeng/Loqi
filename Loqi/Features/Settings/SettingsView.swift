@@ -5,24 +5,26 @@ struct SettingsView: View {
 
     @AppStorage(AppUILanguage.defaultsKey) private var appLanguageRaw = AppUILanguage.system.rawValue
     @AppStorage("model.id") private var modelID: String = ModelCatalog.default.id
-    @AppStorage("model.bonsaiEnabled") private var bonsaiEnabled = false
     @AppStorage("model.source") private var sourceRaw: String = ModelSource.huggingFace.rawValue
     @AppStorage("llm.enabled") private var llmEnabled = true
-    @AppStorage(DiarizerSource.defaultsKey) private var diarizerSourceRaw = DiarizerSource.huggingFace.rawValue
+    @AppStorage(DiarizerModelStore.sourceDefaultsKey) private var diarizerSourceRaw = ASRModelSource.huggingFace.rawValue
     @AppStorage("audio.saveRecordings") private var saveRecordings = true
     @AppStorage("display.keepScreenOn") private var keepScreenOn = true
     @AppStorage("perf.reduceHeat") private var reduceHeat = false
-    @AppStorage("asr.engine") private var asrEngine = "apple"
+    @AppStorage("debug.showOriginalRecognition")
+    private var showOriginalRecognition = false
+    @AppStorage("asr.finalsModel") private var asrFinalsModel = "auto"
     @AppStorage("asr.source") private var asrSourceRaw = ASRModelSource.modelScope.rawValue
     @AppStorage("summary.autoPostProcessNewRecordings")
     private var autoPostProcessNewRecordings = false
     @State private var senseVoiceStore = SenseVoiceModelStore()
     @State private var senseVoiceInstalled = SenseVoiceModelStore.isInstalled
-    @State private var qwen3Store = Qwen3ASRModelStore()
-    @State private var qwen3Installed = Qwen3ASRModelStore.isInstalled
-    @State private var qwen3Speedometer = DownloadSpeedometer()
+    @State private var dolphinStore = DolphinModelStore()
+    @State private var dolphinInstalled = DolphinModelStore.isInstalled
+    @State private var dolphinSpeedometer = DownloadSpeedometer()
     @State private var diarizerState = "—"
-    @State private var diarizerInstalled = StreamingDiarizer.isModelCached
+    @State private var visionDownloaded = false
+    @State private var diarizerInstalled = VoiceprintService.isOfflineDiarizerDownloaded
     @State private var diarizerDownloading = false
     @State private var diarizerError: String?
     @State private var diarizerSpeedometer = DownloadSpeedometer()
@@ -57,51 +59,49 @@ struct SettingsView: View {
                 }
 
                 Section {
-                    Picker("Engine", selection: $asrEngine) {
-                        Text("Apple (instant)").tag("apple")
-                        Text("SenseVoice (accurate)").tag("sensevoice")
-                    }
+                    LabeledContent(
+                        "Recognition model",
+                        value: senseVoiceInstalled
+                            ? localized("Downloaded")
+                            : localized("Not downloaded"))
 
-                    if asrEngine == "sensevoice" {
-                        LabeledContent(
-                            "Recognition model",
-                            value: senseVoiceInstalled
-                                ? localized("Downloaded")
-                                : localized("Not downloaded"))
-
-                        if !senseVoiceInstalled {
-                            Picker("Download from", selection: $asrSourceRaw) {
-                                ForEach(ASRModelSource.allCases) { source in
-                                    Text(source.displayName).tag(source.rawValue)
+                    if !senseVoiceInstalled {
+                        Picker("Download from", selection: $asrSourceRaw) {
+                            ForEach(ASRModelSource.allCases) { source in
+                                Text(source.displayName).tag(source.rawValue)
+                            }
+                        }
+                        if senseVoiceStore.downloading {
+                            DownloadProgressRow(
+                                speedometer: senseVoiceSpeedometer,
+                                onStop: { senseVoiceStore.cancelDownload() })
+                        } else {
+                            Button("Download SenseVoice model (~230 MB)") {
+                                senseVoiceSpeedometer.start(
+                                    totalBytes: SenseVoiceModelStore.totalExpectedBytes)
+                                Task {
+                                    let source = ASRModelSource(
+                                        rawValue: asrSourceRaw) ?? .modelScope
+                                    await senseVoiceStore.download(from: source)
+                                    senseVoiceInstalled = SenseVoiceModelStore.isInstalled
                                 }
                             }
-                            if senseVoiceStore.downloading {
-                                DownloadProgressRow(
-                                    speedometer: senseVoiceSpeedometer,
-                                    onStop: { senseVoiceStore.cancelDownload() })
-                            } else {
-                                Button("Download SenseVoice model (~230 MB)") {
-                                    senseVoiceSpeedometer.start(
-                                        totalBytes: SenseVoiceModelStore.totalExpectedBytes)
-                                    Task {
-                                        let source = ASRModelSource(
-                                            rawValue: asrSourceRaw) ?? .modelScope
-                                        await senseVoiceStore.download(from: source)
-                                        senseVoiceInstalled = SenseVoiceModelStore.isInstalled
-                                    }
-                                }
-                            }
-                            if let error = senseVoiceStore.lastError {
-                                Text(error)
-                                    .font(.footnote)
-                                    .foregroundStyle(.red)
-                            }
+                        }
+                        if let error = senseVoiceStore.lastError {
+                            Text(error)
+                                .font(.footnote)
+                                .foregroundStyle(.red)
+                        }
+                    } else {
+                        Picker("Finals model", selection: $asrFinalsModel) {
+                            Text("Auto (Dolphin for 中/日/한)").tag("auto")
+                            Text("SenseVoice").tag("sensevoice")
                         }
                     }
                 } header: {
                     Text("Speech recognition")
                 } footer: {
-                    Text("SenseVoice recognizes 中文, English, 日本語 and 한국어 with much higher accuracy — captions update in ~1-second pulses instead of word-by-word. Runs fully on this iPhone.")
+                    Text("Live captions always run in Hybrid mode: Apple shows instant word-by-word captions while the finals model finalizes each sentence for the saved transcript. Auto upgrades 中文/日本語/한국어 finals to Dolphin once that model is downloaded below; English sessions and Auto language detection always use SenseVoice. Everything runs fully on this iPhone.")
                 }
 
                 Section {
@@ -110,43 +110,46 @@ struct SettingsView: View {
                         isOn: $autoPostProcessNewRecordings)
 
                     LabeledContent(
-                        "Qwen3-ASR model",
-                        value: qwen3Installed
+                        "Dolphin model",
+                        value: dolphinInstalled
                             ? localized("Downloaded")
                             : localized("Not downloaded"))
 
-                    if !qwen3Installed {
+                    if dolphinInstalled {
+                        Button("Remove Dolphin model", role: .destructive) {
+                            dolphinStore.removeInstalled()
+                            dolphinInstalled = DolphinModelStore.isInstalled
+                        }
+                    } else if dolphinStore.downloading {
+                        DownloadProgressRow(
+                            speedometer: dolphinSpeedometer,
+                            onStop: { dolphinStore.cancelDownload() })
+                    } else {
                         Picker("Download from", selection: $asrSourceRaw) {
                             ForEach(ASRModelSource.allCases) { source in
                                 Text(source.displayName).tag(source.rawValue)
                             }
                         }
-                        if qwen3Store.downloading {
-                            DownloadProgressRow(
-                                speedometer: qwen3Speedometer,
-                                onStop: { qwen3Store.cancelDownload() })
-                        } else {
-                            Button("Download Qwen3-ASR model (~990 MB)") {
-                                qwen3Speedometer.start(
-                                    totalBytes: Qwen3ASRModelStore.totalExpectedBytes)
-                                Task {
-                                    let source = ASRModelSource(
-                                        rawValue: asrSourceRaw) ?? .modelScope
-                                    await qwen3Store.download(from: source)
-                                    qwen3Installed = Qwen3ASRModelStore.isInstalled
-                                }
+                        Button("Download Dolphin model (~250 MB)") {
+                            dolphinSpeedometer.start(
+                                totalBytes: DolphinModelStore.totalExpectedBytes)
+                            Task {
+                                let source = ASRModelSource(
+                                    rawValue: asrSourceRaw) ?? .modelScope
+                                await dolphinStore.download(from: source)
+                                dolphinInstalled = DolphinModelStore.isInstalled
                             }
                         }
-                        if let error = qwen3Store.lastError {
-                            Text(error)
-                                .font(.footnote)
-                                .foregroundStyle(.red)
-                        }
+                    }
+                    if let error = dolphinStore.lastError {
+                        Text(error)
+                            .font(.footnote)
+                            .foregroundStyle(.red)
                     }
                 } header: {
                     Text("High-accuracy re-transcription")
                 } footer: {
-                    Text("Once downloaded, Re-transcribe & summarize uses Qwen3-ASR automatically, and imports can select it. Auto post-process re-transcribes and identifies speakers before the first summary for new recordings, using downloaded models only. Live captions stay on the fast engines.")
+                    Text("Dolphin recognizes 中文/日本語/한국어 with the highest accuracy. Once downloaded, Re-transcribe & summarize and live Hybrid finals use it automatically for those languages (set Finals model to SenseVoice above, or remove the model, to go back). Auto post-process re-transcribes and identifies speakers before the first summary for new recordings, using downloaded models only.")
                 }
 
                 Section {
@@ -156,34 +159,49 @@ struct SettingsView: View {
                         }
 
                     Group {
-                        // Live tier — fixed 0.8B, runs during recording.
-                        LabeledContent("Live model", value: "Qwen3.5 0.8B")
+                        // Live tier — runs during recording, locked to the
+                        // 230M transcript-cleanup model (no vision tower:
+                        // photos attached live keep OCR text and live notes
+                        // wait for post-session mapping).
+                        LabeledContent("Live model", value: "Liquid LFM2.5 230M")
                         LabeledContent(
                             "Live model files",
                             value: liveDownloaded
                                 ? localized("Downloaded")
                                 : localized("Not downloaded"))
                         if !liveDownloaded {
-                            if downloadingModelID == ModelCatalog.liveModel.id {
+                            if downloadingModelID == ModelCatalog.liveRefineModel.id {
                                 DownloadProgressRow(
                                     speedometer: llmSpeedometer, onStop: stopDownload)
                             } else {
                                 Button("Download live model") {
-                                    startDownload(ModelCatalog.liveModel)
+                                    startDownload(ModelCatalog.liveRefineModel)
                                 }
                                 .disabled(downloadingModelID != nil)
                             }
                         }
 
-                        // Experimental: a stronger text-only model for the
-                        // summary tier. Needs the 1-bit-kernel mlx-swift fork
-                        // to actually load; off by default.
-                        Toggle("Experimental: Bonsai 8B summary model", isOn: $bonsaiEnabled)
-                            .onChange(of: bonsaiEnabled) {
-                                if !bonsaiEnabled, modelID == ModelCatalog.bonsai8b.id {
-                                    modelID = ModelCatalog.default.id
+                        // Vision fallback — describes attached photos when
+                        // the summary pick is text-only (Bonsai). It left
+                        // the summary lineup, so it needs its own download
+                        // affordance or Bonsai-with-photos silently stays
+                        // OCR-only.
+                        LabeledContent(
+                            "Photo AI model files",
+                            value: visionDownloaded
+                                ? localized("Downloaded")
+                                : localized("Not downloaded"))
+                        if !visionDownloaded {
+                            if downloadingModelID == ModelCatalog.liveModel.id {
+                                DownloadProgressRow(
+                                    speedometer: llmSpeedometer, onStop: stopDownload)
+                            } else {
+                                Button("Download photo model (0.8B)") {
+                                    startDownload(ModelCatalog.liveModel)
                                 }
+                                .disabled(downloadingModelID != nil)
                             }
+                        }
 
                         // Summary tier — user's pick, runs after recording.
                         Picker("Summary model", selection: $modelID) {
@@ -237,13 +255,17 @@ struct SettingsView: View {
                 } header: {
                     Text("On-device AI")
                 } footer: {
-                    Text("Live recording always uses the fast Qwen3.5 0.8B model so captions and live translation stay responsive and cool. After a recording, summaries, titles, vocabulary and chat use the summary model you pick above.")
+                    Text("During a recording, the tiny on-device Liquid LFM2.5 model cleans up the live transcript — fixing misheard words, names, and punctuation — while Apple's system translation produces the translation itself. Live notes and photo descriptions are generated after the recording ends. After a recording, summaries, titles, vocabulary and chat use the summary model you pick above.")
                 }
 
+                // No sherpa runtime in the macOS target — diarization is
+                // unavailable there, so don't offer a download that could
+                // never be used.
+                #if os(iOS)
                 Section {
                     if !diarizerInstalled {
                         Picker("Download from", selection: $diarizerSourceRaw) {
-                            ForEach(DiarizerSource.allCases) { source in
+                            ForEach(ASRModelSource.allCases) { source in
                                 Text(source.displayName).tag(source.rawValue)
                             }
                         }
@@ -266,8 +288,9 @@ struct SettingsView: View {
                 } header: {
                     Text("Speaker recognition")
                 } footer: {
-                    Text("Powers speaker separation for recordings and imported audio. Voice data never leaves this iPhone. Use HF-Mirror if Hugging Face is unreachable — this model is not available on ModelScope.")
+                    Text("Powers speaker separation for recordings and imported audio. Voice data never leaves this iPhone. Use ModelScope if Hugging Face is unreachable.")
                 }
+                #endif
 
                 Section {
                     Toggle("Save audio recordings", isOn: $saveRecordings)
@@ -286,7 +309,7 @@ struct SettingsView: View {
                     Text("Lowers sustained heat during long recordings: slower live-caption updates, fewer speech recognition threads, and refinement only on longer sentences. Takes effect on the next recording.")
                 }
 
-                Section("Diagnostics") {
+                Section {
                     LabeledContent("Model state", value: llmState)
                     LabeledContent("Available memory", value: availableMemory)
                     LabeledContent("Thermal state", value: thermalLabel)
@@ -315,6 +338,11 @@ struct SettingsView: View {
                         "Heat driver",
                         value: SessionHeatStats.dominant(
                             llmSeconds: llmActiveSeconds, asrSeconds: asrActiveSeconds))
+                    Toggle("Show original recognition", isOn: $showOriginalRecognition)
+                } header: {
+                    Text("Diagnostics")
+                } footer: {
+                    Text("Under each transcript line, show the raw speech-recognition text before AI cleanup when they differ. If a word is here but missing above, the cleanup dropped it; if it's missing from both, recognition never caught it.")
                 }
 
                 Section {
@@ -340,8 +368,8 @@ struct SettingsView: View {
             .onChange(of: senseVoiceStore.progress) { _, p in
                 senseVoiceSpeedometer.update(p)
             }
-            .onChange(of: qwen3Store.progress) { _, p in
-                qwen3Speedometer.update(p)
+            .onChange(of: dolphinStore.progress) { _, p in
+                dolphinSpeedometer.update(p)
             }
             .onChange(of: appLanguageRaw) {
                 Task { await refreshStats() }
@@ -371,10 +399,8 @@ struct SettingsView: View {
         switch option.id {
         case ModelCatalog.qwen35_2b.id:
             localized("Qwen3.5 2B — recommended")
-        case ModelCatalog.qwen35_0_8b.id:
-            localized("Qwen3.5 0.8B — fastest")
         case ModelCatalog.bonsai8b.id:
-            localized("Bonsai 8B (ternary 2-bit) — experimental")
+            localized("Bonsai 8B (ternary 2-bit)")
         default:
             option.displayName
         }
@@ -383,11 +409,11 @@ struct SettingsView: View {
     private func downloadSpeakerModel() {
         diarizerError = nil
         diarizerDownloading = true
-        diarizerSpeedometer.start(totalBytes: StreamingDiarizer.approximateDownloadBytes)
+        diarizerSpeedometer.start(totalBytes: VoiceprintService.approximateDownloadBytes)
         Task {
-            let source = DiarizerSource(rawValue: diarizerSourceRaw) ?? .huggingFace
+            let source = ASRModelSource(rawValue: diarizerSourceRaw) ?? .huggingFace
             do {
-                try await pipeline.streamingDiarizer.loadIfNeeded(source: source) { progress in
+                try await VoiceprintService.downloadModels(source: source) { progress in
                     Task { @MainActor in diarizerSpeedometer.update(progress) }
                 }
             } catch {
@@ -432,7 +458,8 @@ struct SettingsView: View {
         case .ready: llmState = localized("Ready")
         case .failed(let reason): llmState = localized("Failed: \(reason)")
         }
-        liveDownloaded = LLMService.isDownloaded(model: ModelCatalog.liveModel)
+        liveDownloaded = LLMService.isDownloaded(model: ModelCatalog.liveRefineModel)
+        visionDownloaded = LLMService.isDownloaded(model: ModelCatalog.liveModel)
         summaryDownloaded = LLMService.isDownloaded(
             model: ModelCatalog.option(for: modelID))
         let bytes = await pipeline.llm.available()
@@ -444,18 +471,13 @@ struct SettingsView: View {
         asrActiveSeconds = await pipeline.activeSenseVoiceDecodeSeconds()
         thermalTransitions = pipeline.thermal.transitions.count
         senseVoiceInstalled = SenseVoiceModelStore.isInstalled
-        qwen3Installed = Qwen3ASRModelStore.isInstalled
+        dolphinInstalled = DolphinModelStore.isInstalled
 
-        diarizerInstalled = StreamingDiarizer.isModelCached
-        switch await pipeline.streamingDiarizer.state {
-        case .unloaded:
-            diarizerState = diarizerInstalled
-                ? localized("Downloaded (not loaded)")
-                : localized("Not downloaded")
-        case .downloading(let p): diarizerState = localized("Downloading \(Int(p * 100))%")
-        case .loading: diarizerState = localized("Loading")
-        case .ready: diarizerState = localized("Ready")
-        case .failed(let reason): diarizerState = localized("Failed: \(reason)")
-        }
+        diarizerInstalled = VoiceprintService.isOfflineDiarizerDownloaded
+        // Stateless offline pipeline: downloaded or not is the whole story
+        // (each post-process/import run loads and releases its own manager).
+        diarizerState = diarizerInstalled
+            ? localized("Downloaded")
+            : localized("Not downloaded")
     }
 }

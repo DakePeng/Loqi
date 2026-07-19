@@ -2,7 +2,7 @@ import Foundation
 import os
 
 #if os(iOS)
-/// Shared offline flow behind SenseVoice and Qwen3-ASR file transcription:
+/// Shared offline flow behind SenseVoice and Dolphin file transcription:
 /// silero VAD chops a whole decoded file into speech segments and each
 /// closed segment gets one decode by the supplied recognizer. The VAD
 /// reports every segment's global sample offset, so the time ranges line
@@ -35,23 +35,23 @@ enum VADSegmentedTranscriber {
         alreadyDecoded.first(where: { $0.start == start && $0.end == end })?.text
     }
 
-    /// A decode that comes back empty for a clearly-speech-length segment
-    /// is suspicious (autoregressive decoders can blank out near their
-    /// token budget); retrying the halves rescues the content instead of
-    /// silently dropping it from the transcript. Pure split for testing.
-    static func retryHalves(start: Int, count: Int) -> [(start: Int, count: Int)] {
-        let firstHalf = count / 2
-        return [(start, firstHalf), (start + firstHalf, count - firstHalf)]
+    /// Silence prepended and appended when re-decoding a segment that came
+    /// back empty. A CTC model (Dolphin) emits an all-blank path when the
+    /// speech is cropped tight at the segment boundaries or the clip is too
+    /// short; padding gives it settling frames and un-clips the edges — the
+    /// standard CTC rescue. 0.3s each side. (This replaced a retry-halves
+    /// rescue built for autoregressive token-budget blanks: halving a CTC
+    /// segment makes it SHORTER, which blanks harder — exactly wrong.)
+    static let emptyRetryPadSamples = sampleRate * 3 / 10
+    static func silencePadded(_ samples: [Float]) -> [Float] {
+        let pad = [Float](repeating: 0, count: emptyRetryPadSamples)
+        return pad + samples + pad
     }
-
-    /// Segments at least this long should never legitimately decode to
-    /// nothing — below it, empty just means noise.
-    private static let suspiciousEmptySamples = sampleRate * 2
 
     private static let logger = Logger(
         subsystem: "com.kunzhipeng.loqi", category: "import")
 
-    /// Decode one VAD segment, splitting once on a suspicious empty result.
+    /// Decode one VAD segment, re-decoding padded once on an empty result.
     private static func decodeSegment(
         samples: [Float], start: Int,
         decode: ([Float]) async -> String
@@ -61,23 +61,68 @@ enum VADSegmentedTranscriber {
             let (s, e) = timeRange(start: start, n: samples.count, sampleRate: sampleRate)
             return [Utterance(text: text, start: s, end: e)]
         }
-        guard samples.count >= suspiciousEmptySamples else { return [] }
-        logger.warning("empty decode for \(samples.count) samples; retrying halves")
-        var rescued: [Utterance] = []
-        for half in retryHalves(start: start, count: samples.count) {
-            let slice = Array(samples[(half.start - start)..<(half.start - start + half.count)])
-            let halfText = await decode(slice)
-            if !halfText.isEmpty {
-                let (s, e) = timeRange(start: half.start, n: half.count, sampleRate: sampleRate)
-                rescued.append(Utterance(text: halfText, start: s, end: e))
-            }
-        }
-        return rescued
+        // Silence-pad rescue, keeping the ORIGINAL VAD time range (only the
+        // decoder input is padded, so diarization/seek are unaffected).
+        let padded = await decode(silencePadded(samples))
+        guard !padded.isEmpty else { return [] }
+        logger.warning("empty decode for \(samples.count) samples; silence-pad rescue recovered it")
+        let (s, e) = timeRange(start: start, n: samples.count, sampleRate: sampleRate)
+        return [Utterance(text: padded, start: s, end: e)]
     }
 
     /// Maximum decoders the pool helper will ever return — two extra
     /// recognizers' worth of ONNX arenas is the most we'll risk.
     static let maxDecoderPool = 3
+
+    /// True when the batch pass should hold before starting another
+    /// HARD stop only at `.critical` — the level where iOS starts killing
+    /// apps and the device is close to a protective shutdown. At `.serious`
+    /// we DON'T stop; we degrade to a single decoder (see
+    /// `thermalConcurrencyCap`), which cuts heat while decode still makes
+    /// progress. Grinding the full pool at `.serious` buys little — the SoC
+    /// is already throttled — but a full stall there froze the bar. Pure
+    /// for testing.
+    static func shouldHoldForThermals(_ state: ProcessInfo.ThermalState) -> Bool {
+        state >= .critical
+    }
+
+    /// True while a BGProcessingTask window is decoding. Set on the main
+    /// actor by the job center around the window; read off-main here in the
+    /// dispatch loop, so it's a lock, not a plain var. Caps the pool to one
+    /// decoder in the background — gentler on battery and less likely to
+    /// trip iOS's background energy monitor than a full parallel decode.
+    static let backgroundWindowActive = OSAllocatedUnfairLock(initialState: false)
+
+    /// How many decoders may run in parallel: the full pool when cool and
+    /// foreground, but ONE at `.serious`+ (fewer parallel ONNX sessions is
+    /// the main heat lever) OR in a background window (battery/energy).
+    /// Pure for testing.
+    static func thermalConcurrencyCap(
+        poolSize: Int, state: ProcessInfo.ThermalState, background: Bool
+    ) -> Int {
+        (state >= .serious || background) ? 1 : max(1, poolSize)
+    }
+
+    /// How often a held decode re-checks the thermal state.
+    static let thermalPollInterval: Duration = .seconds(15)
+
+    /// Sleep-poll until the SoC drops below `.critical`. Cancellation
+    /// propagates through `Task.sleep`, so a cancelled import/re-transcribe
+    /// stops promptly even mid-hold. In-flight decodes finish naturally;
+    /// only new segments wait. `onThermalPause` fires once when the hold
+    /// begins so the UI can say "cooling down" instead of freezing a bar
+    /// that reads as a hang; the next progress tick ends the state.
+    private static func waitWhileThermallyLimited(
+        onThermalPause: (@MainActor @Sendable () -> Void)?
+    ) async throws {
+        guard shouldHoldForThermals(ProcessInfo.processInfo.thermalState) else { return }
+        logger.notice("offline decode paused: thermal state critical")
+        await onThermalPause?()
+        repeat {
+            try await Task.sleep(for: thermalPollInterval)
+        } while shouldHoldForThermals(ProcessInfo.processInfo.thermalState)
+        logger.notice("offline decode resumed: thermal state recovered")
+    }
 
     /// How many independent decoders to run in parallel given the free
     /// memory and core budget. The first is always allowed (it's today's
@@ -93,8 +138,8 @@ enum VADSegmentedTranscriber {
     }
 
     /// Transcribe a file already decoded to 16 kHz mono float.
-    /// `maxSpeechDuration` caps a segment so monologues still split (and,
-    /// for Qwen3-ASR, stay inside the decoder's token budget); `onProgress`
+    /// `maxSpeechDuration` caps a segment so monologues still split;
+    /// `onProgress`
     /// reports 0…1 by samples consumed. Segments decode concurrently across
     /// the `decoders` pool (a 1-element pool is exactly serial); the in-flight
     /// bound paces the VAD producer to decode throughput, so progress stays
@@ -107,11 +152,8 @@ enum VADSegmentedTranscriber {
     /// function of the same audio, so a replay reproduces the same
     /// ranges). `onSegmentComplete` reports each freshly-decoded (non-empty)
     /// segment as it lands, so a caller can checkpoint it immediately.
-    /// ponytail: a segment rescued by `retryHalves` caches under its two
-    /// half-ranges, not the parent range, so a resume re-decodes it once
-    /// more instead of matching — harmless (same deterministic result),
-    /// just not a free skip; only worth precise sub-range matching if that
-    /// shows up as a real resume-time cost.
+    /// A silence-pad rescue keeps the segment's original time range, so it
+    /// checkpoints and resumes exactly like a normal decode.
     static func transcribe(
         samples16k samples: [Float],
         vadModelPath: String,
@@ -120,6 +162,7 @@ enum VADSegmentedTranscriber {
         decoders: [@Sendable ([Float]) async -> String],
         alreadyDecoded: [SessionRecord.ImportCheckpoint.Segment] = [],
         onSegmentComplete: (@MainActor @Sendable (SessionRecord.ImportCheckpoint.Segment) -> Void)? = nil,
+        onThermalPause: (@MainActor @Sendable () -> Void)? = nil,
         onProgress: @MainActor @Sendable (Double) -> Void
     ) async throws -> [Utterance] {
         precondition(!decoders.isEmpty, "need at least one decoder")
@@ -140,8 +183,8 @@ enum VADSegmentedTranscriber {
         // maxSpeechDuration only tightens the VAD's gate; steady noise or
         // music keeps a segment open forever and the buffer grows without
         // bound. Force a split at 2× so decodes stay near the intended
-        // length (a too-long Qwen3 decode comes back empty and the
-        // retry-halves rescue re-splits it anyway).
+        // length (a too-long decode can come back empty; the silence-pad
+        // rescue re-decodes it anyway).
         var runLimiter = SpeechRunLimiter(
             limit: Int(maxSpeechDuration * 2) * sampleRate)
 
@@ -174,7 +217,15 @@ enum VADSegmentedTranscriber {
                     results[index] = [Utterance(text: text, start: s, end: e)]
                     return
                 }
-                if free.isEmpty { try await harvestOne() }
+                try await waitWhileThermallyLimited(onThermalPause: onThermalPause)
+                // Cap in-flight decodes to the thermal budget: the full pool
+                // when cool, one at `.serious` (drain the rest first). Harvest
+                // down to the cap before taking a slot.
+                let cap = Self.thermalConcurrencyCap(
+                    poolSize: decoders.count,
+                    state: ProcessInfo.processInfo.thermalState,
+                    background: Self.backgroundWindowActive.withLock { $0 })
+                while (decoders.count - free.count) >= cap { try await harvestOne() }
                 let slot = free.removeLast()
                 group.addTask {
                     let utterances = await decodeSegment(
@@ -202,7 +253,11 @@ enum VADSegmentedTranscriber {
                     try await dispatch(segmentSamples, start: segmentStart, index: discovered)
                     discovered += 1
                 }
-                await onProgress(Double(offset) / Double(total))
+                // Cap at 99%: this measures samples FED to the VAD, and the
+                // last in-flight decodes + the EOF-flush segment can run for
+                // minutes after the final feed — a full bar that isn't done
+                // reads as a hang. The drain below emits the real 1.
+                await onProgress(min(0.99, Double(offset) / Double(total)))
             }
             // Close any segment still open at EOF so the last words aren't lost.
             vad.flush()
@@ -232,6 +287,8 @@ enum VADSegmentedTranscriber {
     }
 
     static let maxDecoderPool = 1
+    /// Present for cross-platform reference; macOS has no sherpa decode.
+    static let backgroundWindowActive = OSAllocatedUnfairLock(initialState: false)
 
     static func timeRange(
         start: Int, n: Int, sampleRate: Int
@@ -240,10 +297,7 @@ enum VADSegmentedTranscriber {
         return (Double(start) / rate, Double(start + n) / rate)
     }
 
-    static func retryHalves(start: Int, count: Int) -> [(start: Int, count: Int)] {
-        let firstHalf = count / 2
-        return [(start, firstHalf), (start + firstHalf, count - firstHalf)]
-    }
+    static func silencePadded(_ samples: [Float]) -> [Float] { samples }
 
     static func decoderPoolSize(
         freeBytes: UInt64, perInstanceBytes: UInt64, coreCount: Int, hardCap: Int

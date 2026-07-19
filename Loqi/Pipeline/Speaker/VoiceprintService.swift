@@ -1,45 +1,52 @@
 import AVFoundation
-import FluidAudio
 import Foundation
 import os
 
-/// Whole-file (offline) speaker diarization for imports and re-transcribe:
-/// FluidAudio's Pyannote Community-1 pipeline (powerset segmentation +
-/// WeSpeaker + VBx) processes a complete recording at once, far more
-/// accurately than per-utterance embeddings. Live captions use
-/// [StreamingDiarizer] (below) instead.
-///
-/// Stateless: each call builds and tears down its own CoreML manager —
-/// imports are occasional and CoreML keeps the compiled models on disk.
+/// Whole-file (offline) speaker diarization on sherpa-onnx: pyannote
+/// segmentation-3.0 (overlap-aware frame-level activity) + 3D-Speaker's
+/// bilingual zh/en CAM++ embedding, fast-clustered. Replaced the
+/// FluidAudio Pyannote bundle so the models mirror to ModelScope
+/// (see DiarizerModelStore) and all audio ML runs on the one vendored
+/// ONNX runtime. The ONLY diarizer — live recordings get their speaker
+/// labels from the post-process pass over the saved audio.
 actor VoiceprintService {
-    /// Map the speaker-picker value to a clustering cap: 2+ = hard cap,
-    /// -1 ("Auto") = discover the count under a generous ceiling, 0/1 = nil
-    /// (diarization off).
-    static func clusterCap(forPickerValue value: Int) -> Int? {
-        switch value {
-        case -1: 8
-        case 2...: value
-        default: nil
-        }
+    private static let logger = Logger(
+        subsystem: "com.kunzhipeng.loqi", category: "diarize")
+    /// Bundle size for download speedometers and the onboarding total.
+    nonisolated static var approximateDownloadBytes: Int64 {
+        DiarizerModelStore.totalExpectedBytes
     }
 
-    nonisolated static func defaultLiveSpeakerPickerValue(
-        isModelCached _: Bool = StreamingDiarizer.isModelCached
-    ) -> Int {
-        0
+    /// Whether a speaker-picker value turns separation on: -1 ("Auto") or
+    /// an explicit count of 2+. 0/1 = single voice, separation off.
+    nonisolated static func separationEnabled(forPickerValue value: Int) -> Bool {
+        value == -1 || value >= 2
     }
 
-    /// Whether the offline file-diarization model bundle is already cached on
-    /// disk. Derives the path exactly as FluidAudio's loader does so it can't
-    /// drift from where `diarizeFile` looks. Lets the import flow ask consent
-    /// before a first-use network download instead of fetching silently.
+    /// Clustering config straight from the picker's intent. An explicit
+    /// pick forces that EXACT cluster count — sherpa's fast clustering
+    /// strongly prefers a known count, and "N speakers" in the import sheet
+    /// means exactly N (unlike the old FluidAudio VBx path, this is not an
+    /// upper cap). "Auto" (-1) discovers the count by distance threshold.
+    /// Pure for testing.
+    nonisolated static func clustering(
+        forPickerValue value: Int
+    ) -> (numClusters: Int, threshold: Float) {
+        value >= 2
+            ? (numClusters: value, threshold: 0)
+            // Field-tuned twice: sherpa's reference 0.5 gave 30+ phantom
+            // speakers on a real meeting, 0.75 still over-split. 0.9
+            // merges aggressively — under-splitting is the lesser evil
+            // (merged voices read fine; phantom ones don't) and the exact
+            // picker count covers precision. The real over-split fuel is
+            // micro-segments; see the minDuration knobs at the call site.
+            : (numClusters: -1, threshold: 0.9)
+    }
+
+    /// Whether both model files are already on disk. Lets the import flow
+    /// ask consent before a first-use network download.
     nonisolated static var isOfflineDiarizerDownloaded: Bool {
-        let repoDir = OfflineDiarizerModels.defaultModelsDirectory()
-            .appendingPathComponent(Repo.diarizer.folderName)
-        return ModelNames.OfflineDiarizer.requiredModels.allSatisfy {
-            FileManager.default.fileExists(
-                atPath: repoDir.appendingPathComponent($0).path)
-        }
+        DiarizerModelStore.isInstalled
     }
 
     enum FileDiarizationProgress: Sendable {
@@ -47,239 +54,118 @@ actor VoiceprintService {
         case analysis(Double)
     }
 
-    /// Diarize a complete audio file with FluidAudio's offline pipeline.
-    /// The model bundle downloads on first use (honoring the chosen mirror).
-    /// Returns segments with dense slot numbers by first appearance.
-    func diarizeFile(
-        url: URL,
-        maxSpeakers: Int,
-        source: DiarizerSource = .huggingFace,
-        onProgress: (@Sendable (FileDiarizationProgress) -> Void)? = nil
-    ) async throws -> [SpeakerAttribution.Segment] {
-        ModelRegistry.baseURL = source.baseURL
-        var clustering = OfflineDiarizerConfig.Clustering.community
-        clustering.maxSpeakers = max(2, maxSpeakers)
-        let manager = OfflineDiarizerManager(
-            config: OfflineDiarizerConfig(clustering: clustering))
+    enum DiarizationError: LocalizedError {
+        case unsupportedPlatform
+        case modelLoadFailed
 
-        // A cache hit still drives this callback while CoreML compiles the
-        // models from disk — surface the download phase only when a real
-        // network fetch will happen.
-        let needsDownload = !Self.isOfflineDiarizerDownloaded
-        let models = try await withExponentialBackoff(attempts: 3) {
-            try await OfflineDiarizerModels.load { progress in
-                guard needsDownload else { return }
-                onProgress?(.download(progress.fractionCompleted))
+        var errorDescription: String? {
+            switch self {
+            case .unsupportedPlatform:
+                String(localized: "Speaker separation isn't available on this platform.")
+            case .modelLoadFailed:
+                String(localized: "The speaker model couldn't be loaded — try re-downloading it.")
             }
         }
-        manager.initialize(models: models)
-
-        let result = try await manager.process(url) { done, total in
-            onProgress?(.analysis(Double(done) / Double(max(total, 1))))
-        }
-
-        let ordered = result.segments.sorted {
-            $0.startTimeSeconds < $1.startTimeSeconds
-        }
-        var slotByID: [String: Int] = [:]
-        return ordered.map { segment in
-            let slot = slotByID[
-                segment.speakerId, default: slotByID.count]
-            slotByID[segment.speakerId] = slot
-            return SpeakerAttribution.Segment(
-                slot: slot,
-                start: TimeInterval(segment.startTimeSeconds),
-                end: TimeInterval(segment.endTimeSeconds))
-        }
-    }
-}
-
-// MARK: - Live streaming diarization (Sortformer)
-
-/// Live speaker diarization via FluidAudio's Streaming Sortformer — an
-/// end-to-end model that assigns frame-level speaker labels (up to 4 voices,
-/// the public model's hard cap) as audio streams in. Replaces the old
-/// per-utterance embedding + agglomerative clustering: Sortformer handles
-/// overlap and fast turn-taking natively and keeps speaker identities stable
-/// for the whole session, so attribution is just a time-overlap lookup
-/// against its timeline (the same [SpeakerAttribution] the import path uses).
-///
-/// Session-scoped: nothing is enrolled or persisted; each session diarizes
-/// from scratch. Lives beside `VoiceprintService` (its offline counterpart)
-/// so both share this file's imports; the project compiles it into both the
-/// iOS and macOS targets without a separate file reference.
-actor StreamingDiarizer {
-    enum State: Sendable, Equatable {
-        case unloaded
-        case downloading(Double)
-        case loading
-        case ready
-        case failed(String)
     }
 
-    private(set) var state: State = .unloaded
-
-    /// Sortformer's fixed slot count — the public model has exactly 4 speaker
-    /// tracks. The caption picker's higher values clamp to this.
-    static let maxSupportedSpeakers = 4
-
-    /// Sortformer's CoreML bundle, roughly. FluidAudio doesn't publish exact
-    /// sizes; the onboarding/Settings speedometers scale their fraction by
-    /// this, so an approximation only skews the MB/s readout, never progress.
-    nonisolated static let approximateDownloadBytes: Int64 = 80_000_000
-
-    private var diarizer: SortformerDiarizer?
-    private var loadTask: Task<Void, Error>?
-    private var active = false
-    /// Seconds of audio actually fed to the model — the time base for
-    /// attribution. Counted only past the ready guard so it stays aligned
-    /// with what Sortformer's timeline has seen. Reset per session.
-    private var audioSecondsFed: Double = 0
-
-    private let logger = Logger(subsystem: "com.kunzhipeng.loqi", category: "streaming-diarizer")
-
-    /// Lowest-latency v2.1 weights (~1s latency). `.default` has no model
-    /// variant — it can't resolve a downloadable bundle — so use `.fastV2_1`.
-    private nonisolated static var config: SortformerConfig { .fastV2_1 }
-
-    /// True when the streaming model files already sit in FluidAudio's cache,
-    /// so loading needs no network.
-    nonisolated static var isModelCached: Bool {
-        let directory = FileManager.default.urls(
-            for: .applicationSupportDirectory, in: .userDomainMask)[0]
-            .appendingPathComponent("FluidAudio/Models")
-        guard let bundle = ModelNames.Sortformer.bundle(for: config) else { return false }
-        return FileManager.default.fileExists(
-            atPath: directory.appendingPathComponent(bundle).path)
-    }
-
-    // MARK: Model lifecycle
-
-    /// Download (when needed) and load the Sortformer model. Safe to call
-    /// repeatedly and concurrently — a second caller joins the in-flight load.
-    /// Honors the chosen mirror via `ModelRegistry.baseURL` (DownloadUtils
-    /// builds every URL through it), so HF-mirror users are covered.
-    func loadIfNeeded(
-        source: DiarizerSource = .huggingFace,
+    /// Pre-download the model bundle (Settings / onboarding), so the first
+    /// post-process or import needs no network.
+    static func downloadModels(
+        source: ASRModelSource,
         onProgress: (@Sendable (Double) -> Void)? = nil
     ) async throws {
-        if state == .ready { return }
-        if let loadTask {
-            return try await loadTask.value
-        }
-        let task = Task { try await performLoad(source: source, onProgress: onProgress) }
-        loadTask = task
-        defer { loadTask = nil }
-        try await task.value
+        try await DiarizerModelStore.download(from: source, onProgress: onProgress)
     }
 
-    private func performLoad(
-        source: DiarizerSource,
-        onProgress: (@Sendable (Double) -> Void)?
-    ) async throws {
-        state = .downloading(0)
-        ModelRegistry.baseURL = source.baseURL
-        do {
-            try await withExponentialBackoff(attempts: 3) {
-                let models = try await SortformerModels.loadFromHuggingFace(
-                    config: Self.config
-                ) { [weak self] progress in
-                    onProgress?(progress.fractionCompleted)
-                    Task { await self?.noteProgress(progress.fractionCompleted) }
-                }
-                state = .loading
-                let manager = SortformerDiarizer(config: Self.config)
-                manager.initialize(models: models)
-                diarizer = manager
-                state = .ready
-                logger.info("streaming diarizer ready (source: \(source.rawValue))")
-            }
-        } catch is CancellationError {
-            state = .unloaded
-            throw CancellationError()
-        } catch {
-            state = .failed(error.localizedDescription)
-            throw error
-        }
-    }
-
-    private func noteProgress(_ fraction: Double) {
-        if case .downloading = state {
-            state = .downloading(fraction)
-        }
-    }
-
-    func unload() {
-        loadTask?.cancel()
-        loadTask = nil
-        diarizer?.cleanup()
-        diarizer = nil
-        active = false
-        state = .unloaded
-    }
-
-    // MARK: Streaming
-
-    /// Begin a fresh diarization stream. Resets the timeline and audio clock;
-    /// safe to call before the model finishes loading (ingest no-ops until
-    /// ready).
-    func start() {
-        active = true
-        audioSecondsFed = 0
-        diarizer?.reset()
-    }
-
-    func stop() {
-        active = false
-        _ = try? diarizer?.finalizeSession()
-    }
-
-    var isDiarizing: Bool { active }
-
-    /// Audio time the model has seen, in seconds — the base for utterance
-    /// bounds passed to `attribute`.
-    var audioSeconds: Double { audioSecondsFed }
-
-    /// Feed a chunk (a tee of the ASR stream) and advance the timeline.
-    /// Sortformer resamples to its 16 kHz mono rate itself.
-    func ingest(_ chunk: AudioCaptureService.AudioChunk) {
-        guard active, state == .ready, let diarizer else { return }
-        let buffer = chunk.buffer
-        guard buffer.frameLength > 0, let channel = buffer.floatChannelData?[0] else { return }
-        let samples = Array(UnsafeBufferPointer(start: channel, count: Int(buffer.frameLength)))
-        let rate = buffer.format.sampleRate
-        do {
-            try diarizer.addAudio(samples, sourceSampleRate: rate)
-            audioSecondsFed += Double(samples.count) / rate
-        } catch {
-            logger.debug("streaming diarizer addAudio failed: \(error.localizedDescription)")
-            return
-        }
-        _ = try? diarizer.process()
-    }
-
-    /// The speaker slot whose timeline segments overlap `[start, end]` most,
-    /// or nil when nothing overlaps within tolerance. Slot = Sortformer's
-    /// arrival-order speaker index, stable for the whole session.
-    func attribute(start: TimeInterval, end: TimeInterval) -> Int? {
-        SpeakerAttribution.attribute(
-            utterances: [(start, end)], to: currentSegments()).first ?? nil
-    }
-
-    /// Current timeline mapped to attribution segments — finalized first,
-    /// then tentative (recent audio Sortformer hasn't confirmed yet), so a
-    /// just-finalized utterance whose tail is still tentative still attributes.
-    private func currentSegments() -> [SpeakerAttribution.Segment] {
-        guard let diarizer else { return [] }
-        var segments: [SpeakerAttribution.Segment] = []
-        for speaker in diarizer.timeline.speakers.values {
-            for segment in speaker.finalizedSegments + speaker.tentativeSegments {
-                segments.append(.init(
-                    slot: segment.speakerIndex,
-                    start: TimeInterval(segment.startTime),
-                    end: TimeInterval(segment.endTime)))
+    /// Diarize a complete audio file. `speakerCount` carries the picker's
+    /// intent (-1 = Auto, 2+ = exact count). Missing models download on
+    /// first use (honoring the persisted source choice). Returns segments
+    /// with dense slot numbers by first appearance, sorted by start time.
+    func diarizeFile(
+        url: URL,
+        speakerCount: Int,
+        source: ASRModelSource = DiarizerModelStore.currentSource,
+        onProgress: (@Sendable (FileDiarizationProgress) -> Void)? = nil
+    ) async throws -> [SpeakerAttribution.Segment] {
+        #if os(iOS)
+        if !DiarizerModelStore.isInstalled {
+            try await DiarizerModelStore.download(from: source) {
+                onProgress?(.download($0))
             }
         }
+        let samples = try await OfflineTranscriber.decodeMono16k(contentsOf: url)
+
+        let clustering = Self.clustering(forPickerValue: speakerCount)
+        Self.logger.info("diarize: \(samples.count / 16_000)s audio, picker=\(speakerCount), clusters=\(clustering.numClusters), threshold=\(clustering.threshold)")
+        // Both ONNX sessions default to ONE thread — on an hour of audio
+        // that made the sherpa pass minutes-slow where the old CoreML/ANE
+        // path felt instant. This batch job owns the device (same
+        // rationale as the offline decode pools), so give the sessions
+        // real cores.
+        let threads = max(2, min(4, ProcessInfo.processInfo.activeProcessorCount - 2))
+        var config = sherpaOnnxOfflineSpeakerDiarizationConfig(
+            segmentation: sherpaOnnxOfflineSpeakerSegmentationModelConfig(
+                pyannote: sherpaOnnxOfflineSpeakerSegmentationPyannoteModelConfig(
+                    model: DiarizerModelStore.segmentationModelURL.path),
+                numThreads: threads),
+            embedding: sherpaOnnxSpeakerEmbeddingExtractorConfig(
+                model: DiarizerModelStore.embeddingModelURL.path,
+                numThreads: threads),
+            clustering: sherpaOnnxFastClusteringConfig(
+                numClusters: clustering.numClusters,
+                threshold: clustering.threshold),
+            // Sub-second speech islands produce junk CAM++ embeddings —
+            // the main driver of Auto's phantom-speaker explosions (the
+            // wrapper default keeps everything ≥0.3s). Dropping them
+            // loses no words: attribution's nearest-gap rule labels those
+            // entries from the neighboring segments.
+            minDurationOn: 1.0,
+            minDurationOff: 0.8)
+        guard let diarizer = SherpaOnnxOfflineSpeakerDiarizationWrapper(config: &config)
+        else { throw DiarizationError.modelLoadFailed }
+
+        // One long synchronous C call. Run it on a GCD thread via a
+        // continuation so it never parks a Swift cooperative-pool thread
+        // for minutes — the pool is core-count wide and shared with every
+        // actor in the app. userInitiated, not utility: the user is
+        // watching this progress row, and utility QoS parks CPU-bound
+        // work on efficiency cores. Cancellation cannot interrupt the C
+        // call itself (sherpa documents the progress callback's return
+        // value as ignored), so the practical bound is checking before
+        // it starts.
+        try Task.checkCancellation()
+        // The first sherpa pass (whole-file pyannote segmentation) reports
+        // NO progress before the embedding sweep begins, so a long file
+        // sits at 0% — worse under the thermal throttle that follows a
+        // transcription. Log the thermal state + duration so a "stuck at
+        // 0%" report is diagnosable as slow-vs-hung.
+        Self.logger.notice("diarize: analysis starting, thermal=\(String(describing: ProcessInfo.processInfo.thermalState), privacy: .public)")
+        let clock = ContinuousClock.now
+        let raw = await withCheckedContinuation { continuation in
+            DispatchQueue.global(qos: .userInitiated).async {
+                continuation.resume(returning: diarizer.process(samples: samples) { done, total in
+                    onProgress?(.analysis(Double(done) / Double(max(total, 1))))
+                })
+            }
+        }
+        try Task.checkCancellation()
+        Self.logger.notice("diarize: analysis took \(clock.duration(to: .now).components.seconds)s")
+
+        var slotByID: [Int: Int] = [:]
+        let segments = raw.map { segment in
+            let slot = slotByID[segment.speaker, default: slotByID.count]
+            slotByID[segment.speaker] = slot
+            return SpeakerAttribution.Segment(
+                slot: slot,
+                start: TimeInterval(segment.start),
+                end: TimeInterval(segment.end))
+        }
+        Self.logger.info("diarize: \(segments.count) segments, \(slotByID.count) speakers")
         return segments
+        #else
+        // No sherpa runtime in the macOS target; diarization is gated off
+        // upstream (postProcessBackend and the import sheet).
+        throw DiarizationError.unsupportedPlatform
+        #endif
     }
 }

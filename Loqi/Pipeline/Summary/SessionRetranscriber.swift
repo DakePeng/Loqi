@@ -14,8 +14,12 @@ import os
 struct SessionRetranscriber {
     enum Phase: Equatable {
         case transcribing(Double)   // 0...1 through the file
+        case cleaningUpTranscript(Double)
         case identifyingSpeakers(Double)
         case translating(Double)
+        /// Decode held at thermal .serious — progress is deliberately
+        /// frozen; ends with the next transcribing tick.
+        case coolingDown
     }
 
     enum RetranscribeError: LocalizedError {
@@ -28,8 +32,12 @@ struct SessionRetranscriber {
 
     let llm: LLMService
     let translator: TranslationCoordinator
-    /// Vocabulary that primes the Qwen3-ASR decoder when it runs the pass.
+    /// Vocabulary for the polish phase's text-level fixup.
     var hotwords: HotwordStore?
+    /// Settings gate for the LFM2.5 cleanup phase. False when AI is off:
+    /// re-transcribe then runs ASR + deterministic fixup only (no LLM
+    /// cleanup), and the job skips the re-summary.
+    var llmCleanupEnabled = true
     private let logger = Logger(subsystem: "com.kunzhipeng.loqi", category: "retranscribe")
 
     /// True when the session has audio on disk to re-transcribe — gates
@@ -48,46 +56,113 @@ struct SessionRetranscriber {
     /// caches are cleared: they anchor to replaced entry IDs.
     ///
     /// The caller persists the result and runs a normal summarize.
+    /// The language pair every language-touching pass runs under,
+    /// honoring the record's Languages-menu choices: spoken-language
+    /// override wins over what the first entry recorded; the translate-to
+    /// choice wins over the recorded target (nil inherits it, "" turns
+    /// translation off — source == target means transcribe-only
+    /// downstream). nil only when the record has no entries. Pure for
+    /// testing.
+    nonisolated static func languageDirection(for record: SessionRecord) -> LanguagePair? {
+        guard let base = record.entries.first?.direction else { return nil }
+        let source = record.spokenLanguageOverride ?? base.source
+        let target: AppLanguage
+        switch record.translateToRaw {
+        case nil:
+            // Inherit; a transcribe-only record stays transcribe-only
+            // even when the spoken override moved the source.
+            target = base.source == base.target ? source : base.target
+        case "":
+            target = source
+        case let raw?:
+            target = AppLanguage(rawValue: raw) ?? source
+        }
+        return LanguagePair(source: source, target: target)
+    }
+
+    /// Segments a fresh pass may reuse from a prior attempt's checkpoint:
+    /// only when the checkpoint was written by the SAME backend — decoders
+    /// aren't interchangeable. Pure for testing.
+    nonisolated static func reusableSegments(
+        checkpoint: SessionRecord.RetranscribeCheckpoint?,
+        backend: OfflineTranscriber.Backend
+    ) -> [SessionRecord.ImportCheckpoint.Segment] {
+        guard let checkpoint, checkpoint.backendRaw == backend.rawValue
+        else { return [] }
+        return checkpoint.segments
+    }
+
     func retranscribe(
         _ record: SessionRecord,
-        backend: OfflineTranscriber.Backend = OfflineTranscriber.currentBackend(),
+        backend: OfflineTranscriber.Backend,
+        sensitivity: MicSensitivity = .balanced,
+        alreadyDecoded: [SessionRecord.ImportCheckpoint.Segment] = [],
+        onSegmentComplete: (@MainActor @Sendable (SessionRecord.ImportCheckpoint.Segment) -> Void)? = nil,
         onPhase: @escaping @MainActor @Sendable (Phase) -> Void
     ) async throws -> SessionRecord {
         guard let fileName = record.audioFileName,
-              let direction = record.entries.first?.direction
+              let direction = Self.languageDirection(for: record)
         else { throw RetranscribeError.noAudio }
         let url = SessionArchive.recordingURL(fileName: fileName)
         guard FileManager.default.fileExists(atPath: url.path) else {
             throw RetranscribeError.noAudio
         }
-        let audioFile = try AVAudioFile(forReading: url)
 
         // Free the LLM before ASR; the summarize that follows reloads it
-        // (its admission re-poll absorbs ONNX arena release lag). Required
-        // for the Qwen3-ASR pass: ~940MB of decoder weights.
+        // (its admission re-poll absorbs ONNX arena release lag). The
+        // decode pools size themselves against free memory, so this
+        // headroom directly buys parallel decoders.
         await llm.unload()
 
         onPhase(.transcribing(0))
-        let utterances = try await OfflineTranscriber.transcribe(
-            audioFile,
+        let rawUtterances = try await OfflineTranscriber.transcribe(
+            contentsOf: url,
             language: direction.source,
             backend: backend,
-            hotwords: hotwords?.biasStrings(for: direction.source) ?? []
+            sensitivity: sensitivity,
+            alreadyDecoded: alreadyDecoded,
+            onSegmentComplete: onSegmentComplete,
+            onThermalPause: { onPhase(.coolingDown) }
         ) { fraction in
             onPhase(.transcribing(fraction))
         }
+        guard !rawUtterances.isEmpty else { throw ImportError.nothingTranscribed }
+        // Drop punctuation-only finals (imports do the same), attribute
+        // speakers to the RAW utterances (inherited from the old record's
+        // labeled ranges), then merge speaker-aware — same order as
+        // imports, so pause-broken sentences heal and a speaker's
+        // consecutive sentences join without fusing turn changes. Polish,
+        // entries, and translation all read the merged array, aligned.
+        let spoken = rawUtterances.filter { $0.text.hasSpeechContent }
+        let (utterances, slots) = UtteranceMerger.mergeAttributed(
+            spoken,
+            slots: Self.inheritSpeakers(
+                for: spoken.map { ($0.start, $0.end) }, from: record))
+        // All punctuation-only noise counts as nothing transcribed.
         guard !utterances.isEmpty else { throw ImportError.nothingTranscribed }
-        logger.info("retranscribe: \(utterances.count) utterances replace \(record.entries.count) entries")
+        logger.info("retranscribe: \(rawUtterances.count) raw -> \(utterances.count) merged utterances replace \(record.entries.count) entries")
 
-        let speakers = Self.inheritSpeakers(
-            for: utterances.map { ($0.start, $0.end) }, from: record)
+        // Polish before translation drafting so Apple translates the
+        // cleaned text: deterministic hotword fixup plus LFM2.5 sentence
+        // cleanup. The LLM stays loaded afterwards — the summarize that
+        // follows swaps models itself.
+        let (polished, _) = try await OfflineTranscriptPolisher.run(
+            texts: utterances.map(\.text),
+            language: direction.source,
+            backend: backend,
+            llm: llm,
+            llmEnabled: llmCleanupEnabled,
+            matcher: hotwords?.matcher,
+            onProgress: { onPhase(.cleaningUpTranscript($0)) })
+
         var entries = utterances.enumerated().map { index, utterance in
             SessionRecord.Entry(
-                sourceText: utterance.text,
+                sourceText: polished.texts[index],
                 translation: nil,
-                speaker: speakers[index],
+                speaker: slots[index],
                 direction: direction,
                 timestamp: record.startedAt.addingTimeInterval(utterance.start),
+                rawSourceText: polished.originals[index],
                 audioOffset: utterance.start)
         }
 
@@ -98,6 +173,8 @@ struct SessionRetranscriber {
                 entries[index].translation = try? await translator.draft(
                     entries[index].sourceText, direction: direction)
             }
+            // Terminal tick — the last per-entry emission was (n-1)/n.
+            onPhase(.translating(1))
         }
 
         var updated = record
@@ -106,6 +183,9 @@ struct SessionRetranscriber {
         updated.liveNotesEndEntryID = nil
         updated.summary = nil
         updated.summaryEdited = nil
+        // The pass is complete — the resume checkpoint has served its
+        // purpose and must not survive into the finished record.
+        updated.retranscribeCheckpoint = nil
         return updated
     }
 
@@ -116,13 +196,20 @@ struct SessionRetranscriber {
         backend: OfflineTranscriber.Backend?,
         speakerCount: Int?,
         voiceprint: VoiceprintService,
+        sensitivity: MicSensitivity = .balanced,
+        alreadyDecoded: [SessionRecord.ImportCheckpoint.Segment] = [],
+        onSegmentComplete: (@MainActor @Sendable (SessionRecord.ImportCheckpoint.Segment) -> Void)? = nil,
         onPhase: @escaping @MainActor @Sendable (Phase) -> Void
     ) async throws -> SessionRecord {
         var updated = record
         if let backend {
             do {
                 updated = try await retranscribe(
-                    updated, backend: backend, onPhase: onPhase)
+                    updated, backend: backend,
+                    sensitivity: sensitivity,
+                    alreadyDecoded: alreadyDecoded,
+                    onSegmentComplete: onSegmentComplete,
+                    onPhase: onPhase)
             } catch is CancellationError {
                 throw CancellationError()
             } catch {
@@ -130,24 +217,75 @@ struct SessionRetranscriber {
             }
         }
 
+        if let speakerCount {
+            try await applySpeakerSeparation(
+                to: &updated, speakerCount: speakerCount,
+                voiceprint: voiceprint, onPhase: onPhase)
+        }
+        return updated
+    }
+
+    /// Manual re-transcribe diarizes only when the old transcript has no
+    /// speaker labels to inherit — existing labels mean inherit-by-overlap,
+    /// which protects the user's renamed slots. Pure for testing.
+    nonisolated static func manualRetranscribeDiarizes(
+        entriesHaveSpeakers: Bool, diarizerDownloaded: Bool, speakerCount: Int
+    ) -> Bool {
+        !entriesHaveSpeakers && diarizerDownloaded
+            && VoiceprintService.separationEnabled(forPickerValue: speakerCount)
+    }
+
+    /// The largest number of distinct voices an Auto (count == -1) result
+    /// is allowed to claim before we refuse it — an over-split Auto pass
+    /// shreds the transcript into phantom speakers. Shared with the
+    /// standalone retry so the two paths can't drift. Pure for testing.
+    nonisolated static let maxPlausibleAutoSpeakers = 8
+
+    nonisolated static func isImplausibleAutoResult(
+        segments: [SpeakerAttribution.Segment], speakerCount: Int
+    ) -> Bool {
+        speakerCount == -1
+            && Set(segments.map(\.slot)).count > maxPlausibleAutoSpeakers
+    }
+
+    /// Diarize `updated`'s saved audio and stamp the slots onto its
+    /// entries. Best-effort: success clears `speakerSeparationFailed` and
+    /// the caches anchored to the old labels; failure sets the flag (the
+    /// detail view then offers Retry). Throws only on cancellation.
+    /// No-op when the diarizer isn't downloaded, separation is off for
+    /// `speakerCount`, or the audio file is gone.
+    func applySpeakerSeparation(
+        to updated: inout SessionRecord,
+        speakerCount: Int,
+        voiceprint: VoiceprintService,
+        onPhase: @escaping @MainActor @Sendable (Phase) -> Void
+    ) async throws {
         guard VoiceprintService.isOfflineDiarizerDownloaded,
-              let speakerCount,
-              let speakerCap = VoiceprintService.clusterCap(forPickerValue: speakerCount),
+              VoiceprintService.separationEnabled(forPickerValue: speakerCount),
               let fileName = updated.audioFileName
-        else { return updated }
+        else { return }
         let url = SessionArchive.recordingURL(fileName: fileName)
-        guard FileManager.default.fileExists(atPath: url.path) else { return updated }
+        guard FileManager.default.fileExists(atPath: url.path) else { return }
 
         do {
             onPhase(.identifyingSpeakers(0))
             let segments = try await voiceprint.diarizeFile(
-                url: url, maxSpeakers: speakerCap, source: .current
+                url: url, speakerCount: speakerCount
             ) { progress in
                 Task { @MainActor in
                     if case .analysis(let fraction) = progress {
                         onPhase(.identifyingSpeakers(fraction))
                     }
                 }
+            }
+            // Refuse an over-split Auto result instead of shredding the
+            // transcript into phantom voices — mirrors the standalone
+            // retry. The transcript stands; the flag drives the Retry UI.
+            guard !Self.isImplausibleAutoResult(
+                segments: segments, speakerCount: speakerCount) else {
+                updated.speakerSeparationFailed = true
+                logger.warning("diarize rejected result: \(Set(segments.map(\.slot)).count) auto speakers")
+                return
             }
             Self.applyDiarizationSegments(segments, to: &updated)
             updated.speakerSeparationFailed = nil
@@ -159,9 +297,8 @@ struct SessionRetranscriber {
             throw CancellationError()
         } catch {
             updated.speakerSeparationFailed = true
-            logger.error("auto post-process diarization failed: \(error.localizedDescription)")
+            logger.error("diarization failed: \(error.localizedDescription)")
         }
-        return updated
     }
 
     /// Map each new utterance to the old entry it overlaps most and take
@@ -203,7 +340,8 @@ struct SessionRetranscriber {
                 : max(start + 3, segments.last?.end ?? start + 3)
             return (start: start, end: end)
         }
-        let slots = SpeakerAttribution.attribute(utterances: utterances, to: segments)
+        let slots = SpeakerAttribution.denselyRenumbered(
+            SpeakerAttribution.attribute(utterances: utterances, to: segments))
         for index in record.entries.indices {
             record.entries[index].speaker = slots[index]
         }

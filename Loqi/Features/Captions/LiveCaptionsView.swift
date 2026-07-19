@@ -28,12 +28,12 @@ struct LiveCaptionsView: View {
     @AppStorage("captions.source") private var sourceRaw = RecognitionLanguageSelection.autoRawValue
     /// Translation is opt-in: empty = off (plain transcription, the default).
     @AppStorage("captions.translation") private var translationRaw = ""
-    // 0/1 = single speaker (no diarization), -1 = Auto, 2+ = hard cap.
-    // Default off so first recording never downloads the speaker model silently.
-    @AppStorage("captions.speakerCount") private var speakerCount
-        = VoiceprintService.defaultLiveSpeakerPickerValue()
     @AppStorage(MicSensitivity.defaultsKey) private var sensitivityRaw
         = MicSensitivity.far.rawValue
+    /// Same opt-out SessionDetailView.requestAutoSummarize honors: off means
+    /// the stop-flow summary must NOT re-transcribe or run the diarizer.
+    @AppStorage("summary.autoPostProcessNewRecordings")
+    private var autoPostProcessNewRecordings = false
     @State private var errorMessage: String?
     /// Start failed on the mic permission: the alert offers Open Settings
     /// instead of describing the journey.
@@ -46,6 +46,7 @@ struct LiveCaptionsView: View {
     @State private var renamingSlot: Int?
     @State private var renameText = ""
     @State private var showingSummarySoFar = false
+    @State private var showingRecordingOptions = false
     @State private var showingCamera = false
     @State private var showingPhotoLibrary = false
     @State private var photoItem: PhotosPickerItem?
@@ -97,11 +98,28 @@ struct LiveCaptionsView: View {
                         pipeline: pipeline,
                         sessionID: finishedID,
                         onProceed: { style, length in
-                            pipeline.jobs.summarize(
-                                sessionID: finishedID,
-                                style: style,
-                                length: length,
-                                suggestVocabulary: true)
+                            // Post-process first (offline ASR polish +
+                            // speaker labels from the saved audio), then
+                            // summarize — recordings have no live labels
+                            // anymore, so plain summarize here would ship
+                            // every stop-flow session unlabeled. But honor
+                            // the opt-out: with auto post-process off, the
+                            // user does not want a re-transcribe/diarize
+                            // pass, so summarize the live transcript as-is
+                            // (same branch as requestAutoSummarize).
+                            if autoPostProcessNewRecordings {
+                                pipeline.jobs.postProcessAndSummarizeNewSession(
+                                    sessionID: finishedID,
+                                    style: style,
+                                    length: length,
+                                    suggestVocabulary: true)
+                            } else {
+                                pipeline.jobs.summarize(
+                                    sessionID: finishedID,
+                                    style: style,
+                                    length: length,
+                                    suggestVocabulary: true)
+                            }
                             pipeline.clearLastFinishedSession()
                             switchToSessions()
                         },
@@ -155,6 +173,9 @@ struct LiveCaptionsView: View {
             }
             .sheet(isPresented: $showingSummarySoFar) {
                 SummarySoFarSheet(pipeline: pipeline)
+            }
+            .sheet(isPresented: $showingRecordingOptions) {
+                RecordingOptionsSheet(pipeline: pipeline)
             }
             #if os(iOS)
             .fullScreenCover(isPresented: $showingCamera) {
@@ -371,7 +392,6 @@ struct LiveCaptionsView: View {
                 ScrollView(.horizontal) {
                     HStack(spacing: 10) {
                         languageChip
-                        speakersChip
                         pickupChip
                         translationChip
                     }
@@ -464,7 +484,6 @@ struct LiveCaptionsView: View {
             HStack(spacing: 2) {
                 addPhotoButton
                 pickupBarButton
-                speakersBarButton
                 translationBarButton
             }
             .background(.regularMaterial, in: Capsule())
@@ -506,82 +525,15 @@ struct LiveCaptionsView: View {
         .accessibilityLabel("Stop")
     }
 
+    // The chips and bar buttons are value DISPLAYS that all open one
+    // labeled Recording-options sheet — Pickers embedded in Menus rendered
+    // as an unlabeled run of checkmarked options.
+
     private var languageChip: some View {
-        Menu {
-            Picker("Language", selection: $sourceRaw) {
-                Text("Auto").tag(RecognitionLanguageSelection.autoRawValue)
-                ForEach(AppLanguage.allCases) { language in
-                    Text(language.displayName).tag(language.rawValue)
-                }
-            }
+        Button {
+            showingRecordingOptions = true
         } label: {
             chip(icon: "waveform", text: sourceSelection.displayName)
-        }
-        .onChange(of: sourceRaw) {
-            // Translating into the spoken language makes no sense.
-            if sourceSelection != .auto, translationRaw == sourceSelection.rawValue {
-                translationRaw = ""
-            }
-        }
-    }
-
-    /// Diarization is on whenever the picker value maps to a cluster cap
-    /// (explicit 2+ or Auto) — same rule the service uses, so the UI and the
-    /// pipeline can't disagree about the sentinel values.
-    private var diarizationOn: Bool {
-        VoiceprintService.clusterCap(forPickerValue: speakerCount) != nil
-    }
-
-    /// Speaker count is adjustable mid-session: the transcript re-clusters
-    /// and relabels live. "Auto" lets clustering discover the count.
-    private var speakersChip: some View {
-        Menu {
-            Picker("Speakers", selection: $speakerCount) {
-                Label("One voice", systemImage: "person").tag(0)
-                Label("Auto", systemImage: "person.2.wave.2").tag(-1)
-                ForEach(2...StreamingDiarizer.maxSupportedSpeakers, id: \.self) { count in
-                    Label("\(count) speakers", systemImage: "person.2").tag(count)
-                }
-            }
-        } label: {
-            chip(
-                icon: diarizationOn ? "person.2" : "person",
-                text: speakerCount == -1
-                    ? String(localized: "Auto")
-                    : speakerCount >= 2 ? "\(speakerCount)" : "1",
-                active: diarizationOn)
-        }
-        .onChange(of: speakerCount) {
-            pipeline.updateSpeakerCount(speakerCount)
-        }
-    }
-
-    /// Same picker, icon-only — matches the other slim-bar toggles. The
-    /// glyph carries the mode (one voice / auto / fixed count); the exact
-    /// number lives in the menu.
-    private var speakersBarButton: some View {
-        Menu {
-            Picker("Speakers", selection: $speakerCount) {
-                Label("One voice", systemImage: "person").tag(0)
-                Label("Auto", systemImage: "person.2.wave.2").tag(-1)
-                ForEach(2...StreamingDiarizer.maxSupportedSpeakers, id: \.self) { count in
-                    Label("\(count) speakers", systemImage: "person.2").tag(count)
-                }
-            }
-        } label: {
-            Image(systemName: speakerCount == -1
-                ? "person.2.wave.2" : diarizationOn ? "person.2" : "person")
-                .font(.body)
-                .foregroundStyle(diarizationOn
-                    ? AnyShapeStyle(.tint) : AnyShapeStyle(.primary))
-                .contentTransition(.symbolEffect(.replace))
-                .animation(.default, value: speakerCount)
-                .frame(minWidth: 44, minHeight: 44)
-                .contentShape(Rectangle())
-        }
-        .accessibilityLabel("Speakers")
-        .onChange(of: speakerCount) {
-            pipeline.updateSpeakerCount(speakerCount)
         }
     }
 
@@ -589,35 +541,21 @@ struct LiveCaptionsView: View {
         MicSensitivity(rawValue: sensitivityRaw) ?? .far
     }
 
-    /// Mic pickup preset, adjustable mid-session too: switching restarts
-    /// the live turn so the VADs and the capture boost rebind.
-    private var pickupPicker: some View {
-        Picker("Mic pickup", selection: $sensitivityRaw) {
-            ForEach(MicSensitivity.allCases) { preset in
-                Label(preset.displayName, systemImage: preset.symbolName)
-                    .tag(preset.rawValue)
-            }
-        }
-    }
-
     private var pickupChip: some View {
-        Menu {
-            pickupPicker
+        Button {
+            showingRecordingOptions = true
         } label: {
             chip(
                 icon: sensitivity.symbolName,
                 text: sensitivity.shortName,
                 active: sensitivity != .balanced)
         }
-        .onChange(of: sensitivityRaw) {
-            pipeline.updateMicSensitivity()
-        }
     }
 
-    /// Same picker, icon-only — fits the slim recording bar.
+    /// Icon-only opener — fits the slim recording bar.
     private var pickupBarButton: some View {
-        Menu {
-            pickupPicker
+        Button {
+            showingRecordingOptions = true
         } label: {
             Image(systemName: sensitivity.symbolName)
                 .font(.body)
@@ -629,28 +567,22 @@ struct LiveCaptionsView: View {
                 .contentShape(Rectangle())
         }
         .accessibilityLabel("Mic pickup")
-        .onChange(of: sensitivityRaw) {
-            pipeline.updateMicSensitivity()
-        }
     }
 
     private var translationChip: some View {
-        Menu {
-            translationPicker
+        Button {
+            showingRecordingOptions = true
         } label: {
             chip(
                 icon: "globe",
                 text: translationTarget?.displayName ?? String(localized: "Translate"),
                 active: translationTarget != nil)
         }
-        .onChange(of: translationRaw) {
-            pipeline.updateTranslationTarget(translationTarget)
-        }
     }
 
     private var translationBarButton: some View {
-        Menu {
-            translationPicker
+        Button {
+            showingRecordingOptions = true
         } label: {
             Image(systemName: "globe")
                 .font(.body)
@@ -662,20 +594,6 @@ struct LiveCaptionsView: View {
                 .contentShape(Rectangle())
         }
         .accessibilityLabel("Translation")
-        .onChange(of: translationRaw) {
-            pipeline.updateTranslationTarget(translationTarget)
-        }
-    }
-
-    private var translationPicker: some View {
-        Picker("Translation", selection: $translationRaw) {
-            Text("Off").tag("")
-            ForEach(AppLanguage.allCases.filter { language in
-                sourceSelection == .auto || language.rawValue != sourceRaw
-            }) { language in
-                Text(language.displayName).tag(language.rawValue)
-            }
-        }
     }
 
     private func chip(icon: String, text: String, active: Bool = false) -> some View {
@@ -703,7 +621,9 @@ struct LiveCaptionsView: View {
             Self.speakerColors[$0 % Self.speakerColors.count]
         }
         return VStack(alignment: .leading, spacing: 2) {
-            if diarizationOn {
+            // Speaker labels only exist after the offline post-process pass;
+            // during recording this never renders.
+            if segment.speaker != nil {
                 Button {
                     if let slot = segment.speaker {
                         renameText = pipeline.speakerNames[slot] ?? ""
@@ -729,9 +649,13 @@ struct LiveCaptionsView: View {
                 .buttonStyle(.plain)
                 .padding(.bottom, 2)
             }
-            ForEach(segment.entries) { entry in
-                CaptionRow(entry: entry, isLatest: entry.id == lastEntryID)
-                    .id(entry.id)
+            // Continuation fragments (VAD pause/cap splits) join into one
+            // paragraph row for display; the live entry always renders
+            // alone so big-type styling and follow anchoring stay put.
+            ForEach(CaptionRunGrouping.runs(
+                entries: segment.entries, lastEntryID: lastEntryID)) { run in
+                CaptionRow(entry: run.displayEntry, isLatest: run.id == lastEntryID)
+                    .id(run.id)
             }
         }
         .padding(.horizontal, 14)
@@ -888,5 +812,88 @@ private struct SummarySoFarSheet: View {
                 failureText = error.localizedDescription
             }
         }
+    }
+}
+
+/// The Record surface's three selectors as labeled rows with footers —
+/// one sheet opened by the idle chips AND the recording-bar buttons.
+/// All three apply live: the spoken language and mic pickup restart the
+/// turn (captions pause for a beat), translation redirects in place.
+private struct RecordingOptionsSheet: View {
+    @Bindable var pipeline: CaptionPipeline
+    @AppStorage("captions.source") private var sourceRaw
+        = RecognitionLanguageSelection.autoRawValue
+    @AppStorage("captions.translation") private var translationRaw = ""
+    @AppStorage(MicSensitivity.defaultsKey) private var sensitivityRaw
+        = MicSensitivity.far.rawValue
+
+    private var sourceSelection: RecognitionLanguageSelection {
+        .init(rawValue: sourceRaw)
+    }
+
+    var body: some View {
+        SelectorSheet(title: "Recording options") {
+            Section {
+                Picker("Spoken language", selection: Binding(
+                    get: { sourceRaw },
+                    set: { setSource($0) })) {
+                    Text("Auto").tag(RecognitionLanguageSelection.autoRawValue)
+                    ForEach(AppLanguage.allCases) { language in
+                        Text(language.displayName).tag(language.rawValue)
+                    }
+                }
+            } footer: {
+                Text("The language being spoken. Auto detects it as you talk. Changing it mid-recording pauses captions for a moment.")
+            }
+            Section {
+                Picker("Translate to", selection: Binding(
+                    get: { translationRaw },
+                    set: { setTranslation($0) })) {
+                    Text("Off").tag("")
+                    ForEach(AppLanguage.allCases.filter { language in
+                        sourceSelection == .auto || language.rawValue != sourceRaw
+                    }) { language in
+                        Text(language.displayName).tag(language.rawValue)
+                    }
+                }
+            } footer: {
+                Text("Shows a translation under each caption. You can change this during a recording.")
+            }
+            Section {
+                Picker("Mic pickup", selection: Binding(
+                    get: { sensitivityRaw },
+                    set: { setSensitivity($0) })) {
+                    ForEach(MicSensitivity.allCases) { preset in
+                        Label(preset.displayName, systemImage: preset.symbolName)
+                            .tag(preset.rawValue)
+                    }
+                }
+            } footer: {
+                Text("How far the mic reaches for voices. Changing it mid-recording pauses captions for a moment.")
+            }
+        }
+    }
+
+    private func setSource(_ raw: String) {
+        sourceRaw = raw
+        // Translating into the spoken language makes no sense.
+        if sourceSelection != .auto, translationRaw == sourceSelection.rawValue {
+            translationRaw = ""
+        }
+        // Live sessions restart the turn on the new route; idle is a no-op.
+        pipeline.updateSource(
+            sourceSelection, target: AppLanguage(rawValue: translationRaw))
+    }
+
+    private func setTranslation(_ raw: String) {
+        translationRaw = raw
+        pipeline.updateTranslationTarget(AppLanguage(rawValue: raw))
+    }
+
+    /// Switching restarts the live turn so the VADs and capture boost
+    /// rebind — self-guarded on isRunning inside the pipeline.
+    private func setSensitivity(_ raw: String) {
+        sensitivityRaw = raw
+        pipeline.updateMicSensitivity()
     }
 }

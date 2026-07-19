@@ -21,11 +21,19 @@ final class SummaryJobCenter {
     enum Activity: Equatable {
         /// Consented weights download running before the job proper.
         case downloadingModel(Double)
+        /// The tens-of-MB speaker diarizer download — its own case so it
+        /// never wears the multi-GB "Downloading AI model…" label.
+        case downloadingSpeakerModel(Double)
         /// Map/reduce in flight; `total > 1` once real chunk counts exist.
         case summarizing(done: Int, total: Int)
         case retranscribing(SessionRetranscriber.Phase)
         /// File import filling its placeholder record.
         case importing(FileImportEngine.Phase)
+        /// Started but not yet doing labeled work: parked behind the
+        /// serial heavy-job gate, or in pre-ASR setup (file copy, audio
+        /// extraction, model init). Replaces the lying determinate
+        /// "Transcribing… 0%" those waits used to show.
+        case preparing
         /// In the serial re-transcribe queue, not yet started. Occupying
         /// the activity slot makes every existing isBusy guard cover it.
         case queuedRetranscribe
@@ -51,6 +59,9 @@ final class SummaryJobCenter {
     }
 
     private(set) var activities: [UUID: Activity] = [:]
+    /// True while the drain worker is outwaiting a cancelled predecessor's
+    /// unwind (uncancellable decodes) — queued rows say WHY they're waiting.
+    private(set) var finishingPreviousAttempt = false
     /// Most recent failure per session; cleared when its next job starts.
     private(set) var errors: [UUID: String] = [:]
     /// Smoothed time-remaining per session, written at most ~1/s so list
@@ -67,12 +78,28 @@ final class SummaryJobCenter {
     /// ASR decode ever runs at a time (two ONNX models don't fit).
     @ObservationIgnored private var retranscribeQueue: [RetranscribeRequest] = []
     @ObservationIgnored private var retranscribeWorker: Task<Void, Never>?
+    /// Identity for the worker's self-clearing defer: a retired worker can
+    /// outlive its successor's install (the successor awaits it), and its
+    /// defer must not clobber the live worker's handle.
+    @ObservationIgnored private var retranscribeWorkerGeneration = 0
     @ObservationIgnored private var pausedForRecording = false
     /// The request that spawned a running re-transcribe task, kept so
     /// yieldToRecording() can re-enqueue it without reconstructing.
     @ObservationIgnored private var activeRetranscribeRequest: [UUID: RetranscribeRequest] = [:]
     /// True while the scene is backgrounded; LLM-generation jobs must not run.
     @ObservationIgnored private var isBackgrounded = false
+    /// Imports whose task was cancelled by a SUSPEND (background / yield /
+    /// window-expiry), not a user cancel — so its checkpoint must be kept
+    /// for resume. Read by the import's CancellationError handler instead
+    /// of the activity badge, which a late progress callback can race back
+    /// to `.importing` and turn a suspend into a delete (data loss).
+    @ObservationIgnored private var suspendedImportIDs: Set<UUID> = []
+    /// True while a BGProcessingTask window is running. It relaxes the
+    /// resume guards for the CPU ASR/diarization jobs ONLY (import,
+    /// re-transcribe, new-recording post-process) so a backgrounded decode
+    /// keeps advancing; the LLM cleanup/summary phases still park because
+    /// isBackgrounded stays true, so no Metal work runs in the background.
+    @ObservationIgnored private var backgroundProcessingActive = false
     /// The summarize params of a job currently in (or entering) its LLM phase,
     /// so backgrounding can cancel the in-flight generation and restart it on
     /// foreground. Covers both plain summarize and a re-transcribe's summary
@@ -80,9 +107,20 @@ final class SummaryJobCenter {
     @ObservationIgnored private var activeSummarizeRequest: [UUID: SummarizeRequest] = [:]
     /// Jobs cancelled by backgrounding, awaiting a foreground restart.
     @ObservationIgnored private var suspendedSummaries: [UUID: SummarizeRequest] = [:]
-    /// Retranscribe workers canceled by backgrounding. Foreground resume waits
-    /// for their cleanup before reusing the same activity/task slots.
-    @ObservationIgnored private var backgroundPausedRetranscribeTasks: [UUID: Task<Void, Never>] = [:]
+    /// Cancelled retranscribe workers/jobs still unwinding (in-flight
+    /// sherpa decodes can't be cancelled mid-call and are SLOW on a hot
+    /// SoC). The next drain worker awaits these before starting new runs
+    /// so a resumed session never races its own predecessor's checkpoint
+    /// writes — the wait lives in the worker, never on the resume path.
+    @ObservationIgnored private var retiredRetranscribeTasks: [UUID: Task<Void, Never>] = [:]
+    /// Decoded segments awaiting a batched checkpoint write (see
+    /// `retranscribeCheckpointBatch`).
+    @ObservationIgnored private var retranscribeSegmentBuffers: [UUID: [SessionRecord.ImportCheckpoint.Segment]] = [:]
+    /// Highest fraction shown per session for the current phase — the bar
+    /// never moves backward within a phase (unordered diarize callback
+    /// hops, checkpoint-replay restarts). Reset on phase change; may be
+    /// pre-seeded (resume continues from its checkpointed coverage).
+    @ObservationIgnored private var displayFloors: [UUID: Double] = [:]
     /// One-at-a-time gate every heavy post-hoc job acquires before touching
     /// the GPU/ASR. Re-summary fired during a file import used to run both
     /// at once and the OS killed the process; now the second job queues.
@@ -90,7 +128,8 @@ final class SummaryJobCenter {
 
     private struct RetranscribeRequest {
         enum Kind {
-            case manual
+            /// `backend` overrides the auto-picked engine (nil = auto).
+            case manual(backend: OfflineTranscriber.Backend?)
             case newRecording(
                 backend: OfflineTranscriber.Backend?,
                 speakerCount: Int?,
@@ -101,6 +140,10 @@ final class SummaryJobCenter {
         let style: SummaryStyle
         let length: SummaryLength
         let allowDownload: Bool
+        /// VAD sensitivity for the offline pass — recordings don't store
+        /// their preset, so manual re-transcribe carries the user's pick
+        /// and the auto pass uses the current preset.
+        let sensitivity: MicSensitivity
         let kind: Kind
     }
 
@@ -138,6 +181,11 @@ final class SummaryJobCenter {
         self.voiceprint = voiceprint
         self.isRecording = isRecording
     }
+    // The charge gate that once deferred the accuracy pass to external
+    // power left with Qwen3-ASR (2026-07): with only the fast CTC
+    // backends remaining there's nothing worth deferring. The
+    // pendingPostProcess marker below stays — it also powers
+    // kill-mid-pass recovery, which is backend-independent.
 
     /// Await any in-flight heavy job unwinding. The live pipeline calls this
     /// right after `yieldToRecording()` so live capture never shares the GPU
@@ -157,9 +205,14 @@ final class SummaryJobCenter {
     func cancel(_ sessionID: UUID) {
         errors[sessionID] = nil
         suspendedSummaries[sessionID] = nil
-        backgroundPausedRetranscribeTasks[sessionID] = nil
-        // An explicit cancel must not resurrect the summary at next launch.
+        // retiredRetranscribeTasks is deliberately NOT cleared: an entry
+        // there is a still-unwinding cancelled run, and the next drain
+        // worker must outwait it even if the user cancelled the session
+        // (an immediate re-tap would otherwise race its teardown).
+        // An explicit cancel must not resurrect the summary — or the
+        // pending accuracy pass — at the next launch/foreground sweep.
         clearPendingSummary(sessionID)
+        clearPendingPostProcess(sessionID)
         if let index = retranscribeQueue.firstIndex(where: { $0.sessionID == sessionID }) {
             retranscribeQueue.remove(at: index)
             activities[sessionID] = nil
@@ -177,7 +230,13 @@ final class SummaryJobCenter {
             activities[sessionID] = nil
             return
         }
-        if activities[sessionID] == .pausedForBackground {
+        // A held job (recording/background pause) has no live task left to
+        // observe this cancel — its suspended request was already dropped
+        // above, so clear the badge directly. Same for a queued badge with
+        // no queue entry (none remains by this point): without this, a
+        // cancelled recording-paused summarize stayed "busy" forever.
+        if Self.isHeldActivity(activities[sessionID])
+            || activities[sessionID] == .queuedRetranscribe {
             activities[sessionID] = nil
             return
         }
@@ -197,9 +256,22 @@ final class SummaryJobCenter {
             case .retranscribing:
                 if let req = activeRetranscribeRequest[sessionID] {
                     retranscribeQueue.insert(req, at: 0)
+                    activities[sessionID] = .pausedForRecording
+                    // Same unwind race as backgrounding: the post-recording
+                    // drain must outwait this job's teardown.
+                    retiredRetranscribeTasks[sessionID] = retranscribeWorker ?? tasks[sessionID]
+                    tasks[sessionID]?.cancel()
+                } else {
+                    // Direct retranslate / retryDiarization jobs wear a
+                    // .retranscribing badge but have no queued request to
+                    // restart from; the paused→queued path would strand
+                    // them (nothing drains the queue for them), leaving the
+                    // session busy forever. They persist nothing until they
+                    // finish, so cancel and clear — the user re-taps to run
+                    // them again after the recording.
+                    tasks[sessionID]?.cancel()
+                    activities[sessionID] = nil
                 }
-                activities[sessionID] = .pausedForRecording
-                tasks[sessionID]?.cancel()
             case .summarizing, .downloadingModel:
                 // A live summary would hold the 2B model the recording needs
                 // freed for the 0.8B tier. Suspend and restart after, exactly
@@ -209,14 +281,40 @@ final class SummaryJobCenter {
                 activities[sessionID] = .pausedForRecording
                 tasks[sessionID]?.cancel()
             case .importing:
-                // Marking pausedForRecording BEFORE cancelling tells the
-                // import task's CancellationError handler this was a yield,
-                // not a user cancel — it keeps the placeholder + checkpoint
-                // instead of deleting them.
+                // Mark the suspension (race-free) so the import's
+                // CancellationError handler keeps the placeholder +
+                // checkpoint instead of deleting them — a yield, not a
+                // user cancel.
+                suspendedImportIDs.insert(sessionID)
                 activities[sessionID] = .pausedForRecording
                 tasks[sessionID]?.cancel()
             case .queuedRetranscribe:
                 activities[sessionID] = .pausedForRecording
+            case .preparing:
+                // Same disambiguation as backgrounding: a parked job is
+                // still a job — it must not run on toward Metal work
+                // beside a live recording.
+                if let req = activeRetranscribeRequest[sessionID] {
+                    retranscribeQueue.insert(req, at: 0)
+                    activities[sessionID] = .pausedForRecording
+                    retiredRetranscribeTasks[sessionID] = retranscribeWorker ?? tasks[sessionID]
+                    tasks[sessionID]?.cancel()
+                } else if let req = activeSummarizeRequest[sessionID] {
+                    suspendedSummaries[sessionID] = req
+                    activities[sessionID] = .pausedForRecording
+                    tasks[sessionID]?.cancel()
+                } else if archive.sessions.first(where: { $0.id == sessionID })?.importing == true {
+                    activities[sessionID] = .pausedForRecording
+                    tasks[sessionID]?.cancel()
+                } else {
+                    // Direct job (retranslate) — persists nothing; clear.
+                    tasks[sessionID]?.cancel()
+                    activities[sessionID] = nil
+                }
+            case .downloadingSpeakerModel:
+                // Direct retry job — persists nothing; clear.
+                tasks[sessionID]?.cancel()
+                activities[sessionID] = nil
             default:
                 break
             }
@@ -233,13 +331,20 @@ final class SummaryJobCenter {
             if case .pausedForRecording = activity {
                 // Imports resume fresh via resumeUnfinishedImports() below;
                 // retranscribes re-queue; summaries restart via
-                // resumeLLMJobs, which clears their held activity first.
+                // resumeLLMJobs (it accepts either held state, so the badge
+                // keeps its truthful recording-pause copy instead of
+                // flipping to "open Loqi to continue" while Loqi is open).
                 if archive.sessions.first(where: { $0.id == sessionID })?.importing == true {
                     activities[sessionID] = nil
                 } else if suspendedSummaries[sessionID] != nil {
-                    activities[sessionID] = .pausedForBackground
-                } else {
+                    // Leave .pausedForRecording; resumeLLMJobs clears it.
+                } else if retranscribeQueue.contains(where: { $0.sessionID == sessionID }) {
                     activities[sessionID] = .queuedRetranscribe
+                } else {
+                    // Nothing left to resume (cancelled while paused, or a
+                    // direct job that persists nothing) — clear, don't
+                    // strand a "Waiting…" badge no drain will ever serve.
+                    activities[sessionID] = nil
                 }
             }
         }
@@ -248,6 +353,8 @@ final class SummaryJobCenter {
         }
         drainRetranscribeQueue()
         resumeUnfinishedImports()
+        // A recording blocks the sweeps; pending passes can go now.
+        resumePendingPostProcesses()
     }
 
     /// Scene moved to/from the background. Metal-backed work can't run there:
@@ -260,11 +367,85 @@ final class SummaryJobCenter {
         if value { suspendBackgroundUnsafeJobs() } else { resumeBackgroundJobs() }
     }
 
+    /// Is there CPU ASR/diarization work a background window could advance:
+    /// a checkpointed in-flight import, a queued/active re-transcribe, or a
+    /// pending new-recording post-process. The scheduler reads this on
+    /// background-enter to decide whether to submit a BGProcessingTask.
+    var hasResumableBackgroundASR: Bool {
+        let importPending = archive.sessions.contains {
+            $0.importing == true && $0.importCheckpoint != nil
+        }
+        let postProcessPending = archive.sessions.contains { $0.pendingPostProcess != nil }
+        let retranscribePending = !retranscribeQueue.isEmpty
+            || activities.values.contains { if case .retranscribing = $0 { true } else { false } }
+        return importPending || postProcessPending || retranscribePending
+    }
+
+    /// Monotonic count of decoded ASR segments across every resumable job.
+    /// The background window compares this before/after: if it grew, there
+    /// is more audio to decode and re-arming is worthwhile; if it didn't,
+    /// ASR is complete (only the foreground-only LLM phase remains) and
+    /// another window would replay the cache + redo diarization for nothing.
+    func backgroundASRProgressMark() -> Int {
+        archive.sessions.reduce(0) { total, session in
+            let imported = session.importing == true
+                ? (session.importCheckpoint?.segments.count ?? 0) : 0
+            return total + imported + (session.retranscribeCheckpoint?.segments.count ?? 0)
+        }
+    }
+
+    /// Run the CPU stages of any in-flight import/re-transcribe inside a
+    /// BGProcessingTask window. The scheduler cancels the surrounding task
+    /// (this call) when iOS reclaims the window; the per-segment checkpoints
+    /// mean an interrupted decode loses no audio, and the LLM cleanup/
+    /// summary phases park for foreground (isBackgrounded stays true).
+    func runBackgroundASRWindow() async {
+        guard isBackgrounded, !isRecording() else { return }
+        backgroundProcessingActive = true
+        // Cap the decode to a single decoder for the window — gentler on
+        // battery/energy than a full parallel pass. The decode loop reads
+        // this off-main, so it's a lock; cleared with the flag below (in a
+        // defer so neither can leak) — the pool lifts back to full for the
+        // foreground continuation.
+        VADSegmentedTranscriber.backgroundWindowActive.withLock { $0 = true }
+        defer {
+            backgroundProcessingActive = false
+            VADSegmentedTranscriber.backgroundWindowActive.withLock { $0 = false }
+        }
+        // Un-pause the ASR-first jobs the background suspend parked, exactly
+        // as resumeBackgroundJobs does on foreground — otherwise
+        // resumeUnfinishedImports (which needs a nil badge) skips them and
+        // the window decodes nothing.
+        for (sessionID, activity) in activities
+        where activity == .pausedForBackground {
+            if archive.sessions.first(where: { $0.id == sessionID })?.importing == true {
+                activities[sessionID] = nil
+            } else if retranscribeQueue.contains(where: { $0.sessionID == sessionID }) {
+                activities[sessionID] = .queuedRetranscribe
+            }
+        }
+        resumeUnfinishedImports()
+        resumePendingPostProcesses()
+        drainRetranscribeQueue()
+        // Hold the window while still backgrounded; iOS cancels this task at
+        // expiration, and a foreground (isBackgrounded=false) also ends it so
+        // the foreground resume takes over cleanly.
+        while !Task.isCancelled, isBackgrounded {
+            try? await Task.sleep(for: .seconds(2))
+        }
+        // Only re-suspend if we're STILL backgrounded (OS expiry). If the
+        // app foregrounded, resumeBackgroundJobs already owns these jobs —
+        // suspending them here would cancel a foreground-running import.
+        // (The flags are cleared by the defer above.)
+        if isBackgrounded { suspendBackgroundUnsafeJobs() }
+    }
+
     nonisolated static func shouldSuspendForBackground(_ activity: Activity) -> Bool {
         switch activity {
-        case .downloadingModel, .summarizing, .retranscribing, .importing:
+        case .downloadingModel, .downloadingSpeakerModel, .summarizing,
+             .retranscribing, .importing, .preparing:
             true
-        default:
+        case .queuedRetranscribe, .pausedForRecording, .pausedForBackground:
             false
         }
     }
@@ -273,17 +454,25 @@ final class SummaryJobCenter {
     /// runs in the foreground, a memory warning sheds the MLX cache instead
     /// of unloading the weights — a full unload mid-job just forces an
     /// immediate self-heal reload, which costs more memory churn (and GPU
-    /// time) than it frees. Imports are deliberately excluded: their decode
-    /// pipeline is ASR/translation only (the auto-summary afterwards is its
-    /// own job), so under memory pressure the resident weights are pure
-    /// reclaimable headroom there.
+    /// time) than it frees. Imports are deliberately excluded EXCEPT their
+    /// transcript-cleanup phase, which actively generates on the 230M; the
+    /// decode/translate phases are ASR/translation only (the auto-summary
+    /// afterwards is its own job), so under memory pressure the resident
+    /// weights are pure reclaimable headroom there.
     var hasRunningLLMJob: Bool {
-        activities.values.contains(where: Self.usesLLM)
+        activities.contains { sessionID, activity in
+            Self.usesLLM(activity)
+                // A summarize parked at .preparing (gate / model load) is
+                // "about to use" the LLM; a .preparing import/retranscribe
+                // is not — those unload it before the ASR pass.
+                || (activity == .preparing && activeSummarizeRequest[sessionID] != nil)
+        }
     }
 
     nonisolated static func usesLLM(_ activity: Activity) -> Bool {
         switch activity {
         case .downloadingModel, .summarizing, .retranscribing: true
+        case .importing(.cleaningUpTranscript): true
         default: false
         }
     }
@@ -333,19 +522,45 @@ final class SummaryJobCenter {
     private func suspendBackgroundUnsafeJobs() {
         for (sessionID, activity) in activities {
             guard Self.shouldSuspendForBackground(activity) else { continue }
-            logger.info("bg suspend: \(sessionID, privacy: .public) activity=\(String(describing: activity), privacy: .public)")
-            if case .summarizing = activity,
-               let req = activeSummarizeRequest[sessionID] {
-                suspendedSummaries[sessionID] = req
-            } else if case .downloadingModel = activity,
-                      let req = activeSummarizeRequest[sessionID] {
-                suspendedSummaries[sessionID] = req
-            } else if case .retranscribing = activity,
-                      let req = activeRetranscribeRequest[sessionID],
-                      !retranscribeQueue.contains(where: { $0.sessionID == sessionID }) {
-                retranscribeQueue.insert(req, at: 0)
-                backgroundPausedRetranscribeTasks[sessionID] = retranscribeWorker ?? tasks[sessionID]
+            let hasRetranscribe = activeRetranscribeRequest[sessionID] != nil
+            let hasSummarize = activeSummarizeRequest[sessionID] != nil
+            let isImport = archive.sessions
+                .first(where: { $0.id == sessionID })?.importing == true
+            // Direct jobs (retranslate / retryDiarization, including the
+            // speaker-model download) persist nothing and have no queued
+            // request to resume from — a held badge would stick forever.
+            // Cancel and clear; the user re-runs them on foreground.
+            if !hasRetranscribe, !hasSummarize, !isImport {
+                logger.info("bg suspend: dropping direct job \(sessionID, privacy: .public)")
+                tasks[sessionID]?.cancel()
+                activities[sessionID] = nil
+                continue
             }
+            logger.info("bg suspend: \(sessionID, privacy: .public) activity=\(String(describing: activity), privacy: .public)")
+            switch activity {
+            case .summarizing, .downloadingModel:
+                // Includes a retranscribe's chained summary phase — the
+                // transcript is archived; only the summary resumes.
+                if let req = activeSummarizeRequest[sessionID] {
+                    suspendedSummaries[sessionID] = req
+                }
+            case .preparing where hasSummarize && !hasRetranscribe:
+                // A summarize parked at the gate / model load.
+                if let req = activeSummarizeRequest[sessionID] {
+                    suspendedSummaries[sessionID] = req
+                }
+            default:
+                // Retranscribe phases (including a .preparing one): re-queue
+                // and retire the dying worker. Imports fall through with no
+                // request — their checkpoint machinery resumes them.
+                if let req = activeRetranscribeRequest[sessionID],
+                   !retranscribeQueue.contains(where: { $0.sessionID == sessionID }) {
+                    retranscribeQueue.insert(req, at: 0)
+                    retiredRetranscribeTasks[sessionID] = retranscribeWorker ?? tasks[sessionID]
+                }
+            }
+            // Mark a suspended import so its cancel keeps the checkpoint.
+            if isImport { suspendedImportIDs.insert(sessionID) }
             activities[sessionID] = .pausedForBackground
             tasks[sessionID]?.cancel()
         }
@@ -355,24 +570,18 @@ final class SummaryJobCenter {
 
     private func resumeBackgroundJobs() {
         resumeLLMJobs()
-        let pausedRetranscribes = activities.compactMap { sessionID, activity -> UUID? in
-            guard activity == .pausedForBackground,
-                  retranscribeQueue.contains(where: { $0.sessionID == sessionID })
-            else { return nil }
-            return sessionID
-        }
-        for sessionID in pausedRetranscribes {
-            let oldTask = backgroundPausedRetranscribeTasks.removeValue(forKey: sessionID)
-            Task { [weak self] in
-                await oldTask?.value
-                guard let self,
-                      !self.isBackgrounded,
-                      self.activities[sessionID] == .pausedForBackground,
-                      self.retranscribeQueue.contains(where: { $0.sessionID == sessionID })
-                else { return }
-                self.activities[sessionID] = .queuedRetranscribe
-                self.drainRetranscribeQueue()
-            }
+        // Flip suspended sessions straight to queued — synchronously, so
+        // the badge changes the moment the app foregrounds (mirroring
+        // resumeAfterRecording). The old jobs' teardown is awaited by the
+        // drain WORKER, not here: awaiting before flipping left the
+        // session looking dead for as long as its uncancellable decodes
+        // took to unwind, and a re-background during that await silently
+        // dropped the whole resume (device pass: stall at
+        // transcribing(0.89) after the second background/foreground).
+        for (sessionID, activity) in activities
+        where activity == .pausedForBackground
+            && retranscribeQueue.contains(where: { $0.sessionID == sessionID }) {
+            activities[sessionID] = .queuedRetranscribe
         }
         // Imports resume fresh via resumeUnfinishedImports() below (same
         // as the recording-preemption path); clear the held badge first so
@@ -387,6 +596,13 @@ final class SummaryJobCenter {
         // Catch-all sweep for summaries whose job died without a held
         // activity (e.g. cancelled by a memory-warning unload).
         resumeUnfinishedSummaries()
+        // Accuracy passes orphaned by a kill.
+        resumePendingPostProcesses()
+        // A request backgrounded while still QUEUED keeps its
+        // .queuedRetranscribe badge, so the paused→queued path above never
+        // matches it and nothing else drains on foreground — it would
+        // strand until the next enqueue. The drain no-ops when idle.
+        drainRetranscribeQueue()
     }
 
     private func resumeLLMJobs() {
@@ -399,12 +615,26 @@ final class SummaryJobCenter {
             let oldTask = tasks[sessionID]
             Task { [weak self] in
                 await oldTask?.value
-                guard let self, !self.isBackgrounded else { return }
+                guard let self else { return }
+                // A user cancel during the teardown await cleared the held
+                // badge — restarting now would resurrect the cancelled job
+                // (and re-mark its pendingSummary). Either held state is a
+                // valid hand-off (recording-pause keeps its truthful copy).
+                guard Self.isHeldActivity(self.activities[sessionID]) else { return }
+                // Backgrounded again (or a recording started) while the old
+                // job unwound: RE-STASH instead of dropping, or the badge
+                // stays held forever with nothing left to resume it — the
+                // retranscribe path had this exact bug (stall at
+                // transcribing(0.89) on the second bg/fg hop).
+                if self.isBackgrounded || self.isRecording() {
+                    self.activities[sessionID] = self.isRecording()
+                        ? .pausedForRecording : .pausedForBackground
+                    self.suspendedSummaries[sessionID] = req
+                    return
+                }
                 // Clear the held activity so the restart's isBusy guard passes;
                 // the restart resumes from the chunk-note checkpoint.
-                if self.activities[sessionID] == .pausedForBackground {
-                    self.activities[sessionID] = nil
-                }
+                self.activities[sessionID] = nil
                 guard !self.isBusy(sessionID) else { return }
                 self.logger.info("fg resume: restarting summarize \(sessionID, privacy: .public)")
                 self.summarize(
@@ -444,7 +674,9 @@ final class SummaryJobCenter {
         activeSummarizeRequest[sessionID] = SummarizeRequest(
             style: style, length: length, allowDownload: allowDownload,
             suggestVocabulary: suggestVocabulary)
-        activities[sessionID] = .summarizing(done: 0, total: 0)
+        // "Preparing…" until the gate is acquired and the model is ready —
+        // not a determinate summarize that hasn't started.
+        activities[sessionID] = .preparing
         beginGrace(sessionID, name: "summarize")
         tasks[sessionID] = Task {
             defer { finishJob(sessionID) }
@@ -513,28 +745,93 @@ final class SummaryJobCenter {
         sessionID: UUID,
         style: SummaryStyle,
         length: SummaryLength,
+        sensitivity: MicSensitivity = .current,
+        backend: OfflineTranscriber.Backend? = nil,
         allowDownload: Bool = false
     ) {
         enqueueRetranscribe(
             ids: [sessionID], style: style, length: length,
-            allowDownload: allowDownload)
+            sensitivity: sensitivity, backend: backend, allowDownload: allowDownload)
     }
 
-    /// Retry speaker separation for a session whose diarization failed
-    /// (`speakerSeparationFailed`). Diarizes the saved audio and writes the
-    /// slots back, leaving the transcript text, summary, and notes intact
-    /// (entry IDs don't change). Tapping Retry is implied download consent —
-    /// the offline diarizer is tens of MB, not the multi-GB LLM.
-    func retryDiarization(sessionID: UUID) {
+    /// Re-draft every entry's translation to the record's current
+    /// language choices (Languages menu) — or clear translations when the
+    /// record's translation is off — without re-transcribing. Entry
+    /// directions are re-stamped so the transcript UI and future passes
+    /// follow the new pair. Summary/notes are left alone (they live in
+    /// the summary language, not the entry translations).
+    func retranslate(sessionID: UUID) {
+        guard !isRecording(), !isBusy(sessionID),
+              let session = archive.sessions.first(where: { $0.id == sessionID }),
+              !session.entries.isEmpty
+        else { return }
+        errors[sessionID] = nil
+        activities[sessionID] = .preparing
+        beginGrace(sessionID, name: "retranslate")
+        tasks[sessionID] = Task { [weak self] in
+            guard let self else { return }
+            defer { self.finishJob(sessionID) }
+            do { try await self.heavyGate.acquire() } catch { return }
+            defer { self.heavyGate.release() }
+            do {
+                guard var record = self.archive.sessions.first(where: { $0.id == sessionID }),
+                      let direction = SessionRetranscriber.languageDirection(for: record)
+                else { return }
+                let total = max(record.entries.count, 1)
+                for index in record.entries.indices {
+                    try Task.checkCancellation()
+                    self.retranscribeProgress(
+                        sessionID: sessionID,
+                        phase: .translating(Double(index) / Double(total)))
+                    // Per-entry source: the spoken override wins; an Auto
+                    // session without one keeps its per-utterance detection.
+                    let source = record.spokenLanguageOverride
+                        ?? record.entries[index].direction.source
+                    let pair = LanguagePair(source: source, target: direction.target)
+                    record.entries[index].direction = pair
+                    if pair.source == pair.target {
+                        record.entries[index].translation = nil
+                    } else {
+                        await self.translator.addDirection(pair)
+                        record.entries[index].translation = try? await self.translator.draft(
+                            record.entries[index].sourceText, direction: pair)
+                    }
+                }
+                // Terminal tick: the last per-entry emission was (n-1)/n,
+                // which read as a job vanishing at e.g. 67%.
+                self.retranscribeProgress(sessionID: sessionID, phase: .translating(1))
+                try Task.checkCancellation()
+                self.archive.update(record)
+            } catch {
+                // Cancellation only — per-entry drafts already swallow
+                // their own failures.
+            }
+        }
+    }
+
+    /// Diarize a saved session's audio and write the speaker slots back,
+    /// leaving the transcript text intact (entry IDs don't change).
+    /// Reached two ways: the Retry button after a failed separation
+    /// (`speakerSeparationFailed`), and the "Identify speakers" menu
+    /// action for sessions that never got labels or need a re-cluster.
+    /// Tapping is implied download consent — the offline diarizer is tens
+    /// of MB, not the multi-GB LLM.
+    func retryDiarization(sessionID: UUID, speakerCount: Int? = nil) {
         guard !isRecording(), !isBusy(sessionID),
               let session = archive.sessions.first(where: { $0.id == sessionID }),
               let fileName = session.audioFileName
-        else { return }
+        else {
+            logger.info("diarize rejected: \(sessionID, privacy: .public) busy=\(self.isBusy(sessionID)) recording=\(self.isRecording())")
+            return
+        }
         let url = SessionArchive.recordingURL(fileName: fileName)
+        let speakerCount = speakerCount ?? session.recordingSpeakerCount ?? -1
         guard FileManager.default.fileExists(atPath: url.path),
-              let speakerCap = VoiceprintService.clusterCap(
-                forPickerValue: session.recordingSpeakerCount ?? -1)
-        else { return }
+              VoiceprintService.separationEnabled(forPickerValue: speakerCount)
+        else {
+            logger.info("diarize rejected: \(sessionID, privacy: .public) audioExists=\(FileManager.default.fileExists(atPath: url.path)) picker=\(speakerCount)")
+            return
+        }
 
         errors[sessionID] = nil
         activities[sessionID] = .retranscribing(.identifyingSpeakers(0))
@@ -545,13 +842,17 @@ final class SummaryJobCenter {
             defer { heavyGate.release() }
             do {
                 let segments = try await voiceprint.diarizeFile(
-                    url: url, maxSpeakers: speakerCap, source: .current
+                    url: url, speakerCount: speakerCount
                 ) { [weak self] progress in
                     Task { @MainActor in
                         guard let self, self.activities[sessionID] != nil else { return }
                         switch progress {
                         case .download(let fraction):
-                            self.activities[sessionID] = .downloadingModel(fraction)
+                            // The diarizer is tens of MB — its own case, so
+                            // it never claims to be the multi-GB AI model.
+                            self.setProgress(
+                                sessionID, phaseKey: "speakerModel", fraction: fraction
+                            ) { .downloadingSpeakerModel($0) }
                         case .analysis(let fraction):
                             self.retranscribeProgress(
                                 sessionID: sessionID, phase: .identifyingSpeakers(fraction))
@@ -561,8 +862,31 @@ final class SummaryJobCenter {
                 try Task.checkCancellation()
                 guard var record = archive.sessions.first(where: { $0.id == sessionID })
                 else { return }
+                // Refuse an implausible Auto result instead of shredding
+                // the transcript into dozens of phantom voices — the user
+                // can set an exact count and rerun. Same bound the
+                // re-transcribe path applies (SessionRetranscriber).
+                if SessionRetranscriber.isImplausibleAutoResult(
+                    segments: segments, speakerCount: speakerCount) {
+                    logger.warning("diarize rejected result: \(Set(segments.map(\.slot)).count) auto speakers")
+                    errors[sessionID] = String(localized:
+                        "Too many speakers were detected. Set an exact speaker count and try again.")
+                    return
+                }
                 SessionRetranscriber.applyDiarizationSegments(segments, to: &record)
+                let labeled = record.entries.count(where: { $0.speaker != nil })
+                logger.info("diarize applied: \(segments.count) segments -> \(labeled)/\(record.entries.count) entries labeled")
+                // A run that labels nothing must SAY so — a silent no-op
+                // reads as a broken button.
+                guard labeled > 0 else {
+                    errors[sessionID] = String(localized:
+                        "Speaker separation found no speakers in this recording.")
+                    return
+                }
                 record.speakerSeparationFailed = nil
+                // Remember the count that produced this labeling — future
+                // auto passes and re-runs start from it.
+                record.recordingSpeakerCount = speakerCount
                 archive.update(record)
             } catch is CancellationError {
                 // User cancelled: no error row.
@@ -587,12 +911,13 @@ final class SummaryJobCenter {
         else { return }
 
         let backend = OfflineTranscriber.postProcessBackend(
+            sourceLanguages: session.accuracyPassLanguages,
             senseVoiceInstalled: SenseVoiceModelStore.isInstalled,
-            qwen3Installed: Qwen3ASRModelStore.isInstalled)
+            dolphinInstalled: DolphinModelStore.isInstalled)
         let speakerCount: Int?
         if VoiceprintService.isOfflineDiarizerDownloaded,
            let count = session.recordingSpeakerCount,
-           VoiceprintService.clusterCap(forPickerValue: count) != nil {
+           VoiceprintService.separationEnabled(forPickerValue: count) {
             speakerCount = count
         } else {
             speakerCount = nil
@@ -601,17 +926,31 @@ final class SummaryJobCenter {
         guard (backend != nil || speakerCount != nil),
               SessionRetranscriber.canRetranscribe(session)
         else {
+            // Nothing heavy applies (also the swept-marker case after the
+            // user removed the models) — consume any pending marker so the
+            // resume sweep stops re-visiting this session.
+            clearPendingPostProcess(sessionID)
             summarize(
                 sessionID: sessionID, style: style, length: length,
                 allowDownload: allowDownload, suggestVocabulary: suggestVocabulary)
             return
         }
 
+        // Persist the intent BEFORE running: a kill mid-pass restarts it
+        // at the next launch/foreground sweep, and the retranscribe
+        // checkpoint makes that restart cheap.
+        markPendingPostProcess(
+            sessionID: sessionID, style: style, length: length,
+            suggestVocabulary: suggestVocabulary, allowDownload: allowDownload)
+
         errors[sessionID] = nil
         activities[sessionID] = .queuedRetranscribe
         retranscribeQueue.append(RetranscribeRequest(
             sessionID: sessionID, style: style, length: length,
             allowDownload: allowDownload,
+            // The recording's preset isn't stored; the current one is the
+            // best proxy (it's what live capture just used).
+            sensitivity: MicSensitivity.current,
             kind: .newRecording(
                 backend: backend,
                 speakerCount: speakerCount,
@@ -626,6 +965,8 @@ final class SummaryJobCenter {
         ids: [UUID],
         style: SummaryStyle,
         length: SummaryLength,
+        sensitivity: MicSensitivity = .current,
+        backend: OfflineTranscriber.Backend? = nil,
         allowDownload: Bool = false
     ) {
         guard !isRecording() else {
@@ -644,7 +985,8 @@ final class SummaryJobCenter {
             activities[id] = .queuedRetranscribe
             retranscribeQueue.append(RetranscribeRequest(
                 sessionID: id, style: style, length: length,
-                allowDownload: allowDownload, kind: .manual))
+                allowDownload: allowDownload, sensitivity: sensitivity,
+                kind: .manual(backend: backend)))
         }
         drainRetranscribeQueue()
     }
@@ -655,12 +997,38 @@ final class SummaryJobCenter {
             logger.info("retranscribe drain: worker already running")
             return
         }
-        guard !pausedForRecording, !isBackgrounded else {
-            logger.info("retranscribe drain held: pausedForRecording=\(self.pausedForRecording) backgrounded=\(self.isBackgrounded)")
+        guard !pausedForRecording, !isBackgrounded || backgroundProcessingActive else {
+            logger.info("retranscribe drain held: pausedForRecording=\(self.pausedForRecording) backgrounded=\(self.isBackgrounded) bgProcessing=\(self.backgroundProcessingActive)")
             return
         }
+        // Snapshot the cancelled predecessors before the worker starts:
+        // it awaits their unwind first, so a resumed session can never
+        // run concurrently with its own cancelled prior run (the two
+        // would race the checkpoint writers). Off the resume path on
+        // purpose — see resumeBackgroundJobs. Entries stay in the map
+        // until their task actually finishes: a worker that dies before
+        // completing the awaits (cancelled by another background hop)
+        // must leave them for the NEXT worker, or it starts unguarded.
+        let retired = retiredRetranscribeTasks
+        retranscribeWorkerGeneration += 1
+        let generation = retranscribeWorkerGeneration
         retranscribeWorker = Task {
-            defer { retranscribeWorker = nil }
+            defer {
+                if retranscribeWorkerGeneration == generation {
+                    retranscribeWorker = nil
+                }
+                finishingPreviousAttempt = false
+            }
+            if !retired.isEmpty { finishingPreviousAttempt = true }
+            for (id, task) in retired {
+                await task.value
+                // Only clear an entry we actually outwaited — a suspend
+                // may have stored a NEWER task under the same session.
+                if retiredRetranscribeTasks[id] == task {
+                    retiredRetranscribeTasks.removeValue(forKey: id)
+                }
+            }
+            finishingPreviousAttempt = false
             while !retranscribeQueue.isEmpty, !Task.isCancelled, !isBackgrounded {
                 let request = retranscribeQueue.removeFirst()
                 let sessionID = request.sessionID
@@ -691,34 +1059,85 @@ final class SummaryJobCenter {
             activities[sessionID] = nil
             return
         }
-        activities[sessionID] = .retranscribing(.transcribing(0))
+        // "Preparing…" while parked behind the gate; the transcriber's
+        // first tick switches to a true fraction (continuing from the
+        // checkpoint floor on a resume — see seedTranscribeFloor).
+        activities[sessionID] = .preparing
         beginGrace(sessionID, name: "retranscribe")
         defer { finishJob(sessionID) }
         do { try await heavyGate.acquire() } catch { return }
         defer { heavyGate.release() }
         do {
-            // The summarize that follows needs the model; check its
-            // gates BEFORE the expensive re-transcription, not after.
-            guard llmEnabled else { throw JobError.aiDisabled }
-            if !request.allowDownload, !LLMService.isDownloaded(model: ModelCatalog.current) {
+            // ASR + deterministic fixup + diarization + Apple translation
+            // need no LLM; only the LFM2.5 cleanup and the re-summary do.
+            // With AI on, check the summarize's gates BEFORE the expensive
+            // re-transcription, not after. With AI off, re-transcribe runs
+            // ASR-only and skips both cleanup and the re-summary.
+            let cleanupAndSummarize = llmEnabled
+            if cleanupAndSummarize,
+               !request.allowDownload,
+               !LLMService.isDownloaded(model: ModelCatalog.current) {
                 throw LLMServiceError.modelNotDownloaded
             }
             let retranscriber = SessionRetranscriber(
-                llm: llm, translator: translator, hotwords: hotwords)
+                llm: llm, translator: translator, hotwords: hotwords,
+                llmCleanupEnabled: cleanupAndSummarize)
             let updated: SessionRecord
             let suggestVocabulary: Bool
             switch request.kind {
-            case .manual:
-                updated = try await retranscriber.retranscribe(session) { [weak self] phase in
+            case .manual(let backendOverride):
+                // The sheet's engine pick wins; nil falls back to auto.
+                let backend = backendOverride ?? OfflineTranscriber.currentBackend(
+                    sourceLanguages: session.accuracyPassLanguages)
+                let cached = seedRetranscribeCheckpoint(sessionID: sessionID, backend: backend)
+                seedTranscribeFloor(
+                    sessionID: sessionID, phaseKey: "re.asr",
+                    cached: cached, duration: session.duration)
+                var record = try await retranscriber.retranscribe(
+                    session,
+                    backend: backend,
+                    sensitivity: request.sensitivity,
+                    alreadyDecoded: cached,
+                    onSegmentComplete: retranscribeSegmentRecorder(
+                        sessionID: sessionID, backend: backend)
+                ) { [weak self] phase in
                     self?.retranscribeProgress(sessionID: sessionID, phase: phase)
                 }
+                // A label-less session has nothing for inheritSpeakers to
+                // inherit (live diarization is gone; the auto pass may
+                // never have run) — re-transcribing is the natural moment
+                // to finally label it. Sessions WITH labels keep the
+                // rename-preserving inherit path untouched.
+                let speakerCount = session.recordingSpeakerCount ?? -1
+                if SessionRetranscriber.manualRetranscribeDiarizes(
+                    entriesHaveSpeakers: session.entries.contains { $0.speaker != nil },
+                    diarizerDownloaded: VoiceprintService.isOfflineDiarizerDownloaded,
+                    speakerCount: speakerCount) {
+                    try await retranscriber.applySpeakerSeparation(
+                        to: &record, speakerCount: speakerCount, voiceprint: voiceprint
+                    ) { [weak self] phase in
+                        self?.retranscribeProgress(sessionID: sessionID, phase: phase)
+                    }
+                }
+                updated = record
                 suggestVocabulary = false
             case .newRecording(let backend, let speakerCount, let suggest):
+                let cached = backend.map {
+                    seedRetranscribeCheckpoint(sessionID: sessionID, backend: $0)
+                } ?? []
+                seedTranscribeFloor(
+                    sessionID: sessionID, phaseKey: "re.asr",
+                    cached: cached, duration: session.duration)
                 updated = try await retranscriber.postProcessNewRecording(
                     session,
                     backend: backend,
                     speakerCount: speakerCount,
-                    voiceprint: voiceprint
+                    voiceprint: voiceprint,
+                    sensitivity: request.sensitivity,
+                    alreadyDecoded: cached,
+                    onSegmentComplete: backend.flatMap {
+                        retranscribeSegmentRecorder(sessionID: sessionID, backend: $0)
+                    }
                 ) { [weak self] phase in
                     self?.retranscribeProgress(sessionID: sessionID, phase: phase)
                 }
@@ -728,6 +1147,17 @@ final class SummaryJobCenter {
             // archive with a half-finished record.
             try Task.checkCancellation()
             archive.update(updated)
+            // Any completed accuracy pass (auto or manual) satisfies a
+            // pending marker — the resume sweep must not run it again.
+            clearPendingPostProcess(sessionID)
+            // AI off: the transcript is refreshed (ASR + fixup); there is
+            // no cleanup or re-summary to run. The old summary was cleared
+            // with the replaced entries — the user can summarize once AI
+            // is back on.
+            guard cleanupAndSummarize else {
+                logger.notice("retranscribe \(sessionID, privacy: .public): AI off — ASR-only, no cleanup or summary")
+                return
+            }
             // The transcript is archived; from here it's an LLM summarize that
             // backgrounding can cancel and restart on its own — persist that
             // intent so even a process kill restarts it at next launch.
@@ -738,18 +1168,32 @@ final class SummaryJobCenter {
                 style: request.style, length: request.length,
                 allowDownload: request.allowDownload,
                 suggestVocabulary: suggestVocabulary)
+            logger.info("retranscribe \(sessionID, privacy: .public): transcript archived; chaining summarize")
+            // Through setProgress so the previous phase's ETA dies with it —
+            // a direct write left "~30 sec left" frozen under "Summarizing…"
+            // for the whole summary.
+            setProgress(sessionID, phaseKey: "summarize", fraction: 0) { _ in
+                .summarizing(done: 0, total: 0)
+            }
             try await loadModel(sessionID: sessionID, allowDownload: request.allowDownload)
-            activities[sessionID] = .summarizing(done: 0, total: 0)
             try await runSummarize(
                 sessionID: sessionID, style: request.style, length: request.length,
                 suggestVocabulary: suggestVocabulary)
             clearPendingSummary(sessionID)
         } catch is CancellationError {
             // Suspended or user-cancelled; see summarize()'s handling.
+            logger.info("retranscribe cancelled: \(sessionID, privacy: .public) activity=\(String(describing: self.activities[sessionID]), privacy: .public)")
             requeueIfSilentlyCancelled(sessionID)
         } catch {
+            logger.error("retranscribe failed: \(sessionID, privacy: .public) \(error.localizedDescription, privacy: .public)")
             errors[sessionID] = error.localizedDescription
             clearPendingSummary(sessionID)
+            // A failed accuracy pass must not auto-retry: finishJob's
+            // re-sweep would re-enqueue this session immediately, and a
+            // deterministic failure (AI disabled, model missing) would
+            // loop forever. Kills/cancels keep the marker; failures
+            // consume it — same policy as failed imports.
+            clearPendingPostProcess(sessionID)
         }
     }
 
@@ -778,7 +1222,8 @@ final class SummaryJobCenter {
             await self.llm.setModel(ModelCatalog.summaryModel)
             let importer = FileImportEngine(
                 translator: self.translator, voiceprint: self.voiceprint,
-                llm: self.llm, hotwords: self.hotwords)
+                llm: self.llm, hotwords: self.hotwords,
+                llmCleanupEnabled: self.llmEnabled)
             return try await importer.importAudio(
                 url: url,
                 sessionID: sessionID,
@@ -807,12 +1252,18 @@ final class SummaryJobCenter {
     private func resumeImport(
         sessionID: UUID, checkpoint: SessionRecord.ImportCheckpoint, audioFileName: String
     ) {
+        // The bar continues from the checkpointed coverage instead of
+        // restarting at 0 and sprinting through the cached replay.
+        seedTranscribeFloor(
+            sessionID: sessionID, phaseKey: "import.asr",
+            cached: checkpoint.segments, duration: checkpoint.duration)
         runImportJob(sessionID: sessionID) { [weak self] onPhase in
             guard let self else { throw CancellationError() }
             await self.llm.setModel(ModelCatalog.summaryModel)
             let importer = FileImportEngine(
                 translator: self.translator, voiceprint: self.voiceprint,
-                llm: self.llm, hotwords: self.hotwords)
+                llm: self.llm, hotwords: self.hotwords,
+                llmCleanupEnabled: self.llmEnabled)
             return try await importer.resumeImport(
                 checkpoint: checkpoint,
                 sessionID: sessionID,
@@ -829,12 +1280,21 @@ final class SummaryJobCenter {
     /// are skipped via the `tasks` check. Called after a cold launch
     /// (`SessionArchive.loadIfNeeded()` keeps resumable records instead of
     /// sweeping them) and after a recording that yielded one ends.
+    /// May an ASR-first job (import / re-transcribe / new-recording
+    /// post-process) resume now? Foreground always; backgrounded only
+    /// inside a BGProcessingTask window (the decode is CPU/sherpa, not
+    /// Metal, so it's safe there — the LLM phases park separately). Never
+    /// while a live recording owns the hardware.
+    private var asrResumeAllowed: Bool {
+        !isRecording() && (!isBackgrounded || backgroundProcessingActive)
+    }
+
     func resumeUnfinishedImports() {
         // The background guard lives HERE so every caller is safe:
         // resumeAfterRecording can fire while still backgrounded (recording
-        // stopped from the lock screen), and Metal-backed ASR must wait
-        // for handleForeground.
-        guard !isRecording(), !isBackgrounded else { return }
+        // stopped from the lock screen). ASR is CPU/sherpa, so a
+        // BGProcessing window may run it; a plain background may not.
+        guard asrResumeAllowed else { return }
         for session in archive.sessions
         where session.importing == true && tasks[session.id] == nil
             && activities[session.id] == nil {
@@ -878,6 +1338,55 @@ final class SummaryJobCenter {
         }
     }
 
+    /// Starts accuracy passes orphaned by a mid-pass kill. Called at
+    /// launch and on foreground resume. Each hit re-runs the normal
+    /// post-process decision, so model installs/removals since the marker
+    /// was written are honored (and a marker with nothing left to do is
+    /// consumed there).
+    func resumePendingPostProcesses() {
+        guard archive.sessions.contains(where: { $0.pendingPostProcess != nil })
+        else { return }
+        // ASR-first (re-transcribe of the recording), so a BGProcessing
+        // window may run it; the chained summary parks for foreground.
+        guard asrResumeAllowed else { return }
+        for session in archive.sessions
+        where session.pendingPostProcess != nil && session.importing != true
+            && !isBusy(session.id) {
+            guard let pending = session.pendingPostProcess,
+                  let style = SummaryStyle(rawValue: pending.styleRaw),
+                  let length = SummaryLength(rawValue: pending.lengthRaw)
+            else {
+                // Unparseable marker (style/length from a future build).
+                clearPendingPostProcess(session.id)
+                continue
+            }
+            logger.info("pending accuracy pass: starting \(session.id, privacy: .public)")
+            postProcessAndSummarizeNewSession(
+                sessionID: session.id, style: style, length: length,
+                allowDownload: pending.allowDownload ?? false,
+                suggestVocabulary: pending.suggestVocabulary ?? false)
+        }
+    }
+
+    private func markPendingPostProcess(
+        sessionID: UUID, style: SummaryStyle, length: SummaryLength,
+        suggestVocabulary: Bool, allowDownload: Bool
+    ) {
+        guard var record = archive.sessions.first(where: { $0.id == sessionID }) else { return }
+        record.pendingPostProcess = SessionRecord.PendingPostProcess(
+            styleRaw: style.rawValue, lengthRaw: length.rawValue,
+            suggestVocabulary: suggestVocabulary, allowDownload: allowDownload)
+        archive.update(record)
+    }
+
+    private func clearPendingPostProcess(_ sessionID: UUID) {
+        guard var record = archive.sessions.first(where: { $0.id == sessionID }),
+              record.pendingPostProcess != nil
+        else { return }
+        record.pendingPostProcess = nil
+        archive.update(record)
+    }
+
     private func markPendingSummary(
         sessionID: UUID, style: SummaryStyle, length: SummaryLength,
         allowDownload: Bool = false
@@ -907,7 +1416,12 @@ final class SummaryJobCenter {
             @escaping @MainActor @Sendable (FileImportEngine.Phase) -> Void
         ) async throws -> SessionRecord
     ) {
-        activities[sessionID] = .importing(.transcribing(0))
+        // "Preparing…" through the gate wait, file copy, and audio
+        // extraction — the engine's first real tick shows a true fraction.
+        // A fresh/resumed attempt is running, not suspended: a later
+        // user cancel of it must delete, not keep.
+        suspendedImportIDs.remove(sessionID)
+        activities[sessionID] = .preparing
         beginGrace(sessionID, name: "import")
         tasks[sessionID] = Task { [weak self] in
             guard let self else { return }
@@ -925,14 +1439,17 @@ final class SummaryJobCenter {
                 // automatically once transcription lands.
                 self.autoSummarizeAfterImport(sessionID: sessionID)
             } catch is CancellationError {
-                let held = self.activities[sessionID] == .pausedForRecording
-                    || self.activities[sessionID] == .pausedForBackground
+                // Race-free: a suspend marks the id BEFORE cancelling; a
+                // user cancel does not. Reading the activity badge here
+                // instead let a late progress tick reset it to .importing
+                // and delete a suspended, still-checkpointed import.
+                let suspended = self.suspendedImportIDs.contains(sessionID)
                 let checkpointed = self.archive.sessions
                     .first(where: { $0.id == sessionID })?.importCheckpoint != nil
-                if held, checkpointed {
-                    // Preempted by a recording or the scene backgrounding —
-                    // the checkpoint stays; resumeAfterRecording()/
-                    // resumeBackgroundJobs() re-enqueues it.
+                if suspended, checkpointed {
+                    // Preempted by a recording / backgrounding / bg window —
+                    // the checkpoint stays; resumeAfterRecording() /
+                    // resumeBackgroundJobs() / the next window re-enqueue it.
                 } else {
                     // User cancel, or a preempt BEFORE the durable audio +
                     // checkpoint landed (e.g. still extracting a video's
@@ -943,16 +1460,21 @@ final class SummaryJobCenter {
                     self.archive.delete(id: sessionID)
                     self.activities[sessionID] = nil
                 }
+                self.suspendedImportIDs.remove(sessionID)
             } catch {
                 self.errors[sessionID] = error.localizedDescription
                 // A failed import must not auto-retry (the finishJob
                 // re-sweep would restart it immediately, and a
                 // deterministic failure — e.g. no recognizable speech —
                 // would loop forever). Dropping the checkpoint makes the
-                // resume sweeps skip it; the checkpoint-less placeholder
-                // is swept at next launch, same as pre-resume behavior.
+                // resume sweeps skip it. The failure is PERSISTED on the
+                // record (importing cleared, error kept): the old
+                // checkpoint-less placeholder was silently swept at next
+                // launch, so an overnight import failure left no trace.
                 if var record = self.archive.sessions.first(where: { $0.id == sessionID }) {
                     record.importCheckpoint = nil
+                    record.importing = nil
+                    record.importError = error.localizedDescription
                     self.archive.update(record)
                 }
             }
@@ -985,6 +1507,65 @@ final class SummaryJobCenter {
               record.importCheckpoint != nil
         else { return }
         record.importCheckpoint?.segments.append(segment)
+        archive.update(record)
+    }
+
+    /// Arms (or reuses) the accuracy pass's resume checkpoint and returns
+    /// the segments a matching prior attempt already decoded. A checkpoint
+    /// written by a different backend is replaced — its segments are not
+    /// reusable. The Apple backend reports no segments, so there's nothing
+    /// to arm.
+    private func seedRetranscribeCheckpoint(
+        sessionID: UUID, backend: OfflineTranscriber.Backend
+    ) -> [SessionRecord.ImportCheckpoint.Segment] {
+        guard backend != .apple,
+              var record = archive.sessions.first(where: { $0.id == sessionID })
+        else { return [] }
+        let reusable = SessionRetranscriber.reusableSegments(
+            checkpoint: record.retranscribeCheckpoint, backend: backend)
+        if record.retranscribeCheckpoint?.backendRaw != backend.rawValue {
+            record.retranscribeCheckpoint = SessionRecord.RetranscribeCheckpoint(
+                backendRaw: backend.rawValue)
+            archive.update(record)
+        }
+        if !reusable.isEmpty {
+            logger.info("retranscribe resume: \(reusable.count) cached segments for \(sessionID, privacy: .public)")
+        }
+        return reusable
+    }
+
+    /// How many decoded segments accumulate before the checkpoint persists.
+    /// Unlike an import (whose record starts empty), a retranscribe rides a
+    /// fully-populated SessionRecord — per-segment archive.update would
+    /// re-encode the whole multi-hundred-KB record continuously for the
+    /// 20-30 min pass. Batching trades ≤9 segments (~1 min of decode) of
+    /// resume progress for ~10x less encode/flash churn.
+    private static let retranscribeCheckpointBatch = 10
+
+    /// Batched checkpoint writer for the accuracy pass. nil for Apple
+    /// (no segments). The tail of a partial batch is deliberately not
+    /// flushed — a cancelled pass just re-decodes those few segments.
+    private func retranscribeSegmentRecorder(
+        sessionID: UUID, backend: OfflineTranscriber.Backend
+    ) -> (@MainActor @Sendable (SessionRecord.ImportCheckpoint.Segment) -> Void)? {
+        guard backend != .apple else { return nil }
+        retranscribeSegmentBuffers[sessionID] = []
+        return { [weak self] segment in
+            self?.bufferRetranscribeSegment(sessionID: sessionID, segment: segment)
+        }
+    }
+
+    private func bufferRetranscribeSegment(
+        sessionID: UUID, segment: SessionRecord.ImportCheckpoint.Segment
+    ) {
+        retranscribeSegmentBuffers[sessionID, default: []].append(segment)
+        guard let buffered = retranscribeSegmentBuffers[sessionID],
+              buffered.count >= Self.retranscribeCheckpointBatch,
+              var record = archive.sessions.first(where: { $0.id == sessionID }),
+              record.retranscribeCheckpoint != nil
+        else { return }
+        record.retranscribeCheckpoint?.segments.append(contentsOf: buffered)
+        retranscribeSegmentBuffers[sessionID] = []
         archive.update(record)
     }
 
@@ -1022,17 +1603,27 @@ final class SummaryJobCenter {
         guard activities[sessionID] != nil else { return }
         switch phase {
         case .transcribing(let f):
-            setProgress(sessionID, .importing(.transcribing(Self.percent(f))),
-                        phaseKey: "import.asr", fraction: f)
+            setProgress(sessionID, phaseKey: "import.asr", fraction: f) {
+                .importing(.transcribing($0))
+            }
+        case .cleaningUpTranscript(let f):
+            setProgress(sessionID, phaseKey: "import.cleanup", fraction: f) {
+                .importing(.cleaningUpTranscript($0))
+            }
         case .fetchingSpeakerModel(let f):
-            setProgress(sessionID, .importing(.fetchingSpeakerModel(Self.percent(f))),
-                        phaseKey: "import.fetch", fraction: f)
+            setProgress(sessionID, phaseKey: "import.fetch", fraction: f) {
+                .importing(.fetchingSpeakerModel($0))
+            }
         case .identifyingSpeakers(let f):
-            setProgress(sessionID, .importing(.identifyingSpeakers(Self.percent(f))),
-                        phaseKey: "import.diarize", fraction: f)
+            setProgress(sessionID, phaseKey: "import.diarize", fraction: f) {
+                .importing(.identifyingSpeakers($0))
+            }
         case .translating(let f):
-            setProgress(sessionID, .importing(.translating(Self.percent(f))),
-                        phaseKey: "import.translate", fraction: f)
+            setProgress(sessionID, phaseKey: "import.translate", fraction: f) {
+                .importing(.translating($0))
+            }
+        case .coolingDown:
+            enterCoolingDown(sessionID, activity: .importing(.coolingDown))
         }
     }
 
@@ -1042,31 +1633,75 @@ final class SummaryJobCenter {
         guard activities[sessionID] != nil else { return }
         switch phase {
         case .transcribing(let f):
-            setProgress(sessionID, .retranscribing(.transcribing(Self.percent(f))),
-                        phaseKey: "re.asr", fraction: f)
+            setProgress(sessionID, phaseKey: "re.asr", fraction: f) {
+                .retranscribing(.transcribing($0))
+            }
+        case .cleaningUpTranscript(let f):
+            setProgress(sessionID, phaseKey: "re.cleanup", fraction: f) {
+                .retranscribing(.cleaningUpTranscript($0))
+            }
         case .identifyingSpeakers(let f):
-            setProgress(sessionID, .retranscribing(.identifyingSpeakers(Self.percent(f))),
-                        phaseKey: "re.diarize", fraction: f)
+            setProgress(sessionID, phaseKey: "re.diarize", fraction: f) {
+                .retranscribing(.identifyingSpeakers($0))
+            }
         case .translating(let f):
-            setProgress(sessionID, .retranscribing(.translating(Self.percent(f))),
-                        phaseKey: "re.translate", fraction: f)
+            setProgress(sessionID, phaseKey: "re.translate", fraction: f) {
+                .retranscribing(.translating($0))
+            }
+        case .coolingDown:
+            enterCoolingDown(sessionID, activity: .retranscribing(.coolingDown))
         }
     }
 
-    /// Single write path: dedupe equal activities, feed the ETA every raw
-    /// tick, publish `remaining` only on whole-second changes.
-    private func setProgress(
-        _ sessionID: UUID, _ activity: Activity, phaseKey: String, fraction: Double
+    /// A resumed pass replays its checkpointed segments in seconds; pre-seed
+    /// the phase's display floor at that coverage so the bar CONTINUES from
+    /// where it left off instead of visibly falling to 0 and sprinting back.
+    /// The floor also anchors the fresh ETA after the replay region, so the
+    /// replay burst can't mint a "~30 sec left" lie. Badge is untouched —
+    /// the first real tick renders the floored fraction.
+    private func seedTranscribeFloor(
+        sessionID: UUID, phaseKey: String,
+        cached: [SessionRecord.ImportCheckpoint.Segment], duration: TimeInterval
     ) {
+        guard duration > 0, let end = cached.map(\.end).max(), end > 0 else { return }
+        phaseKeys[sessionID] = phaseKey
+        displayFloors[sessionID] = min(end / duration, 0.95)
+        etas[sessionID] = ProcessingETA()
+        remaining[sessionID] = nil
+    }
+
+    /// The SoC hit .serious and the decode loop is sleeping: show the hold
+    /// (a frozen bar read as a hang) and retire the phase's ETA — its
+    /// elapsed clock would otherwise count the pause as glacial progress.
+    /// The next real progress tick re-enters the phase with a fresh ETA
+    /// anchored after the hold; the display floor keeps the bar in place.
+    private func enterCoolingDown(_ sessionID: UUID, activity: Activity) {
         if activities[sessionID] != activity { activities[sessionID] = activity }
+        etas[sessionID] = ProcessingETA()
+        if remaining[sessionID] != nil { remaining[sessionID] = nil }
+    }
+
+    /// Single write path: dedupe equal activities (quantized to whole
+    /// percents), clamp the shown fraction monotonic within a phase, feed
+    /// the ETA every raw tick, publish `remaining` only on whole-second
+    /// changes. `build` receives the display fraction.
+    private func setProgress(
+        _ sessionID: UUID, phaseKey: String, fraction: Double,
+        build: (Double) -> Activity
+    ) {
         if phaseKeys[sessionID] != phaseKey {
             // New phase, new 0…1 scale: the previous rate means nothing.
             phaseKeys[sessionID] = phaseKey
             etas[sessionID] = ProcessingETA()
             if remaining[sessionID] != nil { remaining[sessionID] = nil }
+            displayFloors[sessionID] = 0
         }
+        let floor = max(displayFloors[sessionID] ?? 0, min(fraction, 1))
+        displayFloors[sessionID] = floor
+        let activity = build(Self.percent(floor))
+        if activities[sessionID] != activity { activities[sessionID] = activity }
         var eta = etas[sessionID] ?? ProcessingETA()
-        eta.update(fraction: fraction)
+        eta.update(fraction: floor)
         etas[sessionID] = eta
         let old = remaining[sessionID]
         if let new = eta.remaining {
@@ -1092,9 +1727,11 @@ final class SummaryJobCenter {
         remaining[sessionID] = nil
         etas[sessionID] = nil
         phaseKeys[sessionID] = nil
+        displayFloors[sessionID] = nil
         tasks[sessionID] = nil
         graces[sessionID]?.end()
         graces[sessionID] = nil
+        retranscribeSegmentBuffers[sessionID] = nil
         // A resume sweep that ran while this job was still unwinding
         // skipped its session (`tasks` non-nil). Now that teardown is
         // done, re-sweep — otherwise a checkpointed import cancelled by
@@ -1103,6 +1740,11 @@ final class SummaryJobCenter {
         // guards (foreground, not recording, no badge, checkpoint
         // present) make this a no-op in every other case.
         resumeUnfinishedImports()
+        // Same rationale for pending accuracy passes: a foreground sweep
+        // that found this session busy never comes back on its own.
+        // Re-sweep now that this job's slot is clear; the sweep's own
+        // guards no-op every other case.
+        resumePendingPostProcesses()
     }
 
     /// Respect the gates, then make the model ready. With consent the load
@@ -1114,7 +1756,12 @@ final class SummaryJobCenter {
             try await llm.load { [weak self] fraction in
                 Task { @MainActor in
                     guard let self, self.activities[sessionID] != nil else { return }
-                    self.activities[sessionID] = .downloadingModel(fraction)
+                    // Through setProgress: quantized + deduped (raw writes
+                    // re-rendered every observing view per network chunk)
+                    // and the previous phase's stale ETA is cleared.
+                    self.setProgress(sessionID, phaseKey: "modelDownload", fraction: fraction) {
+                        .downloadingModel($0)
+                    }
                 }
             }
         } else {
@@ -1164,7 +1811,11 @@ final class SummaryJobCenter {
             in: SummaryEngine.summaryLanguage(for: cleaned),
             progress: { [weak self] done, total in
                 guard let self, self.activities[sessionID] != nil else { return }
-                self.activities[sessionID] = .summarizing(done: done, total: total)
+                // Through setProgress: summarize gets a real ETA too.
+                self.setProgress(
+                    sessionID, phaseKey: "summarize",
+                    fraction: total > 0 ? Double(done) / Double(total) : 0
+                ) { _ in .summarizing(done: done, total: total) }
             },
             checkpoint: { [weak self] notes, coveredThroughID in
                 // Persist each completed map chunk so a mid-summary
@@ -1421,3 +2072,92 @@ final class SerialGate {
         waiters.remove(at: index).continuation.resume(throwing: CancellationError())
     }
 }
+
+#if os(iOS)
+import BackgroundTasks
+
+/// Keeps a backgrounded import / re-transcribe decoding ASR (and running
+/// sherpa diarization) in a `BGProcessingTask`, so a long CPU pass keeps
+/// advancing after the app leaves the foreground instead of only resuming
+/// on the next launch. The LLM cleanup/summary phases are Metal-bound and
+/// stay parked for foreground. iOS schedules the task on its own idle
+/// windows, so this is "finish while the phone is idle", not "keep going
+/// the instant you background".
+///
+/// Hosted here (not its own file) to avoid an xcodegen pbxproj change.
+@MainActor
+enum BackgroundProcessingScheduler {
+    /// MUST match `BGTaskSchedulerPermittedIdentifiers` in Info.plist, or
+    /// `register` crashes the app at launch.
+    static let taskIdentifier = "com.kunzhipeng.loqi.background-asr"
+    private static let logger = Logger(
+        subsystem: "com.kunzhipeng.loqi", category: "bgprocessing")
+    private static weak var jobs: SummaryJobCenter?
+
+    /// Call ONCE, before the app finishes launching (LoqiApp.init) — a
+    /// later register, or an identifier missing from the plist, crashes.
+    static func register(jobs: SummaryJobCenter) {
+        self.jobs = jobs
+        // `using: .main` runs the launch handler on the main queue, so the
+        // MainActor.assumeIsolated below is valid. With `using: nil` iOS
+        // delivers it on a BACKGROUND queue and assumeIsolated traps
+        // (libdispatch "not expected to execute on queue" — a crash).
+        BGTaskScheduler.shared.register(
+            forTaskWithIdentifier: taskIdentifier, using: .main
+        ) { task in
+            guard let task = task as? BGProcessingTask else {
+                task.setTaskCompleted(success: false)
+                return
+            }
+            MainActor.assumeIsolated { run(task) }
+        }
+    }
+
+    /// Submit a request when backgrounding with resumable CPU work. Best
+    /// effort — a full queue or Simulator (no BG support) just no-ops.
+    static func scheduleIfNeeded(jobs: SummaryJobCenter) {
+        guard jobs.hasResumableBackgroundASR else { return }
+        let request = BGProcessingTaskRequest(identifier: taskIdentifier)
+        // On-device, no network; run on any idle window, not only charging
+        // — the decode's own thermal degradation + checkpointing keep it
+        // safe off-charger (see VADSegmentedTranscriber).
+        request.requiresExternalPower = false
+        request.requiresNetworkConnectivity = false
+        do {
+            try BGTaskScheduler.shared.submit(request)
+            logger.notice("bg-asr: scheduled")
+        } catch {
+            logger.error("bg-asr: schedule failed \(error.localizedDescription, privacy: .public)")
+        }
+    }
+
+    private static func run(_ task: BGProcessingTask) {
+        guard let jobs else { task.setTaskCompleted(success: false); return }
+        logger.notice("bg-asr: window started")
+        // Decoded-segment count before the window; re-arm only if it grew.
+        let progressBefore = jobs.backgroundASRProgressMark()
+        let work = Task { @MainActor in await jobs.runBackgroundASRWindow() }
+        // iOS calls this shortly before the window ends; cancelling stops
+        // the decode at its next segment boundary (checkpoint persisted).
+        task.expirationHandler = {
+            logger.notice("bg-asr: window expiring")
+            work.cancel()
+        }
+        Task { @MainActor in
+            await work.value
+            // Re-arm ONLY if the window actually decoded new segments —
+            // otherwise ASR is done and only the foreground LLM phase
+            // remains, so another window would just replay the cache and
+            // redo diarization for nothing (battery). The single
+            // setTaskCompleted site is here (not the expiration handler)
+            // because runBackgroundASRWindow's cleanup is prompt — it
+            // fire-and-forgets the decode cancel, never awaits it.
+            if jobs.backgroundASRProgressMark() > progressBefore {
+                scheduleIfNeeded(jobs: jobs)
+            }
+            task.setTaskCompleted(success: true)
+            logger.notice("bg-asr: window done")
+        }
+    }
+}
+#endif

@@ -186,10 +186,14 @@ struct SummaryEngine {
         for index in updated.entries.indices {
             guard restored < Self.hygieneRestoreCap else { break }
             let entry = updated.entries[index]
-            // rawSourceText set means an earlier pass already restored it.
-            guard entry.rawSourceText == nil,
-                  matcher.shouldForceRefine(
-                    entry.sourceText, language: entry.direction.source)
+            // Restore only where a fuzzy near-miss is still present:
+            // exact-match mentions need no LLM, and entries the live
+            // cleanup already fixed stop matching. Deliberately NOT gated
+            // on rawSourceText — the live cleanup sets it for any accepted
+            // edit, and vocabulary added after the recording must still
+            // get its restore chance here.
+            guard matcher.hasUnresolvedNearMiss(
+                entry.sourceText, language: entry.direction.source)
             else { continue }
             let vocabulary = matcher.noteGlossaryLines(
                 language: entry.direction.source, text: entry.sourceText)
@@ -206,7 +210,13 @@ struct SummaryEngine {
                     fixed, original: entry.sourceText),
                   fixed != entry.sourceText
             else { continue }
-            updated.entries[index].rawSourceText = entry.sourceText
+            // Keep the EARLIEST raw text: when the live cleanup already
+            // stored the true ASR original, overwriting it here with the
+            // cleaned intermediate would permanently lose the record of
+            // what was actually recognized.
+            if updated.entries[index].rawSourceText == nil {
+                updated.entries[index].rawSourceText = entry.sourceText
+            }
             updated.entries[index].sourceText = fixed
             changedIDs.insert(entry.id)
         }
@@ -403,10 +413,12 @@ struct SummaryEngine {
         return String(format: "%02d:%02d", total / 60, total % 60)
     }
 
-    /// Summaries are for the reader: the app/device language wins, with the
+    /// Summaries are for the reader: an explicit per-record choice
+    /// (Languages menu) wins, then the app/device language, with the
     /// session's target language as fallback.
     static func summaryLanguage(for record: SessionRecord) -> AppLanguage {
-        AppLanguage.devicePreferred
+        record.summaryLanguageOverride
+            ?? AppLanguage.devicePreferred
             ?? record.entries.last?.direction.target ?? .english
     }
 
@@ -420,7 +432,11 @@ struct SummaryEngine {
     static func hasSpokenSubstance(_ records: [SessionRecord.SummaryRecord]) -> Bool {
         records.contains { record in
             record.source != .photo && record.kind != .topic
-                && !record.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                // Scrubbed, not raw: an id-only record ("m004 m009 …") has
+                // non-empty raw text but no real content — it must not make
+                // the reduce invent a summary from noise.
+                && !PromptBuilder.strippedSourceIDTokens(record.text)
+                    .trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
         }
     }
 
@@ -1005,6 +1021,13 @@ enum SummaryRecordReducer {
         _ record: Record,
         usedKeys: inout [String]
     ) -> String? {
+        // Bail on the FINAL displayed text: a record whose text was nothing
+        // but source-id citations ("m004 m009 …") scrubs to empty here and
+        // must not render as a bare "- " bullet. dedupText isn't scrubbed,
+        // so its non-empty key alone couldn't catch this.
+        let display = displayText(record, includeSource: true)
+        guard !display.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        else { return nil }
         let key = SummaryEngine.dedupKey(dedupText(record))
         guard !key.isEmpty else { return nil }
         for prior in usedKeys
@@ -1013,7 +1036,7 @@ enum SummaryRecordReducer {
             return nil
         }
         usedKeys.append(key)
-        return displayText(record, includeSource: true)
+        return display
     }
 
     private static func cap(

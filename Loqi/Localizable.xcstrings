@@ -488,6 +488,72 @@
         }
       }
     },
+    "Applies to this session and becomes the default for new recordings. If a summary exists, it's rewritten in the new style." : {
+      "extractionState" : "stale",
+      "localizations" : {
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "このセッションに適用され、新しい録音のデフォルトになります。既に要約がある場合は、新しいスタイルで書き直されます。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "应用于本次会话，并成为新录音的默认设置。如果已有总结，会按新风格重写。"
+          }
+        }
+      }
+    },
+    "Apply" : {
+      "localizations" : {
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "適用"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "应用"
+          }
+        }
+      }
+    },
+    "Apply changes" : {
+      "extractionState" : "stale",
+      "localizations" : {
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "変更を適用"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "应用更改"
+          }
+        }
+      }
+    },
+    "Applying re-translates the transcript with the new languages." : {
+      "localizations" : {
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "適用すると、新しい言語設定でトランスクリプトが再翻訳されます。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "应用后会按新的语言设置重新翻译文字记录。"
+          }
+        }
+      }
+    },
     "Ask about this session" : {
       "extractionState" : "stale",
       "localizations" : {
@@ -550,6 +616,38 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "自动"
+          }
+        }
+      }
+    },
+    "Auto (Dolphin for 中/日/한)" : {
+      "localizations" : {
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "自動（中・日・韓は Dolphin）"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "自动（中/日/韩用 Dolphin）"
+          }
+        }
+      }
+    },
+    "Auto discovers the count from the audio. If it finds too many, set the exact number of people." : {
+      "localizations" : {
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "「自動」は音声から人数を推定します。多く検出されすぎる場合は、正確な人数を指定してください。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "“自动”从音频中推断人数。如果检测出的人数过多，请指定确切人数。"
           }
         }
       }
@@ -671,7 +769,24 @@
         }
       }
     },
+    "Bonsai 8B (ternary 2-bit)" : {
+      "localizations" : {
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Bonsai 8B（3値2ビット）"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Bonsai 8B（三值 2-bit）"
+          }
+        }
+      }
+    },
     "Bonsai 8B (ternary 2-bit) — experimental" : {
+      "extractionState" : "stale",
       "localizations" : {
         "ja" : {
           "stringUnit" : {
@@ -902,6 +1017,22 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "选择要下载的内容"
+          }
+        }
+      }
+    },
+    "Cleaning up transcript…" : {
+      "localizations" : {
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "文字起こしを整理中…"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "正在整理转写…"
           }
         }
       }
@@ -1280,7 +1411,6 @@
       }
     },
     "Diagnostics" : {
-      "extractionState" : "stale",
       "localizations" : {
         "ja" : {
           "stringUnit" : {
@@ -1364,6 +1494,87 @@
         }
       }
     },
+    "Dolphin (best for 中/日/한)" : {
+      "localizations" : {
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Dolphin（中/日/韓に最適）"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Dolphin（中/日/韩最佳）"
+          }
+        }
+      }
+    },
+    "Dolphin is unavailable in the native Mac app until the sherpa-onnx macOS library is bundled." : {
+      "localizations" : {
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "sherpa-onnx の macOS ライブラリが同梱されるまで、Mac 版アプリでは Dolphin を利用できません。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "在捆绑 sherpa-onnx 的 macOS 库之前，Mac 原生应用暂不支持 Dolphin。"
+          }
+        }
+      }
+    },
+    "Dolphin model" : {
+      "localizations" : {
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Dolphin モデル"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Dolphin 模型"
+          }
+        }
+      }
+    },
+    "Dolphin recognizes 中文/日本語/한국어 with the highest accuracy. Once downloaded, Re-transcribe & summarize and live Hybrid finals use it automatically for those languages (set Finals model to SenseVoice above, or remove the model, to go back). Auto post-process re-transcribes and identifies speakers before the first summary for new recordings, using downloaded models only." : {
+      "localizations" : {
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Dolphin は中国語・日本語・韓国語を最高精度で認識します。ダウンロード後は、これらの言語で「再文字起こしして要約」とハイブリッドのライブ確定文が自動的に Dolphin を使用します（上の「確定モデル」を SenseVoice に切り替えるか、モデルを削除すると戻せます）。自動後処理は、新しい録音の最初の要約前に、ダウンロード済みモデルのみで再文字起こしと話者識別を行います。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Dolphin 以最高准确率识别中文/日语/韩语。下载后，这些语言的“重新转写并总结”和混合模式的实时定稿会自动使用 Dolphin（将上方“定稿模型”切换为 SenseVoice，或删除该模型，即可恢复）。自动后处理仅使用已下载的模型，在新录音的首次总结前重新转写并识别说话人。"
+          }
+        }
+      }
+    },
+    "Dolphin recognizes 中文/日本語/한국어 with the highest accuracy. Once downloaded, Re-transcribe & summarize and live Hybrid sentences use it automatically for those languages (remove it to go back to SenseVoice). Auto post-process re-transcribes and identifies speakers before the first summary for new recordings, using downloaded models only." : {
+      "extractionState" : "stale",
+      "localizations" : {
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Dolphin は中国語・日本語・韓国語を最高精度で認識します。ダウンロード後は、これらの言語で「再文字起こしして要約」とハイブリッドのライブ確定文が自動的に Dolphin を使用します（削除すると SenseVoice に戻ります）。自動後処理は、新しい録音の最初の要約前に、ダウンロード済みモデルのみで再文字起こしと話者識別を行います。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Dolphin 以最高准确率识别中文/日语/韩语。下载后，这些语言的“重新转写并总结”和混合模式的实时定稿会自动使用 Dolphin（删除即可恢复为 SenseVoice）。自动后处理仅使用已下载的模型，在新录音的首次总结前重新转写并识别说话人。"
+          }
+        }
+      }
+    },
     "Done" : {
       "extractionState" : "stale",
       "localizations" : {
@@ -1411,6 +1622,22 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "下载 %@ 并继续"
+          }
+        }
+      }
+    },
+    "Download Dolphin model (~250 MB)" : {
+      "localizations" : {
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Dolphin モデルをダウンロード（約 250 MB）"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "下载 Dolphin 模型（约 250 MB）"
           }
         }
       }
@@ -1483,19 +1710,18 @@
         }
       }
     },
-    "Download Qwen3-ASR model (~990 MB)" : {
-      "extractionState" : "stale",
+    "Download photo model (0.8B)" : {
       "localizations" : {
         "ja" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Qwen3-ASRモデルをダウンロード（約990 MB）"
+            "value" : "写真モデルをダウンロード（0.8B）"
           }
         },
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "下载 Qwen3-ASR 模型（约 990 MB）"
+            "value" : "下载照片模型（0.8B）"
           }
         }
       }
@@ -1568,19 +1794,18 @@
         }
       }
     },
-    "Download the Qwen3-ASR model in Settings first." : {
-      "extractionState" : "stale",
+    "Download the Dolphin model in Settings first." : {
       "localizations" : {
         "ja" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "まず設定でQwen3-ASRモデルをダウンロードしてください。"
+            "value" : "先に設定で Dolphin モデルをダウンロードしてください。"
           }
         },
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "请先在设置中下载 Qwen3-ASR 模型。"
+            "value" : "请先在设置中下载 Dolphin 模型。"
           }
         }
       }
@@ -1731,6 +1956,39 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "正在下载说话人模型…"
+          }
+        }
+      }
+    },
+    "During a recording, the on-device AI model cleans up the live transcript — fixing misheard words, names, and punctuation — while Apple's system translation produces the translation itself. The default live model is Qwen3.5 0.8B; the experimental Liquid LFM2.5 above replaces it when enabled, in which case live notes and photo descriptions wait until the recording ends. After a recording, summaries, titles, vocabulary and chat use the summary model you pick above." : {
+      "extractionState" : "stale",
+      "localizations" : {
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "録音中は、オンデバイスAIモデルがライブ文字起こしを整えます（聞き間違い・人名・句読点の修正）。翻訳自体はAppleのシステム翻訳が行います。デフォルトのライブモデルはQwen3.5 0.8Bで、上の実験的なLiquid LFM2.5を有効にすると置き換わります（その間、ライブノートと写真の説明は録音終了後に生成されます）。録音後は、要約・タイトル・単語・チャットに上で選んだ要約モデルを使用します。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "录音期间，端侧 AI 模型负责整理实时转写——修正听错的词、人名和标点——翻译本身由 Apple 系统翻译完成。默认实时模型为 Qwen3.5 0.8B；启用上方实验性 Liquid LFM2.5 后将替代它，此时实时笔记和照片描述会等到录音结束后再生成。录音结束后，总结、标题、生词和聊天会使用你在上方选择的总结模型。"
+          }
+        }
+      }
+    },
+    "During a recording, the tiny on-device Liquid LFM2.5 model cleans up the live transcript — fixing misheard words, names, and punctuation — while Apple's system translation produces the translation itself. Live notes and photo descriptions are generated after the recording ends. After a recording, summaries, titles, vocabulary and chat use the summary model you pick above." : {
+      "localizations" : {
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "録音中は、超小型のオンデバイスLiquid LFM2.5モデルがライブ文字起こしを整えます（聞き間違い・人名・句読点の修正）。翻訳自体はAppleのシステム翻訳が行います。ライブノートと写真の説明は録音終了後に生成されます。録音後は、要約・タイトル・単語・チャットに上で選んだ要約モデルを使用します。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "录音期间，超小型端侧 Liquid LFM2.5 模型负责整理实时转写——修正听错的词、人名和标点——翻译本身由 Apple 系统翻译完成。实时笔记和照片描述会在录音结束后生成。录音结束后，总结、标题、生词和聊天会使用你在上方选择的总结模型。"
           }
         }
       }
@@ -1921,6 +2179,7 @@
       }
     },
     "Experimental: Bonsai 8B summary model" : {
+      "extractionState" : "stale",
       "localizations" : {
         "ja" : {
           "stringUnit" : {
@@ -1932,6 +2191,23 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "实验性：Bonsai 8B 总结模型"
+          }
+        }
+      }
+    },
+    "Experimental: Liquid LFM2.5 live-refine model" : {
+      "extractionState" : "stale",
+      "localizations" : {
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "実験的機能：ライブ精緻化にLiquid LFM2.5モデルを使用"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "实验性：实时精炼使用 Liquid LFM2.5 模型"
           }
         }
       }
@@ -2033,6 +2309,25 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "文件"
+          }
+        }
+      }
+    },
+    "Finalizing summary…" : {
+
+    },
+    "Finals model" : {
+      "localizations" : {
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "確定モデル"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "定稿模型"
           }
         }
       }
@@ -2153,23 +2448,6 @@
         }
       }
     },
-    "High-accuracy Qwen3-ASR will be used — slower than live recognition, noticeably more accurate. Everything runs on this iPhone." : {
-      "extractionState" : "stale",
-      "localizations" : {
-        "ja" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "高精度のQwen3-ASRを使用します — リアルタイム認識より遅い分、精度は格段に上です。すべての処理はこのiPhone上で行われます。"
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "将使用高精度 Qwen3-ASR——比实时识别慢，但准确率明显更高。所有处理都在这台 iPhone 上完成。"
-          }
-        }
-      }
-    },
     "High-accuracy re-transcription" : {
       "localizations" : {
         "ja" : {
@@ -2203,22 +2481,6 @@
         }
       }
     },
-    "Highest accuracy — typically takes about as long as the recording itself. Everything runs on this iPhone." : {
-      "localizations" : {
-        "ja" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "最高精度——通常、録音と同じくらいの時間がかかります。すべてこの iPhone 上で実行されます。"
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "最高精度——通常耗时与录音时长相当。一切都在这台 iPhone 上运行。"
-          }
-        }
-      }
-    },
     "Hotwords" : {
       "extractionState" : "stale",
       "localizations" : {
@@ -2232,6 +2494,39 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "热词"
+          }
+        }
+      }
+    },
+    "How far the mic reaches for voices. Changing it mid-recording pauses captions for a moment." : {
+      "localizations" : {
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "マイクが声を拾う距離です。録音中に変更すると、キャプションが一瞬止まります。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "麦克风拾取人声的距离。录音中更改会让字幕暂停片刻。"
+          }
+        }
+      }
+    },
+    "How much detail the summary keeps. Applies to this session and becomes the default for new recordings." : {
+      "extractionState" : "stale",
+      "localizations" : {
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "要約に残す詳細の量です。このセッションに適用され、新しい録音のデフォルトになります。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "总结保留的细节多少。应用于本次会话，并成为新录音的默认设置。"
           }
         }
       }
@@ -2253,8 +2548,23 @@
         }
       }
     },
+    "Identify speakers" : {
+      "localizations" : {
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "話者を識別"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "识别说话人"
+          }
+        }
+      }
+    },
     "Identifying speakers…" : {
-      "extractionState" : "stale",
       "localizations" : {
         "ja" : {
           "stringUnit" : {
@@ -2422,6 +2732,22 @@
     "Keep the camera open and try again." : {
 
     },
+    "Keeps current labels" : {
+      "localizations" : {
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "現在のラベルを維持"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "保留当前标签"
+          }
+        }
+      }
+    },
     "Landscape" : {
       "extractionState" : "stale",
       "localizations" : {
@@ -2440,6 +2766,22 @@
       }
     },
     "Language" : {
+      "localizations" : {
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "言語"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "语言"
+          }
+        }
+      }
+    },
+    "Languages" : {
       "localizations" : {
         "ja" : {
           "stringUnit" : {
@@ -2522,6 +2864,22 @@
         }
       }
     },
+    "Live AI model (LFM2.5)" : {
+      "localizations" : {
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "ライブAIモデル（LFM2.5）"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "实时 AI 模型（LFM2.5）"
+          }
+        }
+      }
+    },
     "Live Captions" : {
       "extractionState" : "stale",
       "localizations" : {
@@ -2535,6 +2893,22 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "实时字幕"
+          }
+        }
+      }
+    },
+    "Live captions always run in Hybrid mode: Apple shows instant word-by-word captions while the finals model finalizes each sentence for the saved transcript. Auto upgrades 中文/日本語/한국어 finals to Dolphin once that model is downloaded below; English sessions and Auto language detection always use SenseVoice. Everything runs fully on this iPhone." : {
+      "localizations" : {
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "ライブ字幕は常にハイブリッドモードで動作します：Apple が即時の逐語字幕を表示し、確定モデルが保存用の文字起こしの各文を確定します。自動では、下で Dolphin モデルをダウンロードすると中国語・日本語・韓国語の確定が Dolphin にアップグレードされます。英語セッションと自動言語検出では常に SenseVoice を使用します。すべてこの iPhone 上で完結します。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "实时字幕始终以混合模式运行：Apple 显示即时的逐词字幕，定稿模型为存档转写逐句定稿。自动模式在下方下载 Dolphin 模型后，会将中文/日语/韩语的定稿升级为 Dolphin；英语会话和自动语言检测始终使用 SenseVoice。一切完全在这台 iPhone 上运行。"
           }
         }
       }
@@ -2586,6 +2960,23 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "录制时始终使用快速的 Qwen3.5 0.8B 模型，让字幕和实时翻译保持流畅、低发热。录制结束后，总结、标题、生词和聊天会使用你在上方选择的总结模型。"
+          }
+        }
+      }
+    },
+    "Live recording uses the fast Qwen3.5 0.8B model by default — or the experimental Liquid LFM2.5 above — so captions and live translation stay responsive and cool. Live photo description needs the 0.8B model, so photos attached while LFM2.5 is active keep their OCR text until the recording ends. After a recording, summaries, titles, vocabulary and chat use the summary model you pick above." : {
+      "extractionState" : "stale",
+      "localizations" : {
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "録音中はデフォルトで高速なQwen3.5 0.8Bモデル(または上の実験的なLiquid LFM2.5)を使用し、字幕とリアルタイム翻訳を快適かつ低発熱に保ちます。ライブ写真の説明には0.8Bモデルが必要なため、LFM2.5が有効な間に追加された写真は、録音が終わるまでOCRテキストのままになります。録音後は、要約・タイトル・単語・チャットに上で選んだ要約モデルを使用します。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "录制时默认使用快速的 Qwen3.5 0.8B 模型（或上方的实验性 Liquid LFM2.5 模型），让字幕和实时翻译保持流畅、低发热。实时图片描述需要 0.8B 模型，因此在 LFM2.5 生效期间添加的照片会保留其文字识别结果，直到录制结束。录制结束后，总结、标题、生词和聊天会使用你在上方选择的总结模型。"
           }
         }
       }
@@ -2776,6 +3167,22 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "拾音范围"
+          }
+        }
+      }
+    },
+    "Mic pickup should match how the recording was made — pick a wider setting if distant speakers were missed. Runs much faster than the recording length. Everything stays on this iPhone." : {
+      "localizations" : {
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "マイクの拾い方は録音時の設定に合わせてください — 遠くの話者が抜けていた場合は広めの設定を選びます。録音の長さよりずっと速く完了し、すべてこの iPhone 上で処理されます。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "麦克风拾音应与录音时的设置一致 — 若漏掉了较远的说话人，请选择更广的档位。远快于录音时长，全部在这台 iPhone 上完成。"
           }
         }
       }
@@ -3134,6 +3541,22 @@
         }
       }
     },
+    "Not separated" : {
+      "localizations" : {
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "分離しません"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "不区分说话人"
+          }
+        }
+      }
+    },
     "Not supported on this device" : {
       "extractionState" : "stale",
       "localizations" : {
@@ -3234,56 +3657,6 @@
         }
       }
     },
-    "Once downloaded, Re-transcribe & summarize and imports use Qwen3-ASR automatically: one model for 中文, English, 日本語 and 한국어, primed with your vocabulary — slower than live recognition, noticeably more accurate. Runs fully on this iPhone." : {
-      "extractionState" : "stale",
-      "localizations" : {
-        "ja" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "ダウンロード後、「再文字起こしと要約」とインポートは自動的にQwen3-ASRを使用します。1つのモデルで中国語・英語・日本語・韓国語に対応し、あなたの語彙で精度を高めます。リアルタイム認識より遅い分、精度は格段に上です。すべてこのiPhone上で動作します。"
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "下载后，“重新转写并总结”和导入会自动使用 Qwen3-ASR：一个模型覆盖中文、英语、日语和韩语，并以你的词汇表加持——比实时识别慢，但准确率明显更高。完全在这台 iPhone 上运行。"
-          }
-        }
-      }
-    },
-    "Once downloaded, Re-transcribe & summarize uses Qwen3-ASR automatically, and imports can select it: one model for 中文, English, 日本語 and 한국어, primed with your vocabulary — slower than live recognition, noticeably more accurate. Runs fully on this iPhone." : {
-      "extractionState" : "stale",
-      "localizations" : {
-        "ja" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "ダウンロード後、「再文字起こしと要約」は自動的にQwen3-ASRを使用し、インポートでも選択できます。1つのモデルで中国語・英語・日本語・韓国語に対応し、あなたの語彙で精度を高めます。リアルタイム認識より遅い分、精度は格段に上です。すべてこのiPhone上で動作します。"
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "下载后，“重新转写并总结”会自动使用 Qwen3-ASR，导入时也可选用：一个模型覆盖中文、英语、日语和韩语，并以你的词汇表加持——比实时识别慢，但准确率明显更高。完全在这台 iPhone 上运行。"
-          }
-        }
-      }
-    },
-    "Once downloaded, Re-transcribe & summarize uses Qwen3-ASR automatically, and imports can select it. Auto post-process re-transcribes and identifies speakers before the first summary for new recordings, using downloaded models only. Live captions stay on the fast engines." : {
-      "localizations" : {
-        "ja" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "ダウンロード後、「再文字起こしと要約」は自動的にQwen3-ASRを使用し、インポートでも選択できます。自動後処理は、ダウンロード済みモデルだけを使って、新しい録音の最初の要約前に再文字起こしと話者識別を行います。ライブ字幕は高速エンジンのままです。"
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "下载后，“重新转写并总结”会自动使用 Qwen3-ASR，导入时也可选用。自动后处理会在新录音第一次总结前重新转写并识别说话人，且只使用已下载的模型。实时字幕仍使用快速引擎。"
-          }
-        }
-      }
-    },
     "One local model powers better translations, summaries, titles, chat and vocabulary suggestions. Turning AI features off disables all of them. The model downloads only when you ask — here, or when a feature offers it." : {
       "extractionState" : "stale",
       "localizations" : {
@@ -3316,6 +3689,9 @@
           }
         }
       }
+    },
+    "Only one recording or session can be processed at a time. Stop the other task to start this one." : {
+
     },
     "Open Settings" : {
       "extractionState" : "stale",
@@ -3450,6 +3826,22 @@
         }
       }
     },
+    "Photo AI model files" : {
+      "localizations" : {
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "写真AIモデルのファイル"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "照片 AI 模型文件"
+          }
+        }
+      }
+    },
     "Photo library" : {
       "extractionState" : "stale",
       "localizations" : {
@@ -3502,6 +3894,7 @@
       }
     },
     "Powers speaker separation for recordings and imported audio. Voice data never leaves this iPhone. Use HF-Mirror if Hugging Face is unreachable — this model is not available on ModelScope." : {
+      "extractionState" : "stale",
       "localizations" : {
         "ja" : {
           "stringUnit" : {
@@ -3513,6 +3906,22 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "为录音和导入的音频提供说话人分离。语音数据绝不会离开这台 iPhone。如果无法访问 Hugging Face，请使用 HF-Mirror——此模型在 ModelScope 上不提供。"
+          }
+        }
+      }
+    },
+    "Powers speaker separation for recordings and imported audio. Voice data never leaves this iPhone. Use ModelScope if Hugging Face is unreachable." : {
+      "localizations" : {
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "録音や読み込んだ音声の話者分離に使われます。音声データがこの iPhone の外に出ることはありません。Hugging Face に接続できない場合は ModelScope をご利用ください。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "为录音和导入的音频提供说话人分离。语音数据绝不会离开这台 iPhone。如果无法访问 Hugging Face，请使用 ModelScope。"
           }
         }
       }
@@ -3567,6 +3976,9 @@
         }
       }
     },
+    "Preparing…" : {
+
+    },
     "Private on-device voice notes, transcripts and summaries — with live translation." : {
       "localizations" : {
         "ja" : {
@@ -3595,56 +4007,6 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "处理中"
-          }
-        }
-      }
-    },
-    "Qwen3-ASR (highest accuracy)" : {
-      "localizations" : {
-        "ja" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Qwen3-ASR（最高精度）"
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Qwen3-ASR（最高精度）"
-          }
-        }
-      }
-    },
-    "Qwen3-ASR model" : {
-      "extractionState" : "stale",
-      "localizations" : {
-        "ja" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Qwen3-ASRモデル"
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Qwen3-ASR 模型"
-          }
-        }
-      }
-    },
-    "Qwen3-ASR re-transcription" : {
-      "extractionState" : "stale",
-      "localizations" : {
-        "ja" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Qwen3-ASR 再文字起こし"
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Qwen3-ASR 重新转写"
           }
         }
       }
@@ -3694,6 +4056,22 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Qwen3.5 2B AI 模型"
+          }
+        }
+      }
+    },
+    "Re-identifying reassigns speaker slots, so custom speaker names may move." : {
+      "localizations" : {
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "再識別すると話者スロットが再割り当てされるため、カスタムの話者名がずれることがあります。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "重新识别会重新分配说话人位置，自定义的说话人名称可能会移位。"
           }
         }
       }
@@ -3916,6 +4294,22 @@
         }
       }
     },
+    "Recording options" : {
+      "localizations" : {
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "録音オプション"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "录音选项"
+          }
+        }
+      }
+    },
     "Recording saved to Sessions — no speech was transcribed." : {
       "extractionState" : "stale",
       "localizations" : {
@@ -3977,6 +4371,22 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "降低发热"
+          }
+        }
+      }
+    },
+    "Remove Dolphin model" : {
+      "localizations" : {
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Dolphin モデルを削除"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "删除 Dolphin 模型"
           }
         }
       }
@@ -4049,7 +4459,24 @@
         }
       }
     },
+    "Replaces the transcript with a fresh transcription of the recording, then summarizes again." : {
+      "localizations" : {
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "録音を新たに文字起こししてトランスクリプトを置き換え、要約をやり直します。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "用录音的全新转写替换文字记录，然后重新生成总结。"
+          }
+        }
+      }
+    },
     "Replaces the transcript with a fresh transcription of the recording, then summarizes again. Edits to the old summary are lost." : {
+      "extractionState" : "stale",
       "localizations" : {
         "ja" : {
           "stringUnit" : {
@@ -4061,6 +4488,22 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "将用录音的全新转写替换当前文字稿，并重新生成摘要。对旧摘要的编辑会丢失。"
+          }
+        }
+      }
+    },
+    "Replaces the transcript with a fresh transcription of the recording. AI features are off, so it skips cleanup and doesn't re-summarize." : {
+      "localizations" : {
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "録音を新しく文字起こしし直して置き換えます。AI機能はオフのため、クリーンアップは行わず、要約もし直しません。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "用录音的全新转写替换文字稿。AI 功能已关闭，因此跳过清理，也不会重新生成摘要。"
           }
         }
       }
@@ -4234,6 +4677,9 @@
         }
       }
     },
+    "SenseVoice" : {
+
+    },
     "SenseVoice (accurate)" : {
       "localizations" : {
         "ja" : {
@@ -4301,7 +4747,25 @@
         }
       }
     },
+    "SenseVoice recognizes 中文, English, 日本語 and 한국어 with much higher accuracy — captions update in ~1-second pulses instead of word-by-word. Hybrid shows Apple's instant word-by-word captions while SenseVoice finalizes each sentence for the saved transcript — the coolest-running option; needs a specific language (not Auto). Everything runs fully on this iPhone." : {
+      "extractionState" : "stale",
+      "localizations" : {
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "SenseVoice は中国語・英語・日本語・韓国語をはるかに高い精度で認識します。字幕は単語ごとではなく約 1 秒ごとに更新されます。ハイブリッドは Apple の即時字幕を単語ごとに表示しながら、保存する文字起こしは SenseVoice が文ごとに確定します — 最も発熱の少ない選択肢です（言語の指定が必要で、自動検出は不可）。すべてこの iPhone 上で実行されます。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "SenseVoice 识别中文、英语、日语和韩语，精度大幅提升——字幕约每 1 秒成段更新，而非逐词出现。混合模式实时逐词显示 Apple 的即时字幕，同时由 SenseVoice 逐句确定保存的文字记录——发热最低的选项；需要指定语言（不支持自动检测）。全部在这台 iPhone 上运行。"
+          }
+        }
+      }
+    },
     "SenseVoice recognizes 中文, English, 日本語 and 한국어 with much higher accuracy — captions update in ~1-second pulses instead of word-by-word. Runs fully on this iPhone." : {
+      "extractionState" : "stale",
       "localizations" : {
         "ja" : {
           "stringUnit" : {
@@ -4434,6 +4898,71 @@
         }
       }
     },
+    "Show original recognition" : {
+      "localizations" : {
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "元の認識結果を表示"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "显示原始识别结果"
+          }
+        }
+      }
+    },
+    "Shows a translation under each caption. You can change this during a recording." : {
+      "localizations" : {
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "各キャプションの下に翻訳を表示します。録音中でも変更できます。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "在每条字幕下方显示翻译。录音过程中也可以更改。"
+          }
+        }
+      }
+    },
+    "Shows a translation under each transcript line." : {
+      "localizations" : {
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "各行の下に翻訳を表示します。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "在每行文字下方显示翻译。"
+          }
+        }
+      }
+    },
+    "Shows a translation under each transcript line. Changing this re-translates the whole transcript right away." : {
+      "extractionState" : "stale",
+      "localizations" : {
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "各行の下に翻訳を表示します。変更するとトランスクリプト全体がすぐに再翻訳されます。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "在每行文字下方显示翻译。更改后会立即重新翻译整个文字记录。"
+          }
+        }
+      }
+    },
     "Simplified Chinese" : {
       "localizations" : {
         "ja" : {
@@ -4512,23 +5041,6 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "已跳过"
-          }
-        }
-      }
-    },
-    "Slower, high-accuracy second pass for recordings" : {
-      "extractionState" : "stale",
-      "localizations" : {
-        "ja" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "録音をより高精度に再処理（低速）"
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "较慢但高精度的录音二次转写"
           }
         }
       }
@@ -4654,6 +5166,38 @@
         }
       }
     },
+    "Speaker separation found no speakers in this recording." : {
+      "localizations" : {
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "この録音では話者を検出できませんでした。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "在这段录音中未检测到说话人。"
+          }
+        }
+      }
+    },
+    "Speaker separation isn't available on this platform." : {
+      "localizations" : {
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "このプラットフォームでは話者分離を利用できません。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "此平台不支持说话人分离。"
+          }
+        }
+      }
+    },
     "Speaker separation unavailable: %@" : {
       "extractionState" : "stale",
       "localizations" : {
@@ -4704,6 +5248,22 @@
         }
       }
     },
+    "Spoken language" : {
+      "localizations" : {
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "話されている言語"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "录音语言"
+          }
+        }
+      }
+    },
     "Standard" : {
       "extractionState" : "stale",
       "localizations" : {
@@ -4721,6 +5281,22 @@
         }
       }
     },
+    "Start" : {
+      "localizations" : {
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "開始"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "开始"
+          }
+        }
+      }
+    },
     "Start a session and live translated captions will appear here." : {
       "extractionState" : "stale",
       "localizations" : {
@@ -4734,6 +5310,23 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "开始会话后，实时翻译字幕会显示在这里。"
+          }
+        }
+      }
+    },
+    "Start re-transcription" : {
+      "extractionState" : "stale",
+      "localizations" : {
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "再文字起こしを開始"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "开始重新转写"
           }
         }
       }
@@ -5043,6 +5636,22 @@
         }
       }
     },
+    "Summary language" : {
+      "localizations" : {
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "要約の言語"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "总结语言"
+          }
+        }
+      }
+    },
     "Summary length" : {
       "extractionState" : "stale",
       "localizations" : {
@@ -5090,6 +5699,23 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "总结模型文件"
+          }
+        }
+      }
+    },
+    "Summary options" : {
+      "extractionState" : "stale",
+      "localizations" : {
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "要約オプション"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "总结选项"
           }
         }
       }
@@ -5284,6 +5910,38 @@
         }
       }
     },
+    "The language being spoken. Auto detects it as you talk. Changing it mid-recording pauses captions for a moment." : {
+      "localizations" : {
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "話される言語です。「自動」は話し始めると自動的に検出します。録音中に変更すると、字幕が一時的に止まります。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "说话所用的语言。“自动”会在你开口时自动检测。录音中更改会让字幕暂停片刻。"
+          }
+        }
+      }
+    },
+    "The language summaries are written in. Auto follows your device language. Applies the next time you summarize." : {
+      "localizations" : {
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "要約が書かれる言語です。「自動」はデバイスの言語に従います。次回の要約から適用されます。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "总结所使用的语言。“自动”跟随设备语言。下次生成总结时生效。"
+          }
+        }
+      }
+    },
     "The selected model cannot read images" : {
       "extractionState" : "stale",
       "localizations" : {
@@ -5297,6 +5955,22 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "所选模型无法读取图片"
+          }
+        }
+      }
+    },
+    "The speaker model couldn't be loaded — try re-downloading it." : {
+      "localizations" : {
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "話者モデルを読み込めませんでした。再ダウンロードをお試しください。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "无法加载说话人模型——请尝试重新下载。"
           }
         }
       }
@@ -5469,6 +6143,22 @@
         }
       }
     },
+    "Tiny on-device model that cleans up the live transcript" : {
+      "localizations" : {
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "ライブ文字起こしを整える超小型オンデバイスモデル"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "用于整理实时转写的超小型设备端模型"
+          }
+        }
+      }
+    },
     "Title" : {
       "extractionState" : "stale",
       "localizations" : {
@@ -5482,6 +6172,22 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "标题"
+          }
+        }
+      }
+    },
+    "Too many speakers were detected. Set an exact speaker count and try again." : {
+      "localizations" : {
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "検出された話者が多すぎます。正確な人数を指定して、もう一度お試しください。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "检测到的说话人过多。请指定确切人数后重试。"
           }
         }
       }
@@ -5570,6 +6276,22 @@
         }
       }
     },
+    "Translate to" : {
+      "localizations" : {
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "翻訳先"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "翻译为"
+          }
+        }
+      }
+    },
     "Translating…" : {
       "extractionState" : "stale",
       "localizations" : {
@@ -5651,6 +6373,22 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "翻译、摘要、标题与对话"
+          }
+        }
+      }
+    },
+    "Under each transcript line, show the raw speech-recognition text before AI cleanup when they differ. If a word is here but missing above, the cleanup dropped it; if it's missing from both, recognition never caught it." : {
+      "localizations" : {
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "各文字起こし行の下に、AIクリーンアップ前の生の音声認識テキストを（相違がある場合のみ）表示します。ここに単語があって上にない場合はクリーンアップが削除したもの、どちらにもない場合は認識が拾えなかったものです。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "在每行文字下方显示 AI 清理前的原始语音识别文本（仅当二者不同时）。若某词在此处出现但上方缺失，说明是清理删除的；若两处都缺失，则是识别未捕捉到。"
           }
         }
       }
@@ -5772,6 +6510,22 @@
         }
       }
     },
+    "What the recording is in. Auto detects each line on its own; picking a language forces the whole recording to it — fixing a wrong or misdetected language. Re-transcription, translation, and transcript cleanup all follow it." : {
+      "localizations" : {
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "録音の言語です。「自動」は各行を個別に検出します。言語を選ぶと録音全体をその言語に固定し、誤選択・誤検出された言語を修正します。再文字起こし・翻訳・文字起こしのクリーンアップがこれに従います。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "录音所用的语言。“自动”会逐行单独检测；选择某种语言会将整个录音固定为该语言，用于纠正选错或误检测的语言。重新转写、翻译和文字清理都会遵循它。"
+          }
+        }
+      }
+    },
     "What was decided?" : {
       "extractionState" : "stale",
       "localizations" : {
@@ -5818,6 +6572,23 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "从哪里下载模型？"
+          }
+        }
+      }
+    },
+    "Will be identified" : {
+      "extractionState" : "stale",
+      "localizations" : {
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "識別されます"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "将会识别"
           }
         }
       }

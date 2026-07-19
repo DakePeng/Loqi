@@ -1,6 +1,10 @@
 # LFM2.5-230M Live-Refine Candidate Implementation Plan
 
+> **Superseded 2026-07-04.** Tasks 1–4 landed, but device testing showed the 230M cannot do stable structured output, and the live architecture was redesigned on this branch: the live LLM (0.8B default, LFM2.5 experimental) now does *monolingual transcript cleanup* only — Apple's Translation framework is the sole translator; the old LLM-refines-the-translation path is deleted. LFM2.5 never enters the summary lineup; the summary picker is Qwen 2B + Bonsai (promoted to standard). Live notes defer to post-session mapping while LFM2.5 is live. Task 5's device checklist below is superseded by the redesign's own verification list (see the branch's later commits / PR #13).
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+
+> **Re-validated 2026-07-04** against main @ `bccf6117` (post-PR #12 background-model-downloads merge): every "Find this block" snippet still matches verbatim; mlx-swift-lm still pinned at 3.31.3; only the CaptionPipeline call-site line anchor moved (1598→1656).
 
 **Goal:** Add `LiquidAI/LFM2.5-230M-MLX-4bit` as an opt-in, off-by-default alternative to the fixed Qwen3.5 0.8B model for the *live-refine* role only (translation refinement + live notes during recording) — same settings-gated experimental pattern already used for the Bonsai 8B summary tier.
 
@@ -12,7 +16,7 @@
 
 - **This plan intentionally revisits a prior constraint.** `docs/superpowers/plans/2026-06-20-dual-model-settings-onboarding.md` states "Never expose a picker that changes the *live* model" — that plan only ever considered the fixed Qwen 0.8B tier. This plan adds an explicit, off-by-default experimental override for the live-refine role specifically (not the vision role), at the user's request.
 - **`ModelCatalog.liveModel` (`mlx-community/Qwen3.5-0.8B-4bit`) never changes.** It stays the always-available vision-capable fallback for `AttachmentDescribeQueue` and `SummaryJobCenter`'s vision back-fill. Do not repoint it.
-- **The new candidate never enters the summary-role lineup.** `ModelCatalog.availableModels(defaults:)` / the Settings "Summary model" picker must never list `lfm2_5_230m` — it is a live-refine-only candidate, gated by its own flag (`model.liveRefineLFM2Enabled`), independent of `model.bonsaiEnabled`.
+- **The new candidate never enters the summary-role lineup.** `ModelCatalog.availableModels(defaults:)` / the Settings "Summary model" picker must never list `lfm2_5_230m` — it is a live-refine-only candidate, gated by its own flag (`model.liveRefineLFM2Enabled`), independent of `model.bonsaiEnabled`. *(Superseded 2026-07-04 at the user's request: the same flag now also lists LFM2.5 in the summary lineup, Bonsai-style, for A/B against the Qwen tiers.)*
 - **License:** LFM Open License v1.0 (LiquidAI's own repo ships `LICENSE`) — free for commercial use under $10M annual revenue, no restriction relevant to an OSS project. No runtime license-gate needed; this is a due-diligence note, not a code requirement.
 - **Localization targets zh-Hans and ja only** (verified existing catalog langs). Every new user-facing `String(localized:)` / SwiftUI `Text` needs zh-Hans + ja entries. Model names (`"Qwen3.5 0.8B"`, `"Liquid LFM2.5 230M"`) are proper nouns and are not localized, matching existing precedent.
 - **MLX never runs in the iOS Simulator** (`LLMService.swift:19`: "this never runs in the simulator"). Unit tests cover pure `ModelCatalog` logic only; actual model load/generate correctness for `lfm2_5_230m` requires a real device pass (Task 5).
@@ -43,7 +47,7 @@
 - Consumes: existing `ModelOption` struct (`Loqi/Support/ModelCatalog.swift:56-70`), existing `ModelCatalog.liveModel` constant.
 - Produces: `ModelCatalog.lfm2_5_230m: ModelOption`, `ModelCatalog.liveRefineLFM2Enabled(_ defaults: UserDefaults = .standard) -> Bool`, `ModelCatalog.liveRefineModel(_ defaults: UserDefaults = .standard) -> ModelOption`. Tasks 2 and 3 call `ModelCatalog.liveRefineModel()`.
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 Add to `LoqiTests/ModelCatalogTests.swift`, right after the existing `summaryModelFollowsUserPick` test (before the closing `}` of the `struct ModelCatalogTests`):
 
@@ -85,7 +89,7 @@ Add to `LoqiTests/ModelCatalogTests.swift`, right after the existing `summaryMod
     }
 ```
 
-- [ ] **Step 2: Run the tests to verify they fail to compile**
+- [x] **Step 2: Run the tests to verify they fail to compile**
 
 Run:
 ```bash
@@ -93,7 +97,7 @@ xcodebuild test -scheme Loqi -destination 'platform=iOS Simulator,name=iPhone 17
 ```
 Expected: compiler errors like `error: type 'ModelCatalog' has no member 'lfm2_5_230m'` (and `liveRefineModel`). This confirms the tests exercise code that doesn't exist yet.
 
-- [ ] **Step 3: Implement in ModelCatalog.swift**
+- [x] **Step 3: Implement in ModelCatalog.swift**
 
 Find this block (`Loqi/Support/ModelCatalog.swift:113-118`):
 
@@ -147,7 +151,7 @@ Replace it with:
     }
 ```
 
-- [ ] **Step 4: Run the tests to verify they pass**
+- [x] **Step 4: Run the tests to verify they pass**
 
 Run:
 ```bash
@@ -155,7 +159,7 @@ xcodebuild test -scheme Loqi -destination 'platform=iOS Simulator,name=iPhone 17
 ```
 Expected: no `✘ Test` lines, and `Test run with N tests passed` (N = the prior count + 4).
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add Loqi/Support/ModelCatalog.swift LoqiTests/ModelCatalogTests.swift
@@ -167,15 +171,15 @@ git commit -m "feat: add LFM2.5-230M as an experimental live-refine candidate"
 ## Task 2: Wire the resolver into CaptionPipeline's live loader
 
 **Files:**
-- Modify: `Loqi/Support/CaptionPipeline.swift:1598-1599`
+- Modify: `Loqi/Support/CaptionPipeline.swift:1656-1657`
 
 **Interfaces:**
 - Consumes: `ModelCatalog.liveRefineModel() -> ModelOption` (Task 1).
 - Produces: nothing new — `loadLLMIfAllowed()`'s behavior is unchanged when the flag is off (resolver returns `liveModel`, identical to today).
 
-- [ ] **Step 1: Swap the call site**
+- [x] **Step 1: Swap the call site**
 
-Find (`Loqi/Support/CaptionPipeline.swift:1598-1599`):
+Find (`Loqi/Support/CaptionPipeline.swift:1656-1657`):
 
 ```swift
         Task { [llm] in
@@ -194,7 +198,7 @@ Replace with:
             await llm.setModel(ModelCatalog.liveRefineModel())
 ```
 
-- [ ] **Step 2: Build**
+- [x] **Step 2: Build**
 
 Run:
 ```bash
@@ -202,7 +206,7 @@ xcodebuild build -project Loqi.xcodeproj -scheme Loqi -destination 'platform=iOS
 ```
 Expected: `** BUILD SUCCEEDED **`.
 
-- [ ] **Step 3: Run the full unit test suite as a regression check**
+- [x] **Step 3: Run the full unit test suite as a regression check**
 
 Run:
 ```bash
@@ -210,7 +214,7 @@ xcodebuild test -scheme Loqi -destination 'platform=iOS Simulator,name=iPhone 17
 ```
 Expected: no `✘ Test` lines, `TEST SUCCEEDED`.
 
-- [ ] **Step 4: Commit**
+- [x] **Step 4: Commit**
 
 ```bash
 git add Loqi/Support/CaptionPipeline.swift
@@ -231,7 +235,7 @@ git commit -m "feat: route live refinement through ModelCatalog.liveRefineModel"
 - Consumes: `ModelCatalog.liveRefineModel() -> ModelOption`, `ModelCatalog.liveRefineLFM2Enabled`/flag key `"model.liveRefineLFM2Enabled"` (Task 1); existing `startDownload(_:)`, `stopDownload()`, `downloadingModelID`, `liveDownloaded` (all unchanged in shape).
 - Produces: nothing further downstream — this is the leaf UI surface.
 
-- [ ] **Step 1: Add the `@AppStorage` flag**
+- [x] **Step 1: Add the `@AppStorage` flag**
 
 Find (`Loqi/Features/Settings/SettingsView.swift:8`):
 
@@ -246,7 +250,7 @@ Add directly below it:
     @AppStorage("model.liveRefineLFM2Enabled") private var liveRefineLFM2Enabled = false
 ```
 
-- [ ] **Step 2: Make the live-model row dynamic and add the experimental toggle**
+- [x] **Step 2: Make the live-model row dynamic and add the experimental toggle**
 
 Find (`Loqi/Features/Settings/SettingsView.swift:158-186`):
 
@@ -332,7 +336,7 @@ Replace with:
                             }
 ```
 
-- [ ] **Step 3: Update `refreshStats()`'s download-state check**
+- [x] **Step 3: Update `refreshStats()`'s download-state check**
 
 Find (`Loqi/Features/Settings/SettingsView.swift:435`):
 
@@ -346,7 +350,7 @@ Replace with:
         liveDownloaded = LLMService.isDownloaded(model: ModelCatalog.liveRefineModel())
 ```
 
-- [ ] **Step 4: Update the footer copy**
+- [x] **Step 4: Update the footer copy**
 
 Find (`Loqi/Features/Settings/SettingsView.swift:240`):
 
@@ -360,7 +364,7 @@ Replace with:
                     Text("Live recording uses the fast Qwen3.5 0.8B model by default — or the experimental Liquid LFM2.5 above — so captions and live translation stay responsive and cool. Live photo description needs the 0.8B model, so photos attached while LFM2.5 is active keep their OCR text until the recording ends. After a recording, summaries, titles, vocabulary and chat use the summary model you pick above.")
 ```
 
-- [ ] **Step 5: Build**
+- [x] **Step 5: Build**
 
 Run:
 ```bash
@@ -368,7 +372,7 @@ xcodebuild build -project Loqi.xcodeproj -scheme Loqi -destination 'platform=iOS
 ```
 Expected: `** BUILD SUCCEEDED **`.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add Loqi/Features/Settings/SettingsView.swift
@@ -386,7 +390,7 @@ git commit -m "feat: add experimental Liquid LFM2.5 toggle to Settings live-mode
 - Consumes: the exact English source strings introduced/changed in Task 3 (must match `Text(...)` literals verbatim).
 - Produces: zh-Hans + ja `stringUnit`s. No code consumes this.
 
-- [ ] **Step 1: Add the new keys with translations via a JSON script**
+- [x] **Step 1: Add the new keys with translations via a JSON script**
 
 Run from the repo root:
 
@@ -414,7 +418,7 @@ PY
 ```
 Expected output: `added 2 keys`.
 
-- [ ] **Step 2: Verify the catalog is still valid JSON and the keys landed**
+- [x] **Step 2: Verify the catalog is still valid JSON and the keys landed**
 
 Run:
 ```bash
@@ -430,7 +434,7 @@ print('valid JSON, all keys present')
 ```
 Expected: one `ok:` line then `valid JSON, all keys present`.
 
-- [ ] **Step 3: Build to let Xcode reconcile the catalog**
+- [x] **Step 3: Build to let Xcode reconcile the catalog**
 
 Run:
 ```bash
@@ -438,7 +442,7 @@ xcodebuild build -project Loqi.xcodeproj -scheme Loqi -destination 'platform=iOS
 ```
 Expected: `** BUILD SUCCEEDED **`. Xcode marks the old (pre-Task-3) footer string `stale` — harmless, it no longer appears in code.
 
-- [ ] **Step 4: Commit**
+- [x] **Step 4: Commit**
 
 ```bash
 git add Loqi/Localizable.xcstrings
@@ -485,12 +489,3 @@ If Steps 2-5 pass, the candidate is viable for the flag to eventually flip to on
 
 **3. Type consistency:** `ModelCatalog.liveRefineModel(_ defaults: UserDefaults = .standard) -> ModelOption` is defined once in Task 1 and called identically (`ModelCatalog.liveRefineModel()`) in Tasks 2 and 3. `ModelCatalog.lfm2_5_230m` and `ModelCatalog.liveRefineLFM2Enabled` are likewise defined once and referenced with matching names throughout.
 
----
-
-Plan complete and saved to `docs/superpowers/plans/2026-07-01-lfm2-live-refine-candidate.md`. Two execution options:
-
-**1. Subagent-Driven (recommended)** - I dispatch a fresh subagent per task, review between tasks, fast iteration
-
-**2. Inline Execution** - Execute tasks in this session using executing-plans, batch execution with checkpoints
-
-**Which approach?**

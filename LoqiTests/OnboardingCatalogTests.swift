@@ -51,10 +51,10 @@ struct OnboardingCatalogTests {
         #expect(DownloadRegion.global.diarizerSource == .huggingFace)
     }
 
-    @Test func chinaMainlandUsesModelScopeAndHFMirror() {
+    @Test func chinaMainlandUsesModelScopeEverywhere() {
         #expect(DownloadRegion.chinaMainland.llmSource == .modelScope)
         #expect(DownloadRegion.chinaMainland.asrSource == .modelScope)
-        #expect(DownloadRegion.chinaMainland.diarizerSource == .hfMirror)
+        #expect(DownloadRegion.chinaMainland.diarizerSource == .modelScope)
     }
 
     @Test func persistWritesTheSettingsKeys() {
@@ -65,12 +65,12 @@ struct OnboardingCatalogTests {
         DownloadRegion.chinaMainland.persistSources(to: defaults)
         #expect(defaults.string(forKey: "model.source") == ModelSource.modelScope.rawValue)
         #expect(defaults.string(forKey: "asr.source") == ASRModelSource.modelScope.rawValue)
-        #expect(defaults.string(forKey: "diarizer.source") == DiarizerSource.hfMirror.rawValue)
+        #expect(defaults.string(forKey: "diarizer.source") == ASRModelSource.modelScope.rawValue)
 
         DownloadRegion.global.persistSources(to: defaults)
         #expect(defaults.string(forKey: "model.source") == ModelSource.huggingFace.rawValue)
         #expect(defaults.string(forKey: "asr.source") == ASRModelSource.huggingFace.rawValue)
-        #expect(defaults.string(forKey: "diarizer.source") == DiarizerSource.huggingFace.rawValue)
+        #expect(defaults.string(forKey: "diarizer.source") == ASRModelSource.huggingFace.rawValue)
     }
 
     // MARK: Item lineup
@@ -104,8 +104,9 @@ struct OnboardingCatalogTests {
         }
     }
 
-    @Test func liveLLMItemMatchesTheFastTier() {
-        #expect(OnboardingItemKind.liveLLM.downloadBytes == ModelCatalog.liveModel.downloadBytes)
+    @Test func liveLLMItemMatchesTheLiveRefineTier() {
+        #expect(OnboardingItemKind.liveLLM.downloadBytes
+            == ModelCatalog.liveRefineModel.downloadBytes)
         #expect(OnboardingItemKind.liveLLM.isRecommended)
     }
 
@@ -118,7 +119,7 @@ struct OnboardingCatalogTests {
         #expect(OnboardingItemKind.liveLLM.usesSharedLLMWorker)
         #expect(OnboardingItemKind.summaryLLM.usesSharedLLMWorker)
         #expect(!OnboardingItemKind.senseVoice.usesSharedLLMWorker)
-        #expect(!OnboardingItemKind.qwen3ASR.usesSharedLLMWorker)
+        #expect(!OnboardingItemKind.diarizer.usesSharedLLMWorker)
     }
 
     @Test func translationPackPairsCoverEveryOrderedLanguagePair() {
@@ -139,8 +140,8 @@ struct OnboardingCatalogTests {
             for: [.translationPacks, .senseVoice, .diarizer, .liveLLM, .summaryLLM],
             installed: [])
         let expected = SenseVoiceModelStore.totalExpectedBytes
-            + StreamingDiarizer.approximateDownloadBytes
-            + ModelCatalog.liveModel.downloadBytes
+            + VoiceprintService.approximateDownloadBytes
+            + ModelCatalog.liveRefineModel.downloadBytes
             + ModelCatalog.qwen35_2b.downloadBytes
         #expect(total == expected)
     }
@@ -157,11 +158,10 @@ struct OnboardingCatalogTests {
 
     // MARK: Queue
 
-    @Test func queueRunsFallbackEngineFirstAndOptionalLast() {
+    @Test func queueRunsFallbackEngineFirstAndBigLLMLate() {
         let queue = OnboardingItemKind.queueOrder(
             selection: [
                 .translationPacks,
-                .qwen3ASR,
                 .liveLLM,
                 .summaryLLM,
                 .diarizer,
@@ -175,7 +175,6 @@ struct OnboardingCatalogTests {
             .diarizer,
             .liveLLM,
             .summaryLLM,
-            .qwen3ASR,
         ])
     }
 

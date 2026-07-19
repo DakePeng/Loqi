@@ -35,4 +35,20 @@ struct SummaryStyleTests {
         }
     }
 
+    /// The style the summary UI shows: stored per-session raw wins; a
+    /// legacy summary without one was written meeting-shaped; otherwise
+    /// the app default (garbage defaults fall back to meeting).
+    @Test func effectiveStyleResolution() {
+        #expect(SummaryStyle.effective(
+            storedRaw: "journal", hasSummary: true, defaultRaw: "memo") == .journal)
+        #expect(SummaryStyle.effective(
+            storedRaw: nil, hasSummary: true, defaultRaw: "memo") == .meeting)
+        #expect(SummaryStyle.effective(
+            storedRaw: "from-the-future", hasSummary: true, defaultRaw: "memo") == .meeting)
+        #expect(SummaryStyle.effective(
+            storedRaw: nil, hasSummary: false, defaultRaw: "memo") == .memo)
+        #expect(SummaryStyle.effective(
+            storedRaw: nil, hasSummary: false, defaultRaw: "garbage") == .meeting)
+    }
+
 }

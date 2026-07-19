@@ -16,6 +16,20 @@ protocol SpeechEngine: Actor {
     /// Flushes pending audio into final results, then finishes the stream.
     func stop() async
     func applyContextualStrings(_ strings: [String]) async throws
+    /// Cumulative in-process ASR decode wall-time this session — the
+    /// session heat readout. On the protocol so the pipeline never
+    /// type-casts engines (a forgotten cast silently reported 0 for new
+    /// engine kinds). Out-of-process engines report 0.
+    func decodeActiveSeconds() async -> Double
+    /// Zero the heat readout at session start.
+    func resetHeatStats() async
+}
+
+extension SpeechEngine {
+    /// Engines whose decode runs out-of-process (Apple's SpeechAnalyzer)
+    /// have no in-process heat to report.
+    func decodeActiveSeconds() async -> Double { 0 }
+    func resetHeatStats() async {}
 }
 
 /// Wraps SpeechAnalyzer/SpeechTranscriber for one locale.
@@ -232,6 +246,373 @@ actor TranscriptionEngine: SpeechEngine {
                 end: range.end.seconds))
         }
         return runs
+    }
+}
+
+/// Pure state machine composing the hybrid engine's gray text from Apple's
+/// volatile/final results between SenseVoice finals. Two jobs:
+///
+/// 1. Apple's endpointer routinely holds one utterance open across silero
+///    segment closes, so after a SenseVoice final the next Apple volatiles
+///    still carry already-finalized words. Each SenseVoice final snapshots
+///    the current Apple volatile as `consumedPrefix`; later Apple text is
+///    trimmed by longest-common-prefix against it — a stale re-emission
+///    trims to empty and is dropped, never resurrecting a finalized row.
+///    LCP also makes composition order-insensitive between the two child
+///    event streams, which have no cross-stream ordering guarantee.
+/// 2. Composed text is gated on silero `speaking`, so Apple noise
+///    hallucinations can never create a store entry that turn teardown
+///    (`finalizeActiveAsIs`) would save — SenseVoice stays the sole source
+///    of the record.
+///
+/// ponytail: hosted in this file, not its own, so the xcodegen-generated
+/// pbxproj (pending local edits) needn't change.
+struct HybridVolatileComposer: Sendable {
+    /// "" for CJK sources (no spaces between joined pieces), " " otherwise.
+    let separator: String
+
+    /// Apple finals since the last SenseVoice final (post-trim) — keeps
+    /// Apple-finalized words visible when Apple endpoints before silero
+    /// closes the segment.
+    private var accumulatedFinals: [String] = []
+    private var currentVolatile = ""
+    /// Apple text already covered by a SenseVoice final.
+    private var consumedPrefix = ""
+    private var speaking = false
+    private var lastEmitted: String?
+
+    init(separator: String) {
+        self.separator = separator
+    }
+
+    mutating func setSpeaking(_ on: Bool) {
+        speaking = on
+    }
+
+    /// Returns composed gray text to forward, or nil (suppressed, empty,
+    /// or identical to the last emission). State updates even while
+    /// suppressed so the next SenseVoice-final snapshot sees Apple's
+    /// latest lagging refinements.
+    mutating func appleVolatile(_ text: String) -> String? {
+        currentVolatile = text
+        return speaking ? composedIfFresh() : nil
+    }
+
+    mutating func appleFinal(_ text: String) -> String? {
+        let piece = Self.lcpRemainder(of: text, after: consumedPrefix)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        if piece.hasSpeechContent {
+            accumulatedFinals.append(piece)
+        }
+        // Apple's utterance closed — the next volatile is a fresh
+        // utterance the old prefix must not trim.
+        consumedPrefix = ""
+        currentVolatile = ""
+        return speaking ? composedIfFresh() : nil
+    }
+
+    /// SenseVoice finalized the segment: its text supersedes everything
+    /// composed so far. Snapshot at final time (not the speaking(false)
+    /// edge) deliberately — Apple's volatiles lag speech, so this also
+    /// consumes trailing refinements of pre-pause words.
+    mutating func senseVoiceFinalized() {
+        consumedPrefix = currentVolatile
+        accumulatedFinals = []
+        lastEmitted = nil
+    }
+
+    private mutating func composedIfFresh() -> String? {
+        let live = Self.lcpRemainder(of: currentVolatile, after: consumedPrefix)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        let parts = (accumulatedFinals + [live]).filter(\.hasSpeechContent)
+        let composed = parts.joined(separator: separator)
+        guard composed.hasSpeechContent, composed != lastEmitted else { return nil }
+        lastEmitted = composed
+        return composed
+    }
+
+    /// Drop the longest common Character-prefix of `prefix` from `text`.
+    /// Exact-prefix match is the common case; a mid-prefix Apple revision
+    /// falls back to a shorter trim — transient duplication the next
+    /// SenseVoice final cleans up, acceptable for disposable gray text.
+    static func lcpRemainder(of text: String, after prefix: String) -> String {
+        guard !prefix.isEmpty else { return text }
+        let t = Array(text)
+        let p = Array(prefix)
+        var i = 0
+        while i < t.count, i < p.count, t[i] == p[i] { i += 1 }
+        return String(t[i...])
+    }
+}
+
+/// Hybrid live engine: Apple SpeechTranscriber supplies the disposable
+/// word-by-word gray text (Neural Engine, near-zero CPU); SenseVoice runs
+/// finals-only — ONE decode per silero segment instead of a re-decode of
+/// the growing utterance every 0.7s — and remains the sole source of
+/// saved entries, refinement, and translation. Captions get more
+/// responsive than the SenseVoice pulses while its live compute drops
+/// roughly an order of magnitude. Finals upgrade to Dolphin when it's
+/// installed and the language fits — the same priority the offline pass
+/// applies, and affordable live precisely because finals-only decoding
+/// makes the heavier model's cost one decode per segment.
+///
+/// Failure policy: SenseVoice is the record engine — its prepare() errors
+/// propagate. The Apple child is optional responsiveness — any failure
+/// (assets, locale, mid-session death) degrades to pure-SenseVoice
+/// behavior by re-enabling its partials; the session survives.
+actor HybridSpeechEngine: SpeechEngine {
+    nonisolated let language: AppLanguage
+    nonisolated var sourceSelection: RecognitionLanguageSelection { .language(language) }
+
+    private let apple: TranscriptionEngine
+    private let senseVoice: SenseVoiceEngine
+    private var composer: HybridVolatileComposer
+    /// Apple child failed; behave as pure SenseVoice (partials re-enabled).
+    private var degraded = false
+
+    /// Built only when Apple's format differs from SenseVoice's 16 kHz
+    /// mono Float32. Persistent across chunks — resamplers carry filter
+    /// state, so a per-chunk converter would smear segment boundaries.
+    private var converter: AVAudioConverter?
+
+    // feed() is synchronous actor state — audio fans out through one
+    // AsyncStream lane per child (FIFO), each drained by one forwarder
+    // task. A Task-per-chunk would reorder samples into silero.
+    private var appleFeed: AsyncStream<AudioCaptureService.AudioChunk>.Continuation?
+    private var svFeed: AsyncStream<AudioCaptureService.AudioChunk>.Continuation?
+    private var appleForwardTask: Task<Void, Never>?
+    private var svForwardTask: Task<Void, Never>?
+    private var appleMergeTask: Task<Void, Never>?
+    private var svMergeTask: Task<Void, Never>?
+    private var outContinuation: AsyncStream<TranscriptionEvent>.Continuation?
+
+    private let logger = Logger(subsystem: "com.kunzhipeng.loqi", category: "hybrid")
+
+    init(language: AppLanguage) {
+        self.language = language
+        self.apple = TranscriptionEngine(language: language)
+        self.senseVoice = SenseVoiceEngine(
+            sourceSelection: .language(language), emitsPartials: false,
+            prefersDolphinFinals: true)
+        self.composer = HybridVolatileComposer(
+            separator: language.usesCJKScript ? "" : " ")
+    }
+
+    func prepare(contextualStrings: [String] = []) async throws -> AVAudioFormat {
+        // Record engine first: without it the hybrid is pointless.
+        let svFormat = try await senseVoice.prepare(contextualStrings: contextualStrings)
+        composer = HybridVolatileComposer(
+            separator: language.usesCJKScript ? "" : " ")
+        do {
+            let appleFormat = try await apple.prepare(contextualStrings: contextualStrings)
+            if Self.formatsMatch(appleFormat, svFormat) {
+                converter = nil
+            } else if let built = AVAudioConverter(from: appleFormat, to: svFormat) {
+                logger.info("hybrid: converting \(appleFormat) -> 16k mono for SenseVoice")
+                converter = built
+            } else {
+                // Can't bridge the formats — SenseVoice would decode noise.
+                logger.error("hybrid: no converter \(appleFormat) -> \(svFormat); degrading")
+                return await degrade(returning: svFormat)
+            }
+            degraded = false
+            await senseVoice.setEmitsPartials(false)
+            return appleFormat
+        } catch {
+            logger.error("hybrid: Apple child prepare failed (\(error)); degrading to pure SenseVoice")
+            return await degrade(returning: svFormat)
+        }
+    }
+
+    /// Prepare-time degrade ONLY: safe to drop the converter because we
+    /// return SenseVoice's own 16k format — the mic tap will feed 16k.
+    /// After prepare() has committed Apple's format, degrades must KEEP
+    /// the converter or SenseVoice receives wrong-rate audio.
+    private func degrade(returning format: AVAudioFormat) async -> AVAudioFormat {
+        degraded = true
+        converter = nil
+        await senseVoice.setEmitsPartials(true)
+        return format
+    }
+
+    func start() async throws -> AsyncStream<TranscriptionEvent> {
+        let svEvents = try await senseVoice.start()
+        var appleEvents: AsyncStream<TranscriptionEvent>?
+        if !degraded {
+            do {
+                appleEvents = try await apple.start()
+            } catch {
+                // prepare() already returned Apple's format — the mic tap
+                // feeds it, so the converter MUST survive this degrade or
+                // the record engine decodes wrong-rate audio all session.
+                logger.error("hybrid: Apple child start failed (\(error)); degrading to pure SenseVoice")
+                degraded = true
+                await senseVoice.setEmitsPartials(true)
+            }
+        }
+
+        let (events, continuation) = AsyncStream<TranscriptionEvent>.makeStream()
+        outContinuation = continuation
+
+        // The record lane never drops audio (a dropped chunk is lost
+        // words); the display lane matches Apple's own input policy.
+        let (svLane, svCont) = AsyncStream<AudioCaptureService.AudioChunk>
+            .makeStream(bufferingPolicy: .unbounded)
+        svFeed = svCont
+        svForwardTask = Task { [senseVoice] in
+            for await chunk in svLane { await senseVoice.feed(chunk) }
+        }
+        if let appleEvents {
+            let (appleLane, appleCont) = AsyncStream<AudioCaptureService.AudioChunk>
+                .makeStream(bufferingPolicy: .bufferingNewest(32))
+            appleFeed = appleCont
+            appleForwardTask = Task { [apple] in
+                for await chunk in appleLane { await apple.feed(chunk) }
+            }
+            appleMergeTask = Task { [weak self] in
+                for await event in appleEvents { await self?.handleApple(event) }
+            }
+        }
+        svMergeTask = Task { [weak self] in
+            for await event in svEvents { await self?.handleSenseVoice(event) }
+        }
+        return events
+    }
+
+    func feed(_ chunk: AudioCaptureService.AudioChunk) {
+        appleFeed?.yield(chunk)
+        if let converter {
+            if let converted = Self.convert(chunk.buffer, with: converter),
+               converted.frameLength > 0 {
+                svFeed?.yield(AudioCaptureService.AudioChunk(buffer: converted))
+            }
+        } else {
+            svFeed?.yield(chunk)
+        }
+    }
+
+    /// Order matters: close the lanes and drain the forwarders so queued
+    /// audio reaches SenseVoice BEFORE its stop() flushes the VAD; its
+    /// trailing finals then flow through the merge before the out-stream
+    /// finishes, and the pipeline's endTurn drain still processes them.
+    func stop() async {
+        appleFeed?.finish()
+        appleFeed = nil
+        svFeed?.finish()
+        svFeed = nil
+        await appleForwardTask?.value
+        appleForwardTask = nil
+        await svForwardTask?.value
+        svForwardTask = nil
+        await apple.stop()
+        await senseVoice.stop()
+        await appleMergeTask?.value
+        appleMergeTask = nil
+        await svMergeTask?.value
+        svMergeTask = nil
+        converter = nil
+    }
+
+    func applyContextualStrings(_ strings: [String]) async throws {
+        guard !degraded else { return }
+        try await apple.applyContextualStrings(strings)
+    }
+
+    // Heat stats forward to the record child — SenseVoice's decodes are
+    // the hybrid's only in-process ASR cost (Apple runs out-of-process).
+    func decodeActiveSeconds() async -> Double {
+        await senseVoice.decodeActiveSeconds()
+    }
+
+    func resetHeatStats() async {
+        await senseVoice.resetHeatStats()
+    }
+
+    private func handleSenseVoice(_ event: TranscriptionEvent) {
+        switch event {
+        case .volatile:
+            // Pure-SenseVoice behavior only when the Apple child is gone.
+            if degraded { emit(event) }
+        case .finalized:
+            composer.senseVoiceFinalized()
+            emit(event)
+        case .speechActivity(let active):
+            composer.setSpeaking(active)
+            emit(event)
+        case .ended:
+            emit(event)
+            outContinuation?.finish()
+            outContinuation = nil
+        }
+    }
+
+    private func handleApple(_ event: TranscriptionEvent) {
+        switch event {
+        case .volatile(let text, _):
+            if let composed = composer.appleVolatile(text) {
+                emit(.volatile(composed, language: language))
+            }
+        case .finalized(let text, _, _):
+            // Display-only: an Apple final is folded into the gray text
+            // (its words must stay visible until SenseVoice's authoritative
+            // final lands) — never forwarded as a final.
+            if let composed = composer.appleFinal(text) {
+                emit(.volatile(composed, language: language))
+            }
+        case .speechActivity:
+            // silero (via SenseVoice) drives downstream gating, as today.
+            break
+        case .ended(let error):
+            if let error {
+                // Degrade to pure-SenseVoice behavior: partials resume from
+                // the next utterance and SenseVoice volatiles forward
+                // (degraded routing). The converter stays — the mic tap is
+                // still feeding Apple's committed format.
+                logger.warning("hybrid: Apple child died (\(error)); reverting to SenseVoice partials")
+                degraded = true
+                appleFeed?.finish()
+                appleFeed = nil
+                Task { [senseVoice] in await senseVoice.setEmitsPartials(true) }
+            }
+        }
+    }
+
+    private func emit(_ event: TranscriptionEvent) {
+        outContinuation?.yield(event)
+    }
+
+    private static func formatsMatch(_ a: AVAudioFormat, _ b: AVAudioFormat) -> Bool {
+        a.sampleRate == b.sampleRate
+            && a.channelCount == b.channelCount
+            && a.commonFormat == b.commonFormat
+            && a.isInterleaved == b.isInterleaved
+    }
+
+    /// Same consumed-flag convert pattern as AudioCaptureService's tap.
+    private static func convert(
+        _ buffer: AVAudioPCMBuffer, with converter: AVAudioConverter
+    ) -> AVAudioPCMBuffer? {
+        let ratio = converter.outputFormat.sampleRate / converter.inputFormat.sampleRate
+        let capacity = AVAudioFrameCount(Double(buffer.frameLength) * ratio) + 1
+        guard let converted = AVAudioPCMBuffer(
+            pcmFormat: converter.outputFormat, frameCapacity: capacity)
+        else { return nil }
+        var consumed = false
+        var conversionError: NSError?
+        // The input block runs synchronously inside convert() on this
+        // thread; the buffer never actually crosses an isolation boundary.
+        nonisolated(unsafe) let inputBuffer = buffer
+        converter.convert(to: converted, error: &conversionError) { _, status in
+            if consumed {
+                status.pointee = .noDataNow
+                return nil
+            }
+            consumed = true
+            status.pointee = .haveData
+            return inputBuffer
+        }
+        if conversionError != nil { return nil }
+        return converted
     }
 }
 

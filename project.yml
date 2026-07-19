@@ -10,6 +10,17 @@ options:
   createIntermediateGroups: true
 
 packages:
+  # Transitive-dependency override, NOT a direct API dependency: mlx-swift-lm
+  # depends on ml-explore/mlx-swift, but LLMService relies on the
+  # poison-events fork (background GPU aborts surface as catchable MLXError
+  # instead of terminating the process — see LLMService's scene-exit notes).
+  # Declaring the fork here (same package identity, "mlx-swift") forces SPM
+  # to resolve the whole graph against it; a product link below keeps
+  # xcodegen from pruning the reference. Drop when mlx-swift vendors
+  # mlx >= a025496c.
+  MLX:
+    url: https://github.com/DakePeng/mlx-swift
+    branch: loqi/0.31.4-poison-events
   MLXLM:
     url: https://github.com/ml-explore/mlx-swift-lm
     exactVersion: 3.31.3
@@ -21,12 +32,6 @@ packages:
   Transformers:
     url: https://github.com/huggingface/swift-transformers
     from: 1.3.0
-  # Speaker embeddings (voiceprint) on CoreML/ANE. Pinned exactly: loose
-  # ranges resolved differently on different machines (0.9.1 vs 0.15.2).
-  FluidAudio:
-    url: https://github.com/FluidInference/FluidAudio
-    exactVersion: 0.15.2
-
 settings:
   base:
     SWIFT_VERSION: "6.0"
@@ -67,9 +72,15 @@ targets:
         NSSpeechRecognitionUsageDescription: "Loqi transcribes speech entirely on-device to show live translated captions."
         NSCameraUsageDescription: "Loqi uses the camera to attach photos of slides and whiteboards to a session. Images never leave your device."
         # A running session keeps capturing when the screen locks or the
-        # app backgrounds; LLM work pauses there (CaptionPipeline).
+        # app backgrounds; LLM work pauses there (CaptionPipeline). The
+        # `processing` mode + the permitted identifier below let a
+        # backgrounded import/re-transcribe keep decoding ASR (CPU) in a
+        # BGProcessingTask (BackgroundProcessingScheduler).
         UIBackgroundModes:
           - audio
+          - processing
+        BGTaskSchedulerPermittedIdentifiers:
+          - com.kunzhipeng.loqi.background-asr
         # Recording Live Activity (lock screen + Dynamic Island), rendered
         # by the LoqiWidgets extension.
         NSSupportsLiveActivities: true
@@ -86,6 +97,8 @@ targets:
               - public.audio
               - public.movie
     dependencies:
+      - package: MLX
+        product: MLX
       - package: MLXLM
         product: MLXLLM
       # Vision-LLM tier (Qwen3-VL): linking MLXVLM is all the load path
@@ -101,8 +114,6 @@ targets:
         product: HuggingFace
       - package: Transformers
         product: Tokenizers
-      - package: FluidAudio
-        product: FluidAudio
       - framework: ThirdParty/sherpa-onnx/sherpa-onnx.xcframework
         embed: false
       - framework: ThirdParty/sherpa-onnx/onnxruntime.xcframework
@@ -135,6 +146,8 @@ targets:
         NSSpeechRecognitionUsageDescription: "Loqi transcribes speech entirely on-device to show live translated captions."
         NSCameraUsageDescription: "Loqi uses the camera to attach photos of slides and whiteboards to a session. Images never leave your device."
     dependencies:
+      - package: MLX
+        product: MLX
       - package: MLXLM
         product: MLXLLM
       - package: MLXLM
@@ -147,8 +160,6 @@ targets:
         product: HuggingFace
       - package: Transformers
         product: Tokenizers
-      - package: FluidAudio
-        product: FluidAudio
 
   # Live Activity UI + Control Center toggle. Deliberately lean: no
   # packages, no bridging header, none of the heavyweight ML deps — only

@@ -16,6 +16,30 @@ struct HotwordMatcherTests {
         HotwordMatcher(hotwords: [zhipeng, qwen, loqi])
     }
 
+    // MARK: Near-miss detection (hygiene-pass gate)
+
+    @Test func unresolvedNearMissDetection() {
+        // A fuzzy near-miss the deterministic fixup may not clear.
+        #expect(matcher.hasUnresolvedNearMiss(
+            "I met Zhipong yesterday", language: .english))
+        // An exact mention needs no LLM restore.
+        #expect(!matcher.hasUnresolvedNearMiss(
+            "I met Zhipeng yesterday", language: .english))
+        // Unrelated text matches nothing.
+        #expect(!matcher.hasUnresolvedNearMiss(
+            "the weather is nice today", language: .english))
+    }
+
+    @Test func noteGlossaryCarriesAliases() {
+        let bob = Hotword(term: "Robert", note: "person name", aliases: ["Bob"])
+        let withAlias = HotwordMatcher(hotwords: [bob])
+        let lines = withAlias.noteGlossaryLines(
+            language: .english, text: "tell Bob about the launch")
+        // The alias must ride along, or the cleanup model rewrites a
+        // correctly spoken "Bob" to the canonical "Robert".
+        #expect(lines.contains { $0.contains("Robert") && $0.contains("aka Bob") })
+    }
+
     // MARK: Latin fixup
 
     @Test func fixesLatinNearMiss() {

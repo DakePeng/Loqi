@@ -99,7 +99,7 @@ struct SessionRecord: Identifiable, Codable, Sendable {
     /// killed-and-relaunched import skip audio it already decoded instead
     /// of starting the file over from zero.
     struct ImportCheckpoint: Codable, Sendable {
-        /// One transcribed SenseVoice/Qwen3-ASR segment, keyed by its exact
+        /// One transcribed SenseVoice/Dolphin segment, keyed by its exact
         /// time range — VAD segmentation is deterministic for the same
         /// audio, so replaying the file reproduces the same ranges.
         struct Segment: Codable, Sendable {
@@ -179,6 +179,32 @@ struct SessionRecord: Identifiable, Codable, Sendable {
     /// True once the user renamed the session; auto-titling then never
     /// overwrites it (mirrors `summaryEdited`).
     var titleEdited: Bool?
+    /// Per-record language choices (detail view's Languages menu). All nil
+    /// on legacy records = prior behavior. Raw strings so an unknown
+    /// future language can never fail record decoding.
+    /// Overrides what the recording's entries claim the speech is in —
+    /// for sessions recorded under the wrong source or a misdetected Auto.
+    var spokenLanguageRaw: String?
+    /// nil = inherit the entries' recorded target; "" = explicitly off;
+    /// else the AppLanguage raw value to translate every entry into.
+    var translateToRaw: String?
+    /// nil = automatic (device language, falling back to the session's
+    /// target); else the AppLanguage raw value summaries are written in.
+    var summaryLanguageRaw: String?
+
+    var spokenLanguageOverride: AppLanguage? {
+        spokenLanguageRaw.flatMap(AppLanguage.init(rawValue:))
+    }
+    var summaryLanguageOverride: AppLanguage? {
+        summaryLanguageRaw.flatMap(AppLanguage.init(rawValue:))
+    }
+
+    /// Languages the accuracy pass must cover: the spoken override wins;
+    /// otherwise every language the entries detected. Drives backend
+    /// selection (Dolphin only when the whole set fits).
+    var accuracyPassLanguages: Set<AppLanguage> {
+        spokenLanguageOverride.map { [$0] } ?? Set(entries.map(\.direction.source))
+    }
     /// Photos attached to the session. Optional: legacy records decode.
     var attachments: [Attachment]?
     /// True until the user opens the session — the Sessions list shows a
@@ -193,6 +219,10 @@ struct SessionRecord: Identifiable, Codable, Sendable {
     /// once the transcript is complete (`importing` flips to false/nil in
     /// the same write).
     var importCheckpoint: ImportCheckpoint?
+    /// Why the last import attempt failed, persisted so the failure
+    /// survives relaunch (the failed placeholder used to vanish silently
+    /// at the next launch sweep). Cleared by dismissal or a retry.
+    var importError: String?
     /// A summary that was requested but hasn't completed. Persisted so a
     /// summary killed mid-run (jetsam, or the uncatchable background-GPU
     /// abort) restarts at next launch instead of silently vanishing — the
@@ -207,6 +237,36 @@ struct SessionRecord: Identifiable, Codable, Sendable {
         /// a resume after a kill must keep pulling the weights they
         /// approved, not fail with "model not downloaded". Optional:
         /// legacy markers decode as nil (no consent).
+        var allowDownload: Bool?
+    }
+
+    /// Resumable state for an interrupted accuracy pass (re-transcribe or
+    /// new-recording post-process): segments decoded so far, reusable only
+    /// by the same backend — one backend's cache must never seed
+    /// another's pass. Survives cancellation, preemption, AND failure (decoded
+    /// segments are paid-for work a retry reuses); only a completed pass
+    /// clears it. Optional: legacy records decode as nil.
+    var retranscribeCheckpoint: RetranscribeCheckpoint?
+
+    struct RetranscribeCheckpoint: Codable, Sendable {
+        var backendRaw: String
+        var segments: [ImportCheckpoint.Segment] = []
+    }
+
+    /// An automatic accuracy pass (re-transcribe + re-summarize of a fresh
+    /// recording) interrupted by a kill. Swept at launch/foreground;
+    /// cleared when any accuracy pass for this session completes, or on
+    /// explicit cancel. Optional: legacy records decode as nil.
+    var pendingPostProcess: PendingPostProcess?
+
+    struct PendingPostProcess: Codable, Sendable {
+        var styleRaw: String
+        var lengthRaw: String
+        var suggestVocabulary: Bool?
+        /// Download consent the user gave — a resume after a kill during
+        /// the ASR/diarization part (before the summary's own marker
+        /// records it) must keep pulling the approved weights, not fail
+        /// with "model not downloaded". Optional: legacy markers = nil.
         var allowDownload: Bool?
     }
     /// True when speaker separation was requested for this session but the

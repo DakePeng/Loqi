@@ -280,8 +280,15 @@ actor LLMService {
             MLX.Memory.cacheLimit = cacheLimit
             self.container = container
             loadState = .ready
+            // Keep set = summary lineup PLUS the live roles: the live-refine
+            // tier and the vision fallback are deliberately not in
+            // `ModelCatalog.all` anymore, and pruning their just-downloaded
+            // ModelScope snapshots would strand `.requireDownloaded` loads
+            // behind a stale downloaded-marker.
             ModelScopeDownloader.removeSnapshots(
-                notIn: Set(ModelCatalog.all.map(\.id)))
+                notIn: Set((ModelCatalog.all
+                    + [ModelCatalog.liveModel, ModelCatalog.liveRefineModel])
+                    .map(\.id)))
         } catch is CancellationError {
             // User stopped the download — back to a clean idle state, not an
             // error. Checkpointed files remain for a later resume.
@@ -410,6 +417,7 @@ actor LLMService {
         user: String,
         maxTokens: Int = 120,
         temperature: Float = 0.3,
+        repetitionPenalty: Float? = 1.15,
         responsePrefix: String? = nil
     ) async throws -> String {
         // Never begin Metal work from the background — it aborts the process.
@@ -449,6 +457,11 @@ actor LLMService {
                 }
                 // Repetition penalty is essential for small quantized models:
                 // without it they degenerate into "this, this, this…" loops.
+                // BUT the ring seeds from the prompt tail, so a copy-shaped
+                // task (sentence cleanup: correct output ≈ the input sitting
+                // right there in the prompt) is penalized for copying and
+                // pushed to paraphrase — those callers pass nil and rely on
+                // their fidelity gate to catch loops instead.
                 // The small prefill window bounds each un-gateable GPU burst
                 // to roughly a decode step, so the prefill gate can fire well
                 // inside the .inactive→.background transition even with the
@@ -457,7 +470,7 @@ actor LLMService {
                     maxTokens: maxTokens,
                     temperature: temperature,
                     topP: 0.9,
-                    repetitionPenalty: 1.15,
+                    repetitionPenalty: repetitionPenalty,
                     repetitionContextSize: 64,
                     prefillStepSize: 64)
 

@@ -1,3 +1,4 @@
+import Foundation
 import Testing
 @testable import Loqi
 
@@ -72,13 +73,58 @@ struct CaptionStoreTests {
         #expect(store.activeEntryID == nil)
     }
 
-    @Test func historyDrawsFromFinalTranslatedEntries() {
+    @Test func applyCleanedSourceSwapsTextAndKeepsRaw() {
         let store = CaptionStore()
-        store.applyVolatile(text: "lecture", direction: enToZh)
-        if let entry = store.finalizeActive(text: "lecture", direction: enToZh) {
-            store.setDraft("讲座", for: entry.id)
+        store.applyVolatile(text: "hi", direction: enToZh)
+        guard let entry = store.finalizeActive(
+            text: "we meet with Jipeng tomorrow", direction: enToZh) else {
+            Issue.record("no entry")
+            return
         }
-        #expect(store.recentHistory(limit: 6).map(\.sourceText) == ["lecture"])
+        store.applyCleanedSource("we meet with Zhipeng tomorrow", for: entry.id)
+        #expect(store.entry(for: entry.id)?.sourceText == "we meet with Zhipeng tomorrow")
+        #expect(store.entry(for: entry.id)?.rawSourceText == "we meet with Jipeng tomorrow")
+    }
+
+    @Test func applyCleanedSourceNeverOverwritesExistingRaw() {
+        let store = CaptionStore()
+        store.applyVolatile(text: "hi", direction: enToZh)
+        guard let entry = store.finalizeActive(text: "original", direction: enToZh) else {
+            Issue.record("no entry")
+            return
+        }
+        store.applyCleanedSource("first fix", for: entry.id)
+        store.applyCleanedSource("second fix", for: entry.id)
+        #expect(store.entry(for: entry.id)?.sourceText == "second fix")
+        // The audit trail is the true ASR output, not an intermediate fix.
+        #expect(store.entry(for: entry.id)?.rawSourceText == "original")
+    }
+
+    @Test func applyCleanedSourceIgnoresVolatileAndUnknownEntries() {
+        let store = CaptionStore()
+        let volatileID = store.applyVolatile(text: "still speaking", direction: enToZh)
+        store.applyCleanedSource("nope", for: volatileID)
+        #expect(store.entry(for: volatileID)?.sourceText == "still speaking")
+        #expect(store.entry(for: volatileID)?.rawSourceText == nil)
+        store.applyCleanedSource("nope", for: UUID())  // must not crash
+    }
+
+    @Test func recentSourceTextsExcludesCurrentVolatileAndOtherLanguages() {
+        let store = CaptionStore()
+        let zhToEn = LanguagePair(source: .chinese, target: .english)
+        store.finalizeActive(text: "first line", direction: enToZh)
+        store.finalizeActive(text: "第二句", direction: zhToEn)
+        store.finalizeActive(text: "third line", direction: enToZh)
+        guard let current = store.finalizeActive(
+            text: "current line", direction: enToZh) else {
+            Issue.record("no entry")
+            return
+        }
+        store.applyVolatile(text: "speaking now", direction: enToZh)
+
+        let context = store.recentSourceTexts(
+            limit: 3, language: .english, excluding: current.id)
+        #expect(context == ["first line", "third line"])
     }
 
     @Test func pruningKeepsNewestEntries() {
@@ -159,23 +205,6 @@ struct CaptionStoreTests {
         }
         store.setSpeaker(2, for: entry.id)
         #expect(store.entry(for: entry.id)?.speaker == 2)
-    }
-
-    @Test func splitEntriesPreserveRelativeTimestamps() throws {
-        let store = CaptionStore()
-        store.applyVolatile(text: "hello no", direction: enToZh)
-
-        let entries = store.finalizeActiveSplit(
-            parts: [
-                (text: "hello", speaker: 0, offset: 0),
-                (text: "no", speaker: 1, offset: 2.5),
-            ],
-            direction: enToZh)
-
-        #expect(entries.count == 2)
-        let first = try #require(entries.first)
-        let second = try #require(entries.last)
-        #expect(abs(second.createdAt.timeIntervalSince(first.createdAt) - 2.5) < 0.01)
     }
 
     @Test func segmentsGroupAndRecomputeAfterMutation() {

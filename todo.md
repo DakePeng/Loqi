@@ -363,6 +363,19 @@ Moat extensions:
 
 ## Device verification queue (needs the physical iPhone)
 
+- [ ] **Finals-model picker (2026-07-17)** — Settings → Speech recognition
+  shows no Engine picker; "Finals model" picker appears once SenseVoice is
+  installed (Auto default). With Dolphin downloaded: a zh session's log
+  shows "finals decode via Dolphin" (category sensevoice) and captions
+  behave as before; an English session stays on SenseVoice; Auto language
+  stays pure SenseVoice (and no "Hybrid needs a specific language" pill).
+  Switch the picker to SenseVoice → next zh session logs no Dolphin line.
+  Re-transcribe & summarize with SenseVoice installed but Dolphin absent
+  must use SenseVoice (not Apple) — `asr.engine` is gone. Also: change
+  the spoken language MID-RECORDING (Recording options sheet) — the turn
+  restarts (log "restarting turn: spoken language changed"), in-flight
+  sentence finalizes, captions resume in the new language within ~a
+  second, and a conflicting translate-to clears itself.
 - [ ] **Crash recovery (2026-06-12)** — reproduce the field report: long
   recording+transcription until the app dies (or simulate: `kill -9` the
   app from Xcode mid-recording). Reopen: post-stop page shows "Recording

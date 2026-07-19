@@ -5,6 +5,21 @@ import Testing
 struct SpeakerAttributionTests {
     private typealias Segment = SpeakerAttribution.Segment
 
+    @Test func denseRenumberClosesGapsInFirstAppearanceOrder() {
+        // Auto left slots 1 and 4 unused (they won no utterance); the
+        // survivors collapse to gap-free labels — the "1, 3, 4, 6, 7, 8
+        // with 2 and 5 missing" bug.
+        #expect(SpeakerAttribution.denselyRenumbered([0, 2, 3, 5, 6, 7])
+            == [0, 1, 2, 3, 4, 5])
+        // Dense labels follow first appearance, not numeric value.
+        #expect(SpeakerAttribution.denselyRenumbered([3, 0, 3, 5, 0])
+            == [0, 1, 0, 2, 1])
+        // Unattributed (nil) entries stay nil and don't take a label.
+        #expect(SpeakerAttribution.denselyRenumbered([nil, 4, nil, 2, 4])
+            == [nil, 0, nil, 1, 0])
+        #expect(SpeakerAttribution.denselyRenumbered([]) == [])
+    }
+
     @Test func containedUtteranceTakesItsSegmentsSlot() {
         let segments = [
             Segment(slot: 0, start: 0, end: 10),

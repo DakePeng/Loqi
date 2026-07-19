@@ -1,21 +1,23 @@
 import Foundation
+import os
 
-/// Serial queue feeding finalized sentences to the LLM, strictly one
-/// generation at a time. The caption stream never waits on this: drafts are
-/// already on screen, refinement upgrades them when it lands.
+/// Serial queue feeding finalized sentences to the LLM for transcript
+/// cleanup, strictly one generation at a time. The caption stream never
+/// waits on this: the raw sentence (and its Apple draft translation) is
+/// already on screen; the cleaned sentence upgrades both when it lands.
 actor RefinementQueue {
     struct Job: Sendable {
         var entryID: UUID
         var source: String
-        var draft: String
-        var direction: LanguagePair
-        var history: [PromptBuilder.HistoryTurn]
+        var language: AppLanguage
+        var context: [String] = []
         var glossary: [String] = []
     }
 
-    /// What a finished job delivers: nil means "keep the draft on screen".
+    /// What a finished job delivers: nil means "keep the raw source and
+    /// the draft translation on screen".
     struct Outcome: Sendable {
-        var translation: String?
+        var cleanedSource: String?
     }
 
     /// Jobs beyond this depth drop oldest-first; their drafts stand.
@@ -26,6 +28,7 @@ actor RefinementQueue {
 
     private let llm: LLMService
     private let prompts = PromptBuilder()
+    private let logger = Logger(subsystem: "com.kunzhipeng.loqi", category: "refine")
     private var pending: [Job] = []
     private var worker: Task<Void, Never>?
     private var paused = false
@@ -97,20 +100,36 @@ actor RefinementQueue {
 
             var outcome = Outcome()
             do {
-                let raw = try await llm.generate(
-                    system: prompts.systemPrompt(direction: job.direction),
-                    user: prompts.userPrompt(
-                        source: job.source,
-                        draft: job.draft,
-                        direction: job.direction,
-                        history: job.history,
-                        glossary: job.glossary),
-                    maxTokens: 120)
-                if let translation = prompts.parseRefinement(raw),
-                   prompts.isAcceptable(translation, draft: job.draft) {
-                    outcome.translation = translation
+                switch try await prompts.refineSentence(
+                    job.source, language: job.language,
+                    context: job.context, glossary: job.glossary,
+                    // Near-greedy, no repetition penalty: cleanup's correct
+                    // output is a copy of the input (which sits in the
+                    // penalty ring's prompt tail), so the default penalty
+                    // pushes the 230M to paraphrase; the fidelity gate
+                    // catches the loops the penalty existed for.
+                    generate: { try await llm.generate(
+                        system: $0, user: $1, maxTokens: $2,
+                        temperature: 0.1, repetitionPenalty: nil,
+                        responsePrefix: PromptBuilder.refineResponsePrefix) }) {
+                case .cleaned(let cleaned):
+                    outcome.cleanedSource = cleaned
+                case .unchanged:
+                    break   // the model found no errors — draft stands
+                case .rejected(let raw, let reason):
+                    // Raw sentence stays; log the output so a model whose
+                    // cleanups keep getting discarded (repetition, rewrite,
+                    // garbled decode) is distinguishable from one that
+                    // never generated at all. The reason is metadata and
+                    // stays public; the output derives from the user's
+                    // speech — visible while debugging in Xcode, redacted
+                    // in sysdiagnoses and Console.app.
+                    logger.warning(
+                        "refinement rejected (\(reason, privacy: .public)), raw sentence kept: \(raw, privacy: .private)")
                 }
             } catch {
+                logger.warning(
+                    "refinement generate failed, raw sentence kept: \(error.localizedDescription, privacy: .private)")
                 outcome = Outcome()
             }
             let entryID = job.entryID

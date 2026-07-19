@@ -1,5 +1,8 @@
 import Foundation
 
+/// Is this sentence worth LLM effort? Gates the live sentence-cleanup
+/// generation on length (short utterances rarely carry a fixable
+/// mishearing), thermal state, and the user's reduce-heat preference.
 enum RefinementGate {
     static let baseThreshold = 12
     static let throttledThreshold = 24

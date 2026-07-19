@@ -38,4 +38,19 @@ struct SummaryLengthTests {
         #expect(zip(standard.sectionCaps, concise.sectionCaps).allSatisfy { $0 >= $1 })
     }
 
+    /// Mirror of SummaryStyle.effective: stored raw wins, legacy summary
+    /// without one shows standard, else the default (falling back on junk).
+    @Test func effectiveLengthResolution() {
+        #expect(SummaryLength.effective(
+            storedRaw: "detailed", hasSummary: true, defaultRaw: "concise") == .detailed)
+        #expect(SummaryLength.effective(
+            storedRaw: nil, hasSummary: true, defaultRaw: "concise") == .standard)
+        #expect(SummaryLength.effective(
+            storedRaw: "??", hasSummary: true, defaultRaw: "concise") == .standard)
+        #expect(SummaryLength.effective(
+            storedRaw: nil, hasSummary: false, defaultRaw: "concise") == .concise)
+        #expect(SummaryLength.effective(
+            storedRaw: nil, hasSummary: false, defaultRaw: "junk") == .standard)
+    }
+
 }

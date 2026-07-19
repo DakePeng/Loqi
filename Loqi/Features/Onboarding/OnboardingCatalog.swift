@@ -2,8 +2,8 @@ import Foundation
 
 /// The one region choice onboarding asks for: it fans out into the three
 /// per-model source settings Settings manages individually. China mainland
-/// maps the diarizer to HF-Mirror, not ModelScope — the FluidInference
-/// CoreML repos are not mirrored there (see DiarizerSource).
+/// maps everything to ModelScope, including the diarizer (its ONNX files
+/// are mirrored there — see DiarizerModelStore).
 enum DownloadRegion: String, CaseIterable, Identifiable {
     case global
     case chinaMainland
@@ -24,10 +24,10 @@ enum DownloadRegion: String, CaseIterable, Identifiable {
         }
     }
 
-    var diarizerSource: DiarizerSource {
+    var diarizerSource: ASRModelSource {
         switch self {
         case .global: .huggingFace
-        case .chinaMainland: .hfMirror
+        case .chinaMainland: .modelScope
         }
     }
 
@@ -64,7 +64,7 @@ enum DownloadRegion: String, CaseIterable, Identifiable {
     func persistSources(to defaults: UserDefaults = .standard) {
         defaults.set(llmSource.rawValue, forKey: "model.source")
         defaults.set(asrSource.rawValue, forKey: "asr.source")
-        defaults.set(diarizerSource.rawValue, forKey: DiarizerSource.defaultsKey)
+        defaults.set(diarizerSource.rawValue, forKey: DiarizerModelStore.sourceDefaultsKey)
     }
 }
 
@@ -78,7 +78,6 @@ enum OnboardingItemKind: String, CaseIterable, Identifiable {
     case diarizer
     case liveLLM
     case summaryLLM
-    case qwen3ASR
 
     var id: String { rawValue }
 
@@ -88,9 +87,8 @@ enum OnboardingItemKind: String, CaseIterable, Identifiable {
         case .translationPacks: String(localized: "Translation language packs")
         case .senseVoice: String(localized: "SenseVoice live recognition")
         case .diarizer: String(localized: "Speaker recognition")
-        case .liveLLM: String(localized: "Live AI model (0.8B)")
+        case .liveLLM: String(localized: "Live AI model (LFM2.5)")
         case .summaryLLM: String(localized: "Summary AI model (2B)")
-        case .qwen3ASR: String(localized: "Qwen3-ASR re-transcription")
         }
     }
 
@@ -105,11 +103,9 @@ enum OnboardingItemKind: String, CaseIterable, Identifiable {
         case .diarizer:
             String(localized: "Tells voices apart in recordings")
         case .liveLLM:
-            String(localized: "Fast on-device model for live translation and notes")
+            String(localized: "Tiny on-device model that cleans up the live transcript")
         case .summaryLLM:
             String(localized: "Higher-quality summaries, titles and chat")
-        case .qwen3ASR:
-            String(localized: "Slower, high-accuracy second pass for recordings")
         }
     }
 
@@ -119,17 +115,16 @@ enum OnboardingItemKind: String, CaseIterable, Identifiable {
         switch self {
         case .appleSpeech, .translationPacks: nil
         case .senseVoice: SenseVoiceModelStore.totalExpectedBytes
-        case .diarizer: StreamingDiarizer.approximateDownloadBytes
-        case .liveLLM: ModelCatalog.liveModel.downloadBytes
+        case .diarizer: VoiceprintService.approximateDownloadBytes
+        case .liveLLM: ModelCatalog.liveRefineModel.downloadBytes
         case .summaryLLM: ModelCatalog.qwen35_2b.downloadBytes
-        case .qwen3ASR: Qwen3ASRModelStore.totalExpectedBytes
         }
     }
 
     var isRecommended: Bool {
         switch self {
         case .translationPacks, .senseVoice, .diarizer, .liveLLM, .summaryLLM: true
-        case .appleSpeech, .qwen3ASR: false
+        case .appleSpeech: false
         }
     }
 
@@ -149,7 +144,7 @@ enum OnboardingItemKind: String, CaseIterable, Identifiable {
             String(localized: "Downloading \(caption)…")
         case .translationPacks:
             String(localized: "Preparing \(caption)…")
-        case .senseVoice, .diarizer, .liveLLM, .summaryLLM, .qwen3ASR:
+        case .senseVoice, .diarizer, .liveLLM, .summaryLLM:
             caption
         }
     }
@@ -160,10 +155,9 @@ enum OnboardingItemKind: String, CaseIterable, Identifiable {
         switch self {
         case .appleSpeech, .translationPacks: false
         case .senseVoice: SenseVoiceModelStore.isInstalled
-        case .diarizer: StreamingDiarizer.isModelCached
-        case .liveLLM: LLMService.isDownloaded(model: ModelCatalog.liveModel)
+        case .diarizer: VoiceprintService.isOfflineDiarizerDownloaded
+        case .liveLLM: LLMService.isDownloaded(model: ModelCatalog.liveRefineModel)
         case .summaryLLM: LLMService.isDownloaded(model: ModelCatalog.qwen35_2b)
-        case .qwen3ASR: Qwen3ASRModelStore.isInstalled
         }
     }
 

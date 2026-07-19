@@ -40,12 +40,12 @@ final class CaptionPipeline {
     let translator = TranslationCoordinator()
     let thermal = ThermalMonitor()
     let hotwords = HotwordStore()
-    /// Offline whole-file diarization for imports / re-transcribe (owned by
-    /// the job center). Live captions use `streamingDiarizer` instead.
+    /// Offline whole-file diarization (owned by the job center): imports,
+    /// re-transcribe, and the post-process pass that labels speakers on a
+    /// just-finished recording. There is no live diarizer — continuous
+    /// Sortformer inference next to ASR + the LLM cost more heat than the
+    /// labels were worth, and the offline pass relabels everything anyway.
     let voiceprint = VoiceprintService()
-    /// Live streaming diarization (Sortformer). Separate from `voiceprint`:
-    /// one streams the mic, the other batch-processes a finished file.
-    let streamingDiarizer = StreamingDiarizer()
     let archive = SessionArchive()
     let llm: LLMService
     /// Post-hoc LLM jobs (summarize / re-transcribe): shared so progress
@@ -109,7 +109,7 @@ final class CaptionPipeline {
     /// never by comparing display strings, and subsystems can't clobber each
     /// other. Rendered by PipelineStatusBar in both modes.
     enum StatusKey: Int, Comparable, Hashable {
-        case interruption = 0, memory, thermal, llm, diarizer, asr
+        case interruption = 0, memory, thermal, llm, asr
         static func < (lhs: Self, rhs: Self) -> Bool { lhs.rawValue < rhs.rawValue }
     }
     private(set) var statusMessages: [StatusKey: String] = [:]
@@ -127,20 +127,6 @@ final class CaptionPipeline {
             }
             return value
         }
-    }
-
-    static func shouldUnloadVoiceprintOnMemoryWarning(
-        isRunning: Bool,
-        diarizationActive: Bool
-    ) -> Bool {
-        !(isRunning && diarizationActive)
-    }
-
-    static func shouldRunLiveDiarization(
-        diarizationActive: Bool,
-        isBackgrounded: Bool
-    ) -> Bool {
-        diarizationActive && !isBackgrounded
     }
 
     private func setStatus(_ key: StatusKey, _ message: String?) {
@@ -165,6 +151,9 @@ final class CaptionPipeline {
     /// invalidates them.
     private var enginesKind = ""
     private var refinement: RefinementQueue?
+    /// In-flight Apple re-translations of LLM-cleaned sentences, keyed by
+    /// entry — cancelled at session end (see applySentenceRefinement).
+    private var refinementTranslateTasks: [UUID: Task<Void, Never>] = [:]
     private var feedTask: Task<Void, Never>?
     private var levelTask: Task<Void, Never>?
     private var eventsTask: Task<Void, Never>?
@@ -223,26 +212,12 @@ final class CaptionPipeline {
             : UserDefaults.standard.bool(forKey: "audio.saveRecordings")
     }
 
-    /// Captions-mode speaker picker value; 0/1 = diarization off, -1 =
-    /// Auto, 2+ = hard cap (see VoiceprintService.clusterCap). Unset defaults
-    /// stay off until the model is cached, so first recording never fetches
-    /// speaker weights without consent.
-    var captionSpeakerCount: Int {
-        (UserDefaults.standard.object(forKey: "captions.speakerCount") as? Int)
-            ?? VoiceprintService.defaultLiveSpeakerPickerValue()
-    }
-
-    /// Persisted download source for the speaker model (Settings key
-    /// matches SettingsView's @AppStorage).
-    var diarizerSource: DiarizerSource { .current }
-
-    private var diarizationActive = false
-    private var diarizationPausedForSceneExit = false
-    /// Audio-time bounds (seconds, in the streaming diarizer's clock) of the
-    /// utterance currently being spoken — stamped at VAD speech-start/-end and
-    /// used to attribute the ASR final to a speaker slot.
-    private var utteranceStartAudioSeconds: Double?
-    private var utteranceEndAudioSeconds: Double?
+    /// Speaker separation for recordings is configuration-free: the offline
+    /// post-process pass runs in Auto mode (discovers the speaker count)
+    /// whenever the speaker model is downloaded — downloading it IS the
+    /// opt-in, same rule as Dolphin. The old live speaker picker is gone
+    /// with live diarization.
+    static let postProcessSpeakerCount = -1
 
     init(llm: LLMService? = nil) {
         // Honor persisted Settings choices even if that screen was never
@@ -250,14 +225,18 @@ final class CaptionPipeline {
         let defaults = UserDefaults.standard
         // Selections pointing at removed tiers snap back to the default.
         ModelCatalog.normalizeStoredSelection(defaults)
+        // Pre-sherpa diarizer leftovers: retired source value + model caches.
+        DiarizerModelStore.migrateStoredSource(defaults: defaults)
+        Task.detached(priority: .utility) {
+            DiarizerModelStore.removeOrphanedFluidAudioCaches()
+        }
         let model = ModelCatalog.option(
             for: defaults.string(forKey: "model.id") ?? ModelCatalog.default.id)
         let source = ModelSource(
             rawValue: defaults.string(forKey: "model.source") ?? "") ?? .huggingFace
         self.llm = llm ?? LLMService(model: model, source: source)
-        let store = self.store
-        refinement = RefinementQueue(llm: self.llm) { [weak store] entryID, outcome in
-            store?.setRefined(outcome.translation, for: entryID)
+        refinement = RefinementQueue(llm: self.llm) { [weak self] entryID, outcome in
+            self?.applySentenceRefinement(entryID, outcome: outcome)
         }
         hotwords.onChange = { [weak self] in
             self?.pushHotwordsToEngines()
@@ -315,6 +294,8 @@ final class CaptionPipeline {
             // transition re-runs them via resumeBackgroundJobs().
             self.jobs.resumeUnfinishedImports()
             self.jobs.resumeUnfinishedSummaries()
+            self.jobs.resumePendingPostProcesses()
+            self.migrateLiveRefineModelIfNeeded()
         }
 
         // UIKit's memory warning only arrives in the foreground; a
@@ -342,8 +323,10 @@ final class CaptionPipeline {
 
     /// Per-app free-memory floor under which a critical system-pressure
     /// event triggers model shedding. Above it, global pressure is someone
-    /// else's problem and our models keep working.
-    private static let memoryShedFloor: UInt64 = 400_000_000
+    /// else's problem and our models keep working. Internal (not private)
+    /// so ModelCatalogTests can assert every tier's requiredHeadroom stays
+    /// ABOVE this floor — a model admitted below it shed-thrashes.
+    static let memoryShedFloor: UInt64 = 400_000_000
 
     // MARK: Crash recovery
 
@@ -472,7 +455,12 @@ final class CaptionPipeline {
         liveChunker = LiveChunker()
         liveNotes.removeAll()
         notesEndEntryID = nil
-        liveMappingStopped = false
+        // The live model is locked to LFM2.5 (230M), which can't produce
+        // reliable TSV chunk records — live note mapping is off entirely;
+        // post-session summarize maps every chunk from the final transcript
+        // (live notes were only a latency optimization). Revisit if a
+        // schema-capable live tier returns.
+        liveMappingStopped = true
         audioAnchors.removeAll()
         evictedEntries.removeAll()
         liveAttachments.removeAll()
@@ -482,37 +470,13 @@ final class CaptionPipeline {
             await recorder.begin(sessionID: sessionID)
         }
 
-        // Diarization: Sortformer labels up to 4 voices as audio streams in.
-        // The picker value only gates on/off (0/1 = off); Sortformer's slot
-        // count is fixed, so picks above 4 simply use all 4 slots. The model
-        // load must not block session start — captions begin immediately and
-        // attribution kicks in once the model is ready.
-        diarizationActive = VoiceprintService.clusterCap(
-            forPickerValue: captionSpeakerCount) != nil
-        utteranceStartAudioSeconds = nil
-        utteranceEndAudioSeconds = nil
-        if diarizationActive {
-            await streamingDiarizer.start()
-            if await streamingDiarizer.state != .ready {
-                setStatus(.diarizer, String(localized: "Preparing speaker separation…"))
-                Task { [weak self] in
-                    guard let self else { return }
-                    do {
-                        try await self.streamingDiarizer.loadIfNeeded(source: self.diarizerSource)
-                    } catch {
-                        self.lastError = String(
-                            localized: "Speaker separation unavailable: \(error.localizedDescription)")
-                    }
-                    self.setStatus(.diarizer, nil)
-                }
-            }
-        } else {
-            await streamingDiarizer.stop()
-        }
-
+        // Speaker separation is post-process only: the offline pass labels
+        // the saved audio after the recording ends (SummaryJobCenter's auto
+        // post-process). No live diarizer — continuous inference next to
+        // ASR + the LLM cost more heat than live labels were worth.
         ensureEngine(for: route.source)
         Task { [llm] in await llm.resetHeatStats() }
-        if let engine = engines[engineKey(for: route.source)] as? SenseVoiceEngine {
+        if let engine = engines[engineKey(for: route.source)] {
             Task { await engine.resetHeatStats() }
         }
 
@@ -520,13 +484,15 @@ final class CaptionPipeline {
             try await beginTurn(route: route)
         } catch {
             // Unwind everything beginSession set up, or a failed start
-            // leaks state for a session that doesn't exist.
+            // leaks state for a session that doesn't exist. That includes
+            // un-yielding the job center: yieldToRecording() above paused
+            // every post-hoc job, and with no recording there is no stop
+            // path to resume them — they'd stay wedged (drain held by
+            // pausedForRecording) until the next successful record cycle.
+            jobs.resumeAfterRecording()
             await recorder?.abort()
             recorder = nil
             sessionID = nil
-            diarizationActive = false
-            await streamingDiarizer.stop()
-            setStatus(.diarizer, nil)
             phase = .idle
             throw error
         }
@@ -570,57 +536,81 @@ final class CaptionPipeline {
     /// OCR'd in the background (Vision — no MLX contention), anchored to
     /// the last finalized entry so it lands in the right transcript spot.
     func attachImage(_ image: UIImage) {
-        guard isRunning, let sessionID,
-              let data = ImageTextExtractor.jpegData(for: image) else { return }
+        guard isRunning, let sessionID else { return }
+        // Anchor to the transcript position at TAP time, not at write
+        // completion — the downscale/encode/write happens off-main
+        // (ISSUES.md: it hitched live captions) and entries keep landing
+        // meanwhile.
+        let anchorEntryID = store.entries.last { $0.state != .volatile }?.id
+        Task { [weak self] in
+            guard let fileName = await Self.saveAttachmentJPEG(image) else { return }
+            guard let self, self.isRunning, self.sessionID == sessionID else {
+                // Session ended mid-encode: don't attach to a dead session.
+                try? FileManager.default.removeItem(
+                    at: SessionArchive.attachmentURL(fileName: fileName))
+                return
+            }
+            let attachment = SessionRecord.Attachment(
+                fileName: fileName,
+                timestamp: .now,
+                anchorEntryID: anchorEntryID)
+            self.liveAttachments.append(attachment)
+            self.writeJournal()
+            // OCR off the hot path. Skipped only under the heaviest thermal
+            // shedding — it's deferrable work; a missing result just means
+            // the photo contributes no text.
+            guard self.thermal.policy != .llmUnloaded else { return }
+            let attachmentID = attachment.id
+            Task { [weak self] in
+                let text = await ImageTextExtractor.recognizeText(in: image)
+                guard let text else { return }
+                self?.applyAttachmentText(text, attachmentID: attachmentID, sessionID: sessionID)
+            }
+            Task { [weak self] in
+                await self?.enqueueAttachmentDescription(attachment, sessionID: sessionID)
+            }
+        }
+    }
+
+    /// Downscale + JPEG-encode + write, off the main actor. Returns the
+    /// stored file name, or nil when encoding/writing failed.
+    nonisolated private static func saveAttachmentJPEG(_ image: UIImage) async -> String? {
+        guard let data = ImageTextExtractor.jpegData(for: image) else { return nil }
         let fileName = "\(UUID().uuidString).jpg"
         try? FileManager.default.createDirectory(
             at: SessionArchive.attachmentsDirectory, withIntermediateDirectories: true)
         guard (try? data.write(
             to: SessionArchive.attachmentURL(fileName: fileName),
-            options: .atomic)) != nil else { return }
-        let attachment = SessionRecord.Attachment(
-            fileName: fileName,
-            timestamp: .now,
-            anchorEntryID: store.entries
-                .last { $0.state != .volatile }?.id)
-        liveAttachments.append(attachment)
-        writeJournal()
-        // OCR off the hot path. Skipped only under the heaviest thermal
-        // shedding — it's deferrable work; a missing result just means the
-        // photo contributes no text.
-        guard thermal.policy != .llmUnloaded else { return }
-        let attachmentID = attachment.id
-        Task { [weak self] in
-            let text = await ImageTextExtractor.recognizeText(in: image)
-            guard let text else { return }
-            self?.applyAttachmentText(text, attachmentID: attachmentID, sessionID: sessionID)
-        }
-        Task { [weak self] in
-            await self?.enqueueAttachmentDescription(attachment, sessionID: sessionID)
-        }
+            options: .atomic)) != nil else { return nil }
+        return fileName
     }
 
     /// Attach a photo to a saved session (detail view). Unanchored — it
     /// renders in the Photos section and trails the markdown export.
+    /// Encode/write happen off-main; the record mutates on completion.
     func attachImage(_ image: UIImage, to recordID: UUID) {
-        guard var record = archive.sessions.first(where: { $0.id == recordID }),
-              let data = ImageTextExtractor.jpegData(for: image) else { return }
-        let fileName = "\(UUID().uuidString).jpg"
-        try? FileManager.default.createDirectory(
-            at: SessionArchive.attachmentsDirectory, withIntermediateDirectories: true)
-        guard (try? data.write(
-            to: SessionArchive.attachmentURL(fileName: fileName),
-            options: .atomic)) != nil else { return }
-        let attachment = SessionRecord.Attachment(fileName: fileName, timestamp: .now)
-        record.attachments = (record.attachments ?? []) + [attachment]
-        archive.update(record)
+        guard archive.sessions.contains(where: { $0.id == recordID }) else { return }
         Task { [weak self] in
-            let text = await ImageTextExtractor.recognizeText(in: image)
-            guard let text else { return }
-            self?.applyAttachmentText(text, attachmentID: attachment.id, sessionID: recordID)
-        }
-        Task { [weak self] in
-            await self?.enqueueAttachmentDescription(attachment, sessionID: recordID)
+            guard let fileName = await Self.saveAttachmentJPEG(image) else { return }
+            guard let self,
+                  var record = self.archive.sessions.first(where: { $0.id == recordID })
+            else {
+                // Session deleted mid-encode.
+                try? FileManager.default.removeItem(
+                    at: SessionArchive.attachmentURL(fileName: fileName))
+                return
+            }
+            let attachment = SessionRecord.Attachment(fileName: fileName, timestamp: .now)
+            record.attachments = (record.attachments ?? []) + [attachment]
+            self.archive.update(record)
+            Task { [weak self] in
+                let text = await ImageTextExtractor.recognizeText(in: image)
+                guard let text else { return }
+                self?.applyAttachmentText(text, attachmentID: attachment.id, sessionID: recordID)
+            }
+            Task { [weak self] in
+                await self?.enqueueAttachmentDescription(attachment, sessionID: recordID)
+            }
         }
     }
 
@@ -705,7 +695,7 @@ final class CaptionPipeline {
             live: store.entries,
             timeline: audioAnchors.isEmpty ? nil : AudioTimeline(anchors: audioAnchors),
             speakerNames: speakerNames,
-            recordingSpeakerCount: captionSpeakerCount,
+            recordingSpeakerCount: Self.postProcessSpeakerCount,
             audioFileName: recorder != nil ? SessionRecorder.fileName(for: sessionID) : nil,
             chunkNotes: liveNotes,
             notesEndEntryID: notesEndEntryID,
@@ -716,6 +706,16 @@ final class CaptionPipeline {
     private func endSession() async {
         guard phase != .idle else { return }
         await endTurn()
+        // Cancel BOTH stages of live cleanup so the archive below snapshots
+        // a store no task will mutate afterwards: the RefinementQueue's
+        // own generations (a queued/in-flight cleanup would otherwise
+        // apply to the store AFTER the snapshot, so the saved record kept
+        // raw text the screen had already upgraded) AND their downstream
+        // re-translations. Instant Stop by design — the post-hoc
+        // summarize/re-transcribe re-cleans everything anyway.
+        await refinement?.cancelAll()
+        for task in refinementTranslateTasks.values { task.cancel() }
+        refinementTranslateTasks.removeAll()
         phase = .idle
         #if os(iOS)
         UIApplication.shared.isIdleTimerDisabled = false
@@ -724,8 +724,6 @@ final class CaptionPipeline {
         thermalWatch = nil
         removeSystemObservers()
         statusMessages.removeAll()
-        await streamingDiarizer.stop()
-        diarizationActive = false
 
         // Finish artifacts BEFORE archiving: the recording's file name and
         // the live notes ride along with the record. Stop stays instant —
@@ -751,7 +749,7 @@ final class CaptionPipeline {
                     audioFileName: audioFileName,
                     chunkNotes: liveNotes,
                     notesEndEntryID: notesEndEntryID,
-                    speakerCount: captionSpeakerCount,
+                    speakerCount: Self.postProcessSpeakerCount,
                     timeline: audioFileName != nil && !audioAnchors.isEmpty
                         ? AudioTimeline(anchors: audioAnchors) : nil,
                     attachments: liveAttachments))
@@ -948,7 +946,6 @@ final class CaptionPipeline {
     /// `.inactive` (control center, app switcher) pays the same small
     /// price.
     func handleInactive() {
-        pauseLiveDiarizationForSceneExit()
         // Skip the .inactive that precedes .active on the way back from
         // background (isBackgrounded still set): only act when actually
         // leaving the foreground.
@@ -974,7 +971,6 @@ final class CaptionPipeline {
     /// fall back to their drafts; note jobs are held for foreground catch-up.
     /// Idle in background frees the big models instead.
     func handleBackground() {
-        pauseLiveDiarizationForSceneExit()
         isBackgrounded = true
         // No Metal work may run in the background — it aborts the process
         // uncatchably (an in-flight ASR decode included). Post-hoc jobs were
@@ -983,6 +979,12 @@ final class CaptionPipeline {
         // Imports/summaries resume from their checkpoints on foreground.
         forwardLLMSceneState(backgrounded: true)
         jobs.setBackgrounded(true)
+        // Ask iOS for a background window to keep decoding an in-flight
+        // import/re-transcribe (CPU ASR + sherpa diarization; the LLM
+        // phases stay parked). Best effort — iOS runs it when it chooses.
+        #if os(iOS)
+        BackgroundProcessingScheduler.scheduleIfNeeded(jobs: jobs)
+        #endif
         // Persistence is asynchronous and coalesced; land whatever's queued
         // before a background jetsam can drop it. The grace keeps iOS from
         // suspending the process mid-flush — without it this Task races
@@ -1006,23 +1008,21 @@ final class CaptionPipeline {
                 await llm.unload()
             }
         } else {
-            backgroundUnload = Task { [llm, streamingDiarizer, weak self] in
+            backgroundUnload = Task { [llm, weak self] in
                 try? await Task.sleep(for: .seconds(120))
                 guard !Task.isCancelled else { return }
                 // A paused import still holds its activity slot until
                 // foreground resumes it, so hasActiveWork covers it here too.
-                // The resident weights worth shedding are the LLM and the
-                // streaming model; LLMService defers MLX cleanup if needed.
+                // The resident weights worth shedding are the LLM's;
+                // LLMService defers MLX cleanup if needed.
                 guard self?.jobs.hasActiveWork != true else { return }
                 await llm.unload()
-                await streamingDiarizer.unload()
             }
         }
     }
 
     func handleForeground() {
         isBackgrounded = false
-        resumeLiveDiarizationAfterSceneExit()
         // Un-park the model and restart any LLM job background cancelled.
         forwardLLMSceneState(backgrounded: false)
         jobs.setBackgrounded(false)
@@ -1052,48 +1052,11 @@ final class CaptionPipeline {
         }
     }
 
-    private func pauseLiveDiarizationForSceneExit() {
-        guard isRunning, diarizationActive else { return }
-        diarizationPausedForSceneExit = true
-        diarizationActive = false
-        setStatus(.diarizer, nil)
-        Task { [streamingDiarizer] in await streamingDiarizer.unload() }
-    }
-
-    private func resumeLiveDiarizationAfterSceneExit() {
-        guard diarizationPausedForSceneExit else { return }
-        diarizationPausedForSceneExit = false
-        guard isRunning,
-              let speakerCap = VoiceprintService.clusterCap(
-                forPickerValue: captionSpeakerCount)
-        else { return }
-        diarizationActive = true
-        _ = speakerCap  // Sortformer's slot count is fixed; cap only gates on/off.
-        utteranceStartAudioSeconds = nil
-        utteranceEndAudioSeconds = nil
-        Task { [weak self] in
-            guard let self else { return }
-            if await self.streamingDiarizer.state != .ready {
-                self.setStatus(.diarizer, String(localized: "Preparing speaker separation…"))
-                try? await self.streamingDiarizer.loadIfNeeded(source: self.diarizerSource)
-                self.setStatus(.diarizer, nil)
-            }
-            guard Self.shouldRunLiveDiarization(
-                diarizationActive: self.diarizationActive,
-                isBackgrounded: self.isBackgrounded) else { return }
-            // Sortformer can't resume a stream across the background gap
-            // (model was unloaded); start fresh. Earlier entries keep the
-            // slots they already have on screen.
-            await self.streamingDiarizer.start()
-        }
-    }
-
     // MARK: Turn plumbing
 
-    /// Engine selection: "asr.engine" == "sensevoice" uses the SenseVoice
-    /// backend when its model is installed, falling back to Apple with a
-    /// status pill otherwise. Changing the setting invalidates cached
-    /// engines (they are rebuilt per session via prepare anyway).
+    /// Engine caching: the resolved kind picks the cache key shape.
+    /// Install-state changes invalidate cached engines (they are rebuilt
+    /// per session via prepare anyway).
     private func engineKey(
         for source: RecognitionLanguageSelection, kind: String? = nil
     ) -> RecognitionLanguageSelection {
@@ -1101,21 +1064,40 @@ final class CaptionPipeline {
         return kind == "apple" ? .language(source.fallbackLanguage) : source
     }
 
+    /// Why a chosen live engine couldn't be used as-is.
+    enum ASRFallbackNotice: Equatable {
+        case modelMissing
+    }
+
+    /// Hybrid is the only live engine — there is no Settings choice.
+    /// It needs the SenseVoice model AND a concrete source language (its
+    /// Apple display child is single-locale): with Auto it silently drops
+    /// to pure SenseVoice so per-utterance language detection keeps
+    /// working, and without the model it falls back to Apple with a
+    /// status pill. Pure for testing.
+    nonisolated static func resolveASRKind(
+        senseVoiceInstalled: Bool,
+        source: RecognitionLanguageSelection
+    ) -> (kind: String, notice: ASRFallbackNotice?) {
+        guard senseVoiceInstalled else { return ("apple", .modelMissing) }
+        return source == .auto ? ("sensevoice", nil) : ("hybrid", nil)
+    }
+
     private func ensureEngine(for source: RecognitionLanguageSelection) {
         #if os(macOS)
-        let wantsSenseVoice = false
+        // No sherpa runtime in the native Mac app — Apple is all there is.
+        let (kind, notice): (String, ASRFallbackNotice?) = ("apple", nil)
         #else
-        let wantsSenseVoice = UserDefaults.standard.string(forKey: "asr.engine") == "sensevoice"
+        let (kind, notice) = Self.resolveASRKind(
+            senseVoiceInstalled: SenseVoiceModelStore.isInstalled,
+            source: source)
         #endif
-        let kind: String
-        if wantsSenseVoice, SenseVoiceModelStore.isInstalled {
-            kind = "sensevoice"
+        switch notice {
+        case .modelMissing:
+            setStatus(.asr, String(
+                localized: "SenseVoice model not downloaded — using Apple recognition."))
+        case nil:
             setStatus(.asr, nil)
-        } else {
-            kind = "apple"
-            setStatus(.asr, wantsSenseVoice
-                ? String(localized: "SenseVoice model not downloaded — using Apple recognition.")
-                : nil)
         }
         if enginesKind != kind {
             engines.removeAll()
@@ -1124,9 +1106,11 @@ final class CaptionPipeline {
         }
         let key = engineKey(for: source, kind: kind)
         if engines[key] == nil {
-            engines[key] = kind == "sensevoice"
-                ? SenseVoiceEngine(sourceSelection: source)
-                : TranscriptionEngine(language: key.fallbackLanguage)
+            engines[key] = switch kind {
+            case "sensevoice": SenseVoiceEngine(sourceSelection: source)
+            case "hybrid": HybridSpeechEngine(language: key.fallbackLanguage)
+            default: TranscriptionEngine(language: key.fallbackLanguage)
+            }
         }
     }
 
@@ -1165,17 +1149,10 @@ final class CaptionPipeline {
                 AudioTimeline.Anchor(wall: .now, audio: await recorder.secondsWritten))
         }
 
-        feedTask = Task { [weak self, streamingDiarizer] in
+        feedTask = Task { [weak self] in
             for await chunk in buffers {
                 guard let self else { return }
                 await engine.feed(chunk)
-                // Checked live (not captured): the speaker-count picker can
-                // enable diarization mid-turn and the tee must follow.
-                if Self.shouldRunLiveDiarization(
-                    diarizationActive: self.diarizationActive,
-                    isBackgrounded: self.isBackgrounded) {
-                    await streamingDiarizer.ingest(chunk)
-                }
                 if let recorder = self.recorder {
                     await recorder.append(chunk)
                 }
@@ -1250,19 +1227,6 @@ final class CaptionPipeline {
             await noteQueue?.setSpeechActive(active)
             await describeQueue?.setSpeechActive(active)
             chunkGapTimer?.cancel()
-            if Self.shouldRunLiveDiarization(
-                diarizationActive: diarizationActive,
-                isBackgrounded: isBackgrounded) {
-                // Stamp the utterance's audio-time bounds in the diarizer's
-                // own clock so the ASR final attributes against the timeline.
-                let audioSeconds = await streamingDiarizer.audioSeconds
-                if active {
-                    utteranceStartAudioSeconds = audioSeconds
-                    utteranceEndAudioSeconds = nil
-                } else {
-                    utteranceEndAudioSeconds = audioSeconds
-                }
-            }
             if !active {
                 loadLLMIfAllowed()
                 scheduleChunkGapClose()
@@ -1287,36 +1251,12 @@ final class CaptionPipeline {
             }
 
         case .finalized(let refine):
-            let diarize = Self.shouldRunLiveDiarization(
-                diarizationActive: diarizationActive, isBackgrounded: isBackgrounded)
-
-            // Mid-utterance speaker split: when the engine gives per-word
-            // timings (Apple) and the diarizer maps the runs to two or more
-            // voices, this one ASR utterance becomes several captions — the
-            // UI groups consecutive entries by speaker, so they render apart.
-            if diarize, let runs = output.timedRuns,
-               let parts = await splitBySpeaker(runs: runs, language: direction.source) {
-                let entries = store.finalizeActiveSplit(parts: parts, direction: direction)
-                writeJournal()
-                for entry in entries {
-                    await processFinalizedEntry(entry, direction: direction, refine: refine)
-                }
-                return
-            }
-
-            // Single-entry path. Tier-0 hotword fixup restores near-miss
-            // hotwords before anything else sees the text.
+            // Tier-0 hotword fixup restores near-miss hotwords before
+            // anything else sees the text. Speaker labels arrive later,
+            // from the offline post-process pass over the saved audio.
             let text = hotwords.matcher.fixup(output.text, language: direction.source)
             guard let entry = store.finalizeActive(text: text, direction: direction)
             else { return }
-            // Attribute the whole utterance to a voice slot by overlapping its
-            // audio-time bounds against Sortformer's timeline. Identities are
-            // stable across the session, so there are no retroactive relabels.
-            if diarize, let start = utteranceStartAudioSeconds,
-               let slot = await streamingDiarizer.attribute(
-                start: start, end: utteranceEndAudioSeconds ?? start) {
-                store.setSpeaker(slot, for: entry.id)
-            }
             writeJournal()
             await processFinalizedEntry(entry, direction: direction, refine: refine)
 
@@ -1337,14 +1277,14 @@ final class CaptionPipeline {
             await enqueueChunkNote(for: closed)
         }
 
-        // Transcribe-only sessions (source == target) have nothing to refine:
-        // the transcript IS the record of what was said.
-        let translationEnabled = direction.source != direction.target
-        guard translationEnabled else {
-            store.setRefined(nil, for: entry.id)
-            return
+        // Instant feedback: Apple's draft translation of the raw ASR text.
+        // Sentence refinement doesn't depend on translation being on OR
+        // succeeding — a failed draft (missing pack, session not mounted)
+        // marks the entry but the transcript still deserves its cleanup;
+        // the accepted cleanup's re-translate gets its own retry anyway.
+        if direction.source != direction.target {
+            _ = await produceDraft(for: entry)
         }
-        guard let draft = await produceDraft(for: entry) else { return }
 
         let matcher = hotwords.matcher
         let text = entry.sourceText
@@ -1360,94 +1300,58 @@ final class CaptionPipeline {
         // backgrounded entry marked refining would spin forever. It takes the
         // draft path instead.
         if wantsRefinement, llmEnabled, !isBackgrounded,
-           thermal.policy == .full, await llmIsReady() {
+           thermal.policy == .full, await liveRefineReady() {
             store.markRefining(entry.id)
-            let history = store.recentHistory(limit: 6).map {
-                PromptBuilder.HistoryTurn(
-                    sourceLanguage: $0.direction.source,
-                    sourceText: $0.sourceText,
-                    translation: $0.displayTranslation ?? "")
-            }
             await refinement?.enqueue(RefinementQueue.Job(
                 entryID: entry.id,
                 source: text,
-                draft: draft,
-                direction: direction,
-                history: history,
-                glossary: matcher.glossaryLines(
-                    direction: direction, sourceText: text)))
+                language: direction.source,
+                context: store.recentSourceTexts(
+                    limit: PromptBuilder.refineContextLimit,
+                    language: direction.source, excluding: entry.id),
+                glossary: matcher.noteGlossaryLines(
+                    language: direction.source, text: text)))
         } else {
             store.setRefined(nil, for: entry.id)
         }
     }
 
-    /// Group a final utterance's timed runs into consecutive same-speaker
-    /// parts (hotword fixup applied per part). Returns nil — meaning "don't
-    /// split, take the single-entry path" — when the runs resolve to one
-    /// speaker or can't be attributed. A nil-slot run joins the part before it.
-    private func splitBySpeaker(
-        runs: [TimedRun], language: AppLanguage
-    ) async -> [(text: String, speaker: Int?, offset: TimeInterval)]? {
-        guard runs.count > 1 else { return nil }
-        let diarizerRuns = Self.runsInDiarizerClock(
-            runs, utteranceStart: utteranceStartAudioSeconds)
-        var slots: [Int?] = []
-        slots.reserveCapacity(runs.count)
-        for run in diarizerRuns {
-            slots.append(await streamingDiarizer.attribute(start: run.start, end: run.end))
+    /// A sentence-refinement job finished. Accepted and actually different:
+    /// update the transcript (the raw ASR text stays recoverable in
+    /// rawSourceText) and re-translate the cleaned sentence via Apple's
+    /// framework as the refined translation. Anything else: the raw
+    /// sentence and the draft stand.
+    private func applySentenceRefinement(
+        _ entryID: UUID, outcome: RefinementQueue.Outcome
+    ) {
+        guard let entry = store.entry(for: entryID),
+              let cleaned = outcome.cleanedSource,
+              cleaned != entry.sourceText else {
+            store.setRefined(nil, for: entryID)
+            return
         }
-        // Worth splitting only when two or more distinct voices appear.
-        guard Set(slots.compactMap { $0 }).count > 1 else { return nil }
-
-        let matcher = hotwords.matcher
-        let firstStart = runs.first?.start ?? 0
-        let cleaned = Self.groupRuns(runs, slots: slots).compactMap {
-            part -> (text: String, speaker: Int?, offset: TimeInterval)? in
-            let fixed = matcher.fixup(
-                part.text.trimmingCharacters(in: .whitespacesAndNewlines),
-                language: language)
-            return fixed.hasSpeechContent
-                ? (text: fixed, speaker: part.speaker, offset: max(0, part.start - firstStart))
-                : nil
+        store.applyCleanedSource(cleaned, for: entryID)
+        writeJournal()
+        guard entry.direction.source != entry.direction.target else {
+            store.setRefined(nil, for: entryID)   // transcribe-only: done
+            return
         }
-        return cleaned.count > 1 ? cleaned : nil
-    }
-
-    /// Convert ASR run times into the streaming diarizer's session clock.
-    /// Apple's per-run ranges can come from the recognizer timeline, while
-    /// Sortformer's clock starts when live diarization begins.
-    nonisolated static func runsInDiarizerClock(
-        _ runs: [TimedRun], utteranceStart: TimeInterval?
-    ) -> [TimedRun] {
-        guard let utteranceStart, let firstStart = runs.first?.start else {
-            return runs
+        // Tracked (not fire-and-forget): endSession cancels stragglers so
+        // nothing mutates the store after the archive snapshot.
+        refinementTranslateTasks[entryID]?.cancel()
+        refinementTranslateTasks[entryID] = Task { [translator, store, weak self] in
+            // Apple failing here keeps the draft (of the raw text) — a
+            // slight mismatch with the cleaned transcript, accepted over
+            // showing nothing.
+            let refined = try? await translator.draft(
+                cleaned, direction: entry.direction)
+            guard !Task.isCancelled else { return }
+            store.setRefined(refined, for: entryID)
+            self?.refinementTranslateTasks[entryID] = nil
+            // The journal must carry the translation the user saw — a crash
+            // after delivery would otherwise recover a session without it.
+            self?.writeJournal()
         }
-        return runs.map { run in
-            let start = max(0, run.start - firstStart)
-            let end = max(start, run.end - firstStart)
-            return TimedRun(
-                text: run.text,
-                start: utteranceStart + start,
-                end: utteranceStart + end)
-        }
-    }
-
-    /// Group runs into consecutive same-speaker parts, concatenating their
-    /// text. A run the diarizer couldn't attribute (nil slot) joins the part
-    /// before it. Pure, so the grouping is unit-testable without the model.
-    nonisolated static func groupRuns(
-        _ runs: [TimedRun], slots: [Int?]
-    ) -> [(text: String, speaker: Int?, start: TimeInterval)] {
-        var parts: [(text: String, speaker: Int?, start: TimeInterval)] = []
-        for (run, slot) in zip(runs, slots) {
-            let effective = slot ?? parts.last?.speaker
-            if !parts.isEmpty, parts[parts.count - 1].speaker == effective {
-                parts[parts.count - 1].text += run.text
-            } else {
-                parts.append((text: run.text, speaker: effective, start: run.start))
-            }
-        }
-        return parts
     }
 
     /// Tier-1 draft for a finalized entry: cancel pending volatile work,
@@ -1538,32 +1442,6 @@ final class CaptionPipeline {
         return "\(clock(start))-\(clock(end))"
     }
 
-    /// Change the speaker count, live: existing utterances are re-clustered
-    /// into the new cap and relabeled on screen. The audio tee follows
-    /// automatically (checked per-chunk in the feed loop).
-    func updateSpeakerCount(_ count: Int) {
-        UserDefaults.standard.set(count, forKey: "captions.speakerCount")
-        guard isRunning else { return }
-        let cap = VoiceprintService.clusterCap(forPickerValue: count)
-        diarizationActive = cap != nil
-        utteranceStartAudioSeconds = nil
-        utteranceEndAudioSeconds = nil
-        Task { [weak self] in
-            guard let self else { return }
-            if cap != nil {
-                if await self.streamingDiarizer.state != .ready {
-                    self.setStatus(.diarizer, String(localized: "Preparing speaker separation…"))
-                    try? await self.streamingDiarizer.loadIfNeeded(source: self.diarizerSource)
-                    self.setStatus(.diarizer, nil)
-                }
-                // Fresh stream from now; entries already labeled keep their slots.
-                await self.streamingDiarizer.start()
-            } else {
-                await self.streamingDiarizer.stop()
-            }
-        }
-    }
-
     /// Apply a changed mic-pickup preset. Every knob it tunes lives in
     /// per-turn state — VAD config inside the engines, boost inside the
     /// capture tap — so a live session rebinds by restarting its turn,
@@ -1598,11 +1476,89 @@ final class CaptionPipeline {
         }
     }
 
+    /// Apply a new spoken language live — the same turn-restart machinery
+    /// as a translation-target change: endTurn's drain finalizes in-flight
+    /// speech, then the rebuilt engine/translation stack binds the new
+    /// route. The caller pre-adjusts the target (translating into the
+    /// spoken language makes no sense). Idle sessions pick the value up
+    /// at the next start.
+    func updateSource(_ source: RecognitionLanguageSelection, target: AppLanguage?) {
+        guard isRunning else { return }
+        Task {
+            try? await self.serialized { [self] in
+                guard case .listening(let route) = phase else { return }
+                let next = RecognitionRoute(source: source, target: target)
+                guard next != route else { return }
+                logger.info("restarting turn: spoken language changed")
+                await endTurn()
+                do {
+                    try await beginTurn(route: next)
+                    liveActivity.update(statusLabel: next.displayName, isPaused: false)
+                } catch {
+                    lastError = error.localizedDescription
+                    await endSession()
+                }
+            }
+        }
+    }
+
     // MARK: LLM + thermal management
 
     private func llmIsReady() async -> Bool {
         if case .ready = await llm.loadState { return true }
         return false
+    }
+
+    /// Ready to run LIVE sentence cleanup specifically: the resident model
+    /// must be the live-refine model. A summary/photo model left loaded
+    /// from before the recording is also `.ready`, but the RefinementQueue
+    /// would then clean early utterances on that wrong, heavy model until
+    /// the first silence-gap load swaps it — gate those out.
+    private func liveRefineReady() async -> Bool {
+        guard await llm.model == ModelCatalog.liveRefineModel else { return false }
+        return await llmIsReady()
+    }
+
+    /// One-shot upgrade migration: the live role is locked to LFM2.5, but
+    /// pre-redesign installs only ever downloaded the 0.8B live model —
+    /// having its weights on disk IS the user's standing consent to live-AI
+    /// downloads, so fetch the ~151MB replacement in the background instead
+    /// of silently showing "AI model not downloaded" every session until
+    /// the user finds the new Settings button.
+    private func migrateLiveRefineModelIfNeeded() {
+        let key = "migrate.liveRefineLFM2"
+        let defaults = UserDefaults.standard
+        guard !defaults.bool(forKey: key) else { return }
+        guard LLMService.isDownloaded(model: ModelCatalog.liveRefineModel) == false else {
+            defaults.set(true, forKey: key)   // already there (fresh installs)
+            return
+        }
+        // jobs.hasActiveWork: a resumed import/summary owns the shared LLM
+        // actor; interleaving setModel/load with its own would cancel one
+        // of the two. Skip and retry next launch.
+        guard llmEnabled, !isRunning, !jobs.hasActiveWork,
+              LLMService.isDownloaded(model: ModelCatalog.liveModel)
+        else { return }   // no prior live-AI consent (or busy) — retry next launch
+        Task { [llm, logger, weak self] in
+            // The actor is idle at launch, so the setModel dance can't evict
+            // live work. A same-model load started mid-download joins this
+            // one; a job's different-model setModel cancels it and the
+            // unset flag retries next launch.
+            await llm.setModel(ModelCatalog.liveRefineModel)
+            do {
+                try await llm.load()
+                defaults.set(true, forKey: key)
+                logger.info("live-model migration: LFM2.5 downloaded")
+            } catch {
+                logger.warning("live-model migration deferred: \(error.localizedDescription)")
+            }
+            // Leave the resident slot the way the summary pipeline expects —
+            // unless a live session claimed the actor meanwhile (it owns
+            // the model choice then, and it IS the model we just set).
+            guard let self, !self.isRunning else { return }
+            await llm.setModel(ModelCatalog.option(
+                for: defaults.string(forKey: "model.id") ?? ModelCatalog.default.id))
+        }
     }
 
     /// User-facing switch for tier-2 refinement. Defaults to on; absence of
@@ -1631,14 +1587,12 @@ final class CaptionPipeline {
         }
     }
 
-    /// Decode active-seconds of the live SenseVoice engine, or 0 when the
-    /// active engine is Apple's recognizer (no in-process decode cost).
+    /// In-process ASR decode seconds of the active live engine — every
+    /// engine answers through the SpeechEngine protocol (out-of-process
+    /// ones report 0), so no engine kind can be forgotten here.
     func activeSenseVoiceDecodeSeconds() async -> Double {
-        if let activeEngineKey,
-           let sv = engines[activeEngineKey] as? SenseVoiceEngine {
-            return await sv.decodeActiveSeconds
-        }
-        return 0
+        guard let activeEngineKey, let engine = engines[activeEngineKey] else { return 0 }
+        return await engine.decodeActiveSeconds()
     }
 
     private func loadLLMIfAllowed() {
@@ -1654,7 +1608,12 @@ final class CaptionPipeline {
             return
         }
         Task { [llm] in
-            await llm.setModel(ModelCatalog.liveModel)
+            // ponytail: LFM2.5 has no vision tower, so a photo attached live
+            // this session degrades to OCR-only while the experimental flag
+            // is on — accepted, AttachmentDescribeQueue already treats every
+            // describeImage failure as best-effort. Revisit if live photo
+            // description quality regressions get reported.
+            await llm.setModel(ModelCatalog.liveRefineModel)
             // Called on every silence gap; only show status when there is
             // actually a load to do (llm.load joins in-flight loads).
             if case .ready = await llm.loadState {
@@ -1752,20 +1711,12 @@ final class CaptionPipeline {
         lastMemoryShed = .now
         setStatus(.llm, nil)
         setStatus(.memory, String(localized: "AI features paused (low memory)"))
-        let shouldUnloadVoiceprint = Self.shouldUnloadVoiceprintOnMemoryWarning(
-            isRunning: isRunning,
-            diarizationActive: diarizationActive)
-        Task { [llm, streamingDiarizer, refinement, shouldUnloadVoiceprint, shedOnly] in
+        Task { [llm, refinement, shedOnly] in
             await refinement?.setPaused(true)
             if shedOnly {
                 await llm.clearCache()
             } else {
                 await llm.unload()
-            }
-            // The live diarizer is the memory target during a session; the
-            // offline voiceprint isn't loaded while recording.
-            if shouldUnloadVoiceprint {
-                await streamingDiarizer.unload()
             }
         }
     }

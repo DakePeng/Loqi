@@ -101,3 +101,27 @@ struct SubtitleExporterTests {
         #expect(cues.isEmpty)
     }
 }
+
+extension SubtitleExporterTests {
+    /// Sentence-merged entries span up to ~20s; the tail hold scales with
+    /// reading length instead of going dark after a flat 4s.
+    @Test func cueHoldScalesWithLineLength() {
+        #expect(SubtitleExporter.holdDuration(forCharacterCount: 5) == 4)
+        #expect(SubtitleExporter.holdDuration(forCharacterCount: 96) == 8)
+        #expect(SubtitleExporter.holdDuration(forCharacterCount: 400) == 10)
+
+        let long = String(repeating: "长", count: 120)   // 10s hold
+        let record = record(offsets: [
+            (long, nil, 0, 0),
+            ("短。", nil, 30, 30),
+        ])
+        let cues = SubtitleExporter.cues(for: record, bilingual: false)
+        #expect(cues[0].end == 10)
+        // A successor inside the hold still trims the cue.
+        let trimmed = SubtitleExporter.cues(for: self.record(offsets: [
+            (long, nil, 0, 0),
+            ("短。", nil, 6, 6),
+        ]), bilingual: false)
+        #expect(trimmed[0].end == 6)
+    }
+}

@@ -3,53 +3,6 @@ import Testing
 
 struct PromptBuilderTests {
     let builder = PromptBuilder()
-    let zhToJa = LanguagePair(source: .chinese, target: .japanese)
-
-    @Test func systemPromptNamesBothLanguages() {
-        let prompt = builder.systemPrompt(direction: zhToJa)
-        #expect(prompt.contains("Chinese"))
-        #expect(prompt.contains("Japanese"))
-        #expect(prompt.contains("Output ONLY"))
-    }
-
-    @Test func userPromptContainsSourceAndDraft() {
-        let prompt = builder.userPrompt(
-            source: "我们可以再谈价格",
-            draft: "また価格の話ができます",
-            direction: zhToJa,
-            history: [])
-        #expect(prompt.contains("我们可以再谈价格"))
-        #expect(prompt.contains("また価格の話ができます"))
-        #expect(!prompt.contains("Conversation so far"))
-    }
-
-    @Test func historyIsIncludedAndCapped() {
-        let history = (0..<10).map { i in
-            PromptBuilder.HistoryTurn(
-                sourceLanguage: .chinese,
-                sourceText: "句子\(i)",
-                translation: "文\(i)")
-        }
-        let prompt = builder.userPrompt(
-            source: "你好", draft: "こんにちは", direction: zhToJa, history: history)
-        #expect(prompt.contains("Conversation so far"))
-        // historyLimit = 6: oldest 4 turns are dropped.
-        #expect(!prompt.contains("句子3"))
-        #expect(prompt.contains("句子9"))
-    }
-
-    @Test func oversizedHistoryIsTrimmedToBudget() {
-        let bigTurn = PromptBuilder.HistoryTurn(
-            sourceLanguage: .english,
-            sourceText: String(repeating: "long sentence ", count: 60),
-            translation: String(repeating: "长句子", count: 100))
-        let prompt = builder.userPrompt(
-            source: "hello", draft: "你好",
-            direction: LanguagePair(source: .english, target: .chinese),
-            history: Array(repeating: bigTurn, count: 6))
-        #expect(prompt.count <= builder.maxPromptCharacters)
-        #expect(prompt.contains("hello"))
-    }
 
     @Test func cleanResponseStripsThinkBlock() {
         let raw = "<think>reasoning here</think>\nこんにちは、お元気ですか。"
@@ -87,30 +40,188 @@ struct PromptBuilderTests {
         #expect(builder.cleanResponse("He said \"hi\" to me") == "He said \"hi\" to me")
     }
 
-    @Test func acceptableRejectsEmptyAndRunaway() {
-        #expect(!builder.isAcceptable("", draft: "你好"))
-        let runaway = String(repeating: "胡言乱语 noise ", count: 50)
-        #expect(!builder.isAcceptable(runaway, draft: "你好"))
-        #expect(builder.isAcceptable("你好，最近怎么样？", draft: "你好"))
+    // MARK: Live sentence refinement (monolingual)
+
+    @Test func sentenceRefineSystemPromptDemandsSentenceOnly() {
+        let prompt = builder.sentenceRefineSystemPrompt(language: .chinese)
+        #expect(prompt.contains("Chinese"))
+        #expect(prompt.contains("never translate"))
+        // The output format mirrors the response prefix the call sites
+        // pre-seed, so the model continues the tag the parser reads.
+        #expect(prompt.contains("\nS: <sentence>"))
+        #expect(PromptBuilder.refineResponsePrefix == "S: ")
     }
 
-    @Test func acceptableRejectsReplacementCharacters() {
-        #expect(!builder.isAcceptable("tera\u{FFFD}CHÌB混", draft: "你好"))
+    @Test func sentenceRefineUserPromptCarriesSentenceContextAndGlossary() {
+        let prompt = builder.sentenceRefineUserPrompt(
+            sentence: "我们和志朋开会",
+            language: .chinese,
+            context: ["先说说项目进度", "志鹏负责测试"],
+            glossary: ["志鹏 (person name)"])
+        #expect(prompt.contains("我们和志朋开会"))
+        #expect(prompt.contains("- 志鹏负责测试"))
+        #expect(prompt.contains("Earlier lines"))
+        #expect(prompt.contains("Vocabulary"))
+        #expect(prompt.contains("志鹏 (person name)"))
+
+        let bare = builder.sentenceRefineUserPrompt(
+            sentence: "你好", language: .chinese, context: [])
+        #expect(!bare.contains("Earlier lines"))
+        #expect(!bare.contains("Vocabulary"))
     }
 
-    @Test func glossaryAppearsAndSurvivesTrimming() {
-        let bigTurn = PromptBuilder.HistoryTurn(
-            sourceLanguage: .english,
-            sourceText: String(repeating: "long sentence ", count: 60),
-            translation: String(repeating: "长句子", count: 100))
-        let prompt = builder.userPrompt(
-            source: "tell Zhipeng",
-            draft: "告诉志鹏",
-            direction: LanguagePair(source: .english, target: .chinese),
-            history: Array(repeating: bigTurn, count: 6),
-            glossary: ["Zhipeng → 志鹏 (person name)"])
-        #expect(prompt.contains("Zhipeng → 志鹏"))
-        #expect(prompt.contains("Glossary"))
+    @Test func sentenceRefineContextCapsAtLimit() {
+        let context = (0..<10).map { "句子\($0)" }
+        let prompt = builder.sentenceRefineUserPrompt(
+            sentence: "你好", language: .chinese, context: context)
+        // refineContextLimit = 3: only the newest three ride along.
+        #expect(!prompt.contains("句子6"))
+        #expect(prompt.contains("句子7"))
+        #expect(prompt.contains("句子9"))
+    }
+
+    @Test func sentenceRefineContextTrimsToBudgetGlossarySurvives() {
+        let bigLine = String(repeating: "很长的句子", count: 200)
+        let prompt = builder.sentenceRefineUserPrompt(
+            sentence: "tell Zhipeng",
+            language: .english,
+            context: Array(repeating: bigLine, count: 3),
+            glossary: ["Zhipeng (person name)"])
+        #expect(prompt.count <= builder.maxPromptCharacters)
+        #expect(prompt.contains("tell Zhipeng"))
+        #expect(prompt.contains("Zhipeng (person name)"))
+    }
+
+    @Test func acceptableSentenceRefinementAcceptsSmallFixes() {
+        #expect(builder.isAcceptableSentenceRefinement(
+            "我们和志鹏开会", original: "我们和志朋开会"))
+        // Unchanged output is acceptable too (means "no errors found").
+        #expect(builder.isAcceptableSentenceRefinement(
+            "我们明天开会", original: "我们明天开会"))
+    }
+
+    @Test func acceptableSentenceRefinementRejectsRewritesEmptyAndRunaway() {
+        #expect(!builder.isAcceptableSentenceRefinement("", original: "我们明天开会"))
+        // A different sentence is a false record, not a fix.
+        #expect(!builder.isAcceptableSentenceRefinement(
+            "今天天气很好啊", original: "我们明天开会"))
+        // Length blowout (explanation glued on).
+        #expect(!builder.isAcceptableSentenceRefinement(
+            "我们明天开会" + String(repeating: "，这是因为", count: 10),
+            original: "我们明天开会"))
+        // Degenerate repetition loop.
+        #expect(!builder.isAcceptableSentenceRefinement(
+            String(repeating: "好的", count: 8), original: "好的好的，明白了你的意思"))
+    }
+
+    @Test func acceptableSentenceRefinementRejectsReplacementCharacters() {
+        #expect(!builder.isAcceptableSentenceRefinement(
+            "我们和志\u{FFFD}开会", original: "我们和志朋开会"))
+    }
+
+    @Test func rejectionReasonsNameTheFailingCheck() {
+        // A rejection log must say WHY: rewrite → similarity, glued-on
+        // explanation → length-ratio, garbled decode → broken-decode.
+        #expect(builder.sentenceRefinementRejection(
+            "今天天气很好啊", original: "我们明天开会")?.hasPrefix("similarity") == true)
+        // Truncated output (a maxTokens cut-off) → length-ratio.
+        #expect(builder.sentenceRefinementRejection(
+            "我们明天", original: "我们明天开会十点在会议室")?.hasPrefix("length-ratio") == true)
+        // A glued-on repetitive explanation trips the repetition check.
+        #expect(builder.sentenceRefinementRejection(
+            "我们明天开会" + String(repeating: "，这是因为", count: 10),
+            original: "我们明天开会") == "repetition")
+        #expect(builder.sentenceRefinementRejection(
+            "我们和志\u{FFFD}开会", original: "我们和志朋开会") == "broken-decode")
+        #expect(builder.sentenceRefinementRejection(
+            "我们和志鹏开会", original: "我们和志朋开会") == nil)
+    }
+
+    @Test func gateToleratesPunctuationAndMultiFixCleanups() {
+        // Dolphin finals carry no punctuation, so adding it is the
+        // cleanup's whole job there — comparison strips punctuation and
+        // the gate must always pass this.
+        #expect(builder.isAcceptableSentenceRefinement(
+            "我们明天开会，十点在会议室。", original: "我们明天开会十点在会议室"))
+        // Two homophone fixes in one short sentence stay above 0.55.
+        #expect(builder.isAcceptableSentenceRefinement(
+            "会议纪要发给志鹏看看", original: "会议既要发给志朋看看"))
+    }
+
+    @Test func refineSentenceParsesAnchoredOutputWithTrailingRamble() async throws {
+        // With the "S: " response prefix, the sentence rides line 1 and
+        // any assistant ramble lands on later lines the tag parse skips.
+        let result = try await builder.refineSentence(
+            "我们和志朋开会", language: .chinese, context: [], glossary: [],
+            generate: { _, _, _ in "S: 我们和志鹏开会\nLet me know if you'd like more!" })
+        #expect(result == .cleaned("我们和志鹏开会"))
+        // Repeating the sentence exactly reads as "no errors".
+        let unchanged = try await builder.refineSentence(
+            "我们明天开会", language: .chinese, context: [], glossary: [],
+            generate: { _, _, _ in "S: 我们明天开会" })
+        #expect(unchanged == .unchanged)
+    }
+
+    @Test func refineSentenceReportsParseRejections() async throws {
+        // Two content lines can't be trusted as one sentence: the raw
+        // text is kept and the reason says PARSE, not a fidelity check.
+        let raw = "我们明天开会\n没有其他修改"
+        let result = try await builder.refineSentence(
+            "我们明天开会", language: .chinese, context: [], glossary: [],
+            generate: { _, _, _ in raw })
+        #expect(result == .rejected(raw: raw, reason: "parse"))
+    }
+
+    @Test func parseRefinedSentenceToleratesTagAndUntagged() {
+        #expect(builder.parseRefinedSentence("S: 我们和志鹏开会") == "我们和志鹏开会")
+        #expect(builder.parseRefinedSentence("我们和志鹏开会") == "我们和志鹏开会")
+        #expect(builder.parseRefinedSentence("") == nil)
+    }
+
+    @Test func parseRefinedSentenceStripsPromptLabelEcho() {
+        // The model echoing the user-prompt label must not pollute the
+        // saved transcript.
+        #expect(builder.parseRefinedSentence(
+            "Sentence (English): We meet with Zhipeng tomorrow.")
+            == "We meet with Zhipeng tomorrow.")
+        #expect(builder.parseRefinedSentence("Sentence (Chinese)：我们明天开会")
+            == "我们明天开会")
+        // A sentence merely starting with the word survives.
+        #expect(builder.parseRefinedSentence("Sentence structure matters here")
+            == "Sentence structure matters here")
+    }
+
+    @Test func parseRefinedSentenceDropsPreambleLines() {
+        // Observed in a 2026-07-07 session export: LFM2.5 prepended a
+        // natural-language label line, and the combined text passed the
+        // fidelity gate and was saved (then translated).
+        #expect(builder.parseRefinedSentence(
+            "以下は、日本語での正確で自然な日本語翻訳です：\n\n黒川さんが大野さんと対応する中でまず。")
+            == "黒川さんが大野さんと対応する中でまず。")
+        #expect(builder.parseRefinedSentence(
+            "Here is the corrected sentence:\nWe meet with Zhipeng tomorrow.")
+            == "We meet with Zhipeng tomorrow.")
+    }
+
+    @Test func parseRefinedSentenceRejectsMultiLineOutput() {
+        // Off-contract multi-line output can't be joined safely; reject so
+        // the caller keeps the ASR original.
+        #expect(builder.parseRefinedSentence("第一の文です。\n第二の文です。") == nil)
+        // A lone colon-terminated line is content, not a preamble.
+        #expect(builder.parseRefinedSentence("次の通りです：") == "次の通りです：")
+    }
+
+    @Test func sentenceParsingKeepsSpokenMarkup() {
+        // Transcripts about markup legitimately contain tags; only KNOWN
+        // model wrappers are stripped from sentence output.
+        #expect(builder.parseRefinedSentence("use the <title> tag in the header")
+            == "use the <title> tag in the header")
+        #expect(builder.parseRefinedSentence(
+            "<answer>use the <title> tag</answer>")
+            == "use the <title> tag")
+        #expect(builder.parseRefinedSentence(
+            "<think>hmm</think>use the <title> tag")
+            == "use the <title> tag")
     }
 
     // MARK: Decoration-tolerant tag parsing (format robustness)

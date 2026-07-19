@@ -4,6 +4,18 @@ import SwiftUI
 final class LoqiAppDelegate: NSObject, UIApplicationDelegate {
     func application(
         _ application: UIApplication,
+        didFinishLaunchingWithOptions launchOptions:
+            [UIApplication.LaunchOptionsKey: Any]? = nil
+    ) -> Bool {
+        // BGTaskScheduler.register MUST run before launch finishes and the
+        // identifier MUST be in Info.plist's permitted list, or it crashes.
+        // This wires the handler that decodes ASR in a background window.
+        BackgroundProcessingScheduler.register(jobs: CaptionPipeline.shared.jobs)
+        return true
+    }
+
+    func application(
+        _ application: UIApplication,
         handleEventsForBackgroundURLSession identifier: String,
         completionHandler: @escaping @Sendable () -> Void
     ) {
@@ -36,6 +48,10 @@ struct LoqiApp: App {
         #if os(iOS)
         Task { await RecordingActivityController.endAllStale() }
         #endif
+        // Retired Qwen3-ASR weights (~990 MB) reclaim themselves off-main.
+        Task.detached(priority: .utility) {
+            Qwen3ASRModelStore.deleteLeftoverFiles()
+        }
     }
 
     var body: some Scene {

@@ -56,4 +56,18 @@ enum SpeakerAttribution {
             return nil
         }
     }
+
+    /// Remap attributed slots to dense, 0-based labels in first-appearance
+    /// order. Auto diarization can produce a slot whose segments never win
+    /// an utterance's overlap — it then labels no entry, leaving holes in
+    /// the speaker numbers (1, 3, 4, 6, … with 2 and 5 missing). Collapsing
+    /// to only the slots that actually landed on an entry keeps the labels
+    /// gap-free and in the order speakers first appear. Pure for testing.
+    static func denselyRenumbered(_ slots: [Int?]) -> [Int?] {
+        var dense: [Int: Int] = [:]
+        for case let slot? in slots where dense[slot] == nil {
+            dense[slot] = dense.count
+        }
+        return slots.map { $0.flatMap { dense[$0] } }
+    }
 }

@@ -64,3 +64,114 @@ struct CaptionGroupingTests {
         #expect(segments.count == 1)
     }
 }
+
+struct TranscriptParagraphsTests {
+    private func entry(_ text: String, at offset: TimeInterval) -> SessionRecord.Entry {
+        SessionRecord.Entry(
+            sourceText: text,
+            direction: LanguagePair(source: .japanese, target: .japanese),
+            timestamp: Date(timeIntervalSince1970: offset))
+    }
+
+    @Test func flowsUntilGapOrBudget() {
+        let paragraphs = TranscriptParagraphs.group([
+            entry("予算の話。", at: 0),
+            entry("続きです。", at: 10),
+            entry("再開します。", at: 100),   // past the 30s start gap
+        ])
+        #expect(paragraphs.count == 2)
+        #expect(TranscriptParagraphs.joined(
+            paragraphs[0].map(\.sourceText)) == "予算の話。続きです。")
+        // Character budget bounds a paragraph.
+        #expect(TranscriptParagraphs.group([
+            entry(String(repeating: "あ", count: 300), at: 0),
+            entry("続き", at: 5),
+        ]).count == 2)
+    }
+}
+
+struct CaptionRunGroupingTests {
+    private func entry(
+        _ text: String,
+        state: CaptionEntry.State = .finalized,
+        at offset: TimeInterval
+    ) -> CaptionEntry {
+        CaptionEntry(
+            sourceText: text,
+            direction: LanguagePair(source: .japanese, target: .chinese),
+            state: state,
+            createdAt: Date(timeIntervalSince1970: offset))
+    }
+
+    @Test func fragmentsAndSentencesFlowIntoOneParagraph() {
+        let fragments = [
+            entry("会議の予算は", at: 0),
+            entry("来年からです。", at: 5),
+            entry("次の議題。", at: 9),
+        ]
+        let runs = CaptionRunGrouping.runs(entries: fragments, lastEntryID: nil)
+        #expect(runs.count == 1)
+        #expect(runs[0].id == fragments[0].id)
+        #expect(runs[0].displayEntry.sourceText == "会議の予算は来年からです。次の議題。")
+    }
+
+    @Test func differentDirectionsDoNotFold() {
+        // A mid-recording language/target change makes adjacent entries
+        // carry different directions; folding them would stamp the run with
+        // the first direction and hide the later translation.
+        func directed(_ text: String, _ direction: LanguagePair, at offset: TimeInterval)
+            -> CaptionEntry {
+            CaptionEntry(
+                sourceText: text, direction: direction, state: .finalized,
+                createdAt: Date(timeIntervalSince1970: offset))
+        }
+        let a = directed("会議の予算は", LanguagePair(source: .japanese, target: .chinese), at: 0)
+        let b = directed("来年からです", LanguagePair(source: .japanese, target: .english), at: 3)
+        #expect(CaptionRunGrouping.runs(entries: [a, b], lastEntryID: nil).count == 2)
+        // Same direction still folds.
+        let c = directed("来年からです", LanguagePair(source: .japanese, target: .chinese), at: 3)
+        #expect(CaptionRunGrouping.runs(entries: [a, c], lastEntryID: nil).count == 1)
+    }
+
+    @Test func characterBudgetBoundsARun() {
+        let a = entry(String(repeating: "あ", count: 250), at: 0)
+        let b = entry("続きです", at: 5)
+        #expect(CaptionRunGrouping.runs(entries: [a, b], lastEntryID: nil).count == 2)
+    }
+
+    @Test func latestAndVolatileAlwaysRenderAlone() {
+        let a = entry("それで", at: 0)
+        let b = entry("続きです", at: 3)
+        // b is the live entry: never joined even though a is unpunctuated.
+        #expect(CaptionRunGrouping.runs(entries: [a, b], lastEntryID: b.id).count == 2)
+        // A volatile entry never joins either side.
+        let v = entry("入力中", state: .volatile, at: 3)
+        #expect(CaptionRunGrouping.runs(entries: [a, v], lastEntryID: nil).count == 2)
+    }
+
+    @Test func joinGapBoundsARun() {
+        let a = entry("間が空いた", at: 0)
+        let b = entry("続き", at: 40)   // beyond the 30s join gap
+        #expect(CaptionRunGrouping.runs(entries: [a, b], lastEntryID: nil).count == 2)
+    }
+
+    @Test func displayEntryFoldsTranslationsAndStates() {
+        var a = entry("予算の話が", at: 0)
+        a.draftTranslation = "预算的话"
+        var b = entry("続いています", at: 4)
+        b.state = .refining
+        let folded = CaptionRunGrouping.runs(
+            entries: [a, b], lastEntryID: nil)[0].displayEntry
+        // Nil translations are skipped, available ones join.
+        #expect(folded.displayTranslation == "预算的话")
+        // Any refining fragment marks the run refining.
+        #expect(folded.state == .refining)
+        // draftFailed only when nothing translated AND something failed.
+        #expect(!folded.draftFailed)
+        var c = entry("失敗", at: 8)
+        c.draftFailed = true
+        let failed = CaptionRunGrouping.runs(
+            entries: [entry("これは", at: 6), c], lastEntryID: nil)[0].displayEntry
+        #expect(failed.draftFailed)
+    }
+}

@@ -2,9 +2,9 @@ import SwiftUI
 
 /// Onboarding step: choose which models to install. The recommended set
 /// (translation packs + SenseVoice + speaker model + Qwen3.5 2B) comes
-/// pre-checked, Qwen3-ASR is an unchecked extra, and Apple speech assets
-/// are locked on. Skipping is always allowed — Settings offers models
-/// later, while system packs prompt again on first use.
+/// pre-checked, and Apple speech assets are locked on. Skipping is always
+/// allowed — Settings offers models later, while system packs prompt
+/// again on first use.
 struct OnboardingModelStep: View {
     @Binding var selection: Set<OnboardingItemKind>
     let onDownload: () -> Void

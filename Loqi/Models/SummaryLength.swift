@@ -24,6 +24,19 @@ enum SummaryLength: String, Codable, CaseIterable, Identifiable, Sendable {
         case .detailed: "text.justify.left"
         }
     }
+
+    /// Length the summary UI should show for a session: the stored
+    /// per-session value wins; a legacy summary without one was written
+    /// standard-length; otherwise the app-wide default.
+    static func effective(
+        storedRaw: String?, hasSummary: Bool, defaultRaw: String
+    ) -> SummaryLength {
+        if let storedRaw, let length = SummaryLength(rawValue: storedRaw) {
+            return length
+        }
+        if hasSummary { return .standard }
+        return SummaryLength(rawValue: defaultRaw) ?? .standard
+    }
 }
 
 struct SummaryPromptSizing: Equatable, Sendable {

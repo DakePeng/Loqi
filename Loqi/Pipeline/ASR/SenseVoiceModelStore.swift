@@ -33,40 +33,20 @@ enum ASRModelSource: String, CaseIterable, Identifiable {
 @MainActor
 @Observable
 final class SenseVoiceModelStore {
-    /// One file the engine needs. The HF and ModelScope repos hold the same
-    /// bytes but differ in owner/revision, so each source has its own path
-    /// (already including the host-specific prefix).
-    struct RemoteFile: Sendable {
-        let name: String
-        let hfPath: String
-        let modelScopePath: String
-        /// Sanity floor — a finished file smaller than this is corrupt.
-        let minBytes: Int64
-        /// Real download size, used to weight progress and show a size readout.
-        let expectedBytes: Int64
-
-        func path(for source: ASRModelSource) -> String {
-            switch source {
-            case .huggingFace: hfPath
-            case .modelScope: modelScopePath
-            }
-        }
-    }
-
-    nonisolated static let files: [RemoteFile] = [
-        RemoteFile(
+    nonisolated static let files: [ModelRemoteFile] = [
+        ModelRemoteFile(
             name: "model.int8.onnx",
             hfPath: "csukuangfj/sherpa-onnx-sense-voice-zh-en-ja-ko-yue-2024-07-17/resolve/main/model.int8.onnx",
             modelScopePath: "models/mariolux/sherpa-onnx-sense-voice-zh-en-ja-ko-yue-2024-07-17/resolve/master/model.int8.onnx",
             minBytes: 200_000_000,
             expectedBytes: 239_233_841),
-        RemoteFile(
+        ModelRemoteFile(
             name: "tokens.txt",
             hfPath: "csukuangfj/sherpa-onnx-sense-voice-zh-en-ja-ko-yue-2024-07-17/resolve/main/tokens.txt",
             modelScopePath: "models/mariolux/sherpa-onnx-sense-voice-zh-en-ja-ko-yue-2024-07-17/resolve/master/tokens.txt",
             minBytes: 100_000,
             expectedBytes: 320_000),
-        RemoteFile(
+        ModelRemoteFile(
             name: "silero_vad.onnx",
             hfPath: "csukuangfj/vad/resolve/main/silero_vad.onnx",
             modelScopePath: "models/manyeyes/silero-vad-onnx/resolve/master/silero_vad.onnx",
@@ -89,99 +69,83 @@ final class SenseVoiceModelStore {
 
     /// All files present and plausibly sized.
     nonisolated static var isInstalled: Bool {
-        files.allSatisfy { file in
-            let url = fileURL(file.name)
-            let size = (try? url.resourceValues(forKeys: [.fileSizeKey]).fileSize) ?? 0
-            return Int64(size) >= file.minBytes
-        }
+        ModelFileDownloader.allInstalled(files, in: directory)
     }
 
-    private(set) var downloading = false
-    /// 0…1 across all files, weighted by expected size.
-    private(set) var progress: Double = 0
-    private(set) var lastError: String?
+    // Shared download shell (state + cancel-able task); forwarding keeps
+    // every call site and observation untouched.
+    private let downloads = ModelStoreDownloads(
+        files: files, directory: directory, logCategory: "sensevoice")
+    var downloading: Bool { downloads.downloading }
+    var progress: Double { downloads.progress }
+    var lastError: String? { downloads.lastError }
+    func download(from source: ASRModelSource) async { await downloads.download(from: source) }
+    func cancelDownload() { downloads.cancelDownload() }
+}
 
-    private var downloadTask: Task<Void, Never>?
-    private let logger = Logger(subsystem: "com.kunzhipeng.loqi", category: "sensevoice")
+/// Manages the on-disk Dolphin-small CTC files — the high-accuracy tier
+/// behind Re-transcribe/imports and the hybrid engine's live finals:
+/// non-autoregressive, so a decode pool chews through a file far faster
+/// than realtime. Eastern languages only (中文/日本語/한국어 here) —
+/// never offered for English.
+/// ponytail: hosted in this file, not its own, so the xcodegen-generated
+/// pbxproj (which has pending local edits) needn't change; split it out
+/// on the next project regen.
+@MainActor
+@Observable
+final class DolphinModelStore {
+    nonisolated static let files: [ModelRemoteFile] = [
+        ModelRemoteFile(
+            name: "model.int8.onnx",
+            hfPath: "csukuangfj/sherpa-onnx-dolphin-small-ctc-multi-lang-int8-2025-04-02/resolve/main/model.int8.onnx",
+            modelScopePath: "models/csukuangfj/sherpa-onnx-dolphin-small-ctc-multi-lang-int8-2025-04-02/resolve/master/model.int8.onnx",
+            minBytes: 200_000_000,
+            expectedBytes: 249_658_954),
+        ModelRemoteFile(
+            name: "tokens.txt",
+            hfPath: "csukuangfj/sherpa-onnx-dolphin-small-ctc-multi-lang-int8-2025-04-02/resolve/main/tokens.txt",
+            modelScopePath: "models/csukuangfj/sherpa-onnx-dolphin-small-ctc-multi-lang-int8-2025-04-02/resolve/master/tokens.txt",
+            minBytes: 300_000,
+            expectedBytes: 504_662),
+        ModelRemoteFile(
+            name: "silero_vad.onnx",
+            hfPath: "csukuangfj/vad/resolve/main/silero_vad.onnx",
+            modelScopePath: "models/manyeyes/silero-vad-onnx/resolve/master/silero_vad.onnx",
+            minBytes: 1_000_000,
+            expectedBytes: 1_807_522),
+    ]
 
-    func download(from source: ASRModelSource) async {
-        guard !downloading else { return }
-        downloading = true
-        lastError = nil
-        progress = 0
-        // Run in an owned task so Stop can cancel it; completed-file
-        // checkpoints stay on disk and a later download resumes.
-        let task = Task { await performDownload(from: source) }
-        downloadTask = task
-        await task.value
-        downloadTask = nil
-        downloading = false
+    /// Total download size across all files, for the progress readout.
+    nonisolated static var totalExpectedBytes: Int64 {
+        files.reduce(0) { $0 + $1.expectedBytes }
     }
 
-    /// User-initiated stop; not an error. Partial files remain for resume.
-    func cancelDownload() {
-        downloadTask?.cancel()
+    nonisolated static var directory: URL {
+        URL.applicationSupportDirectory.appending(path: "Dolphin", directoryHint: .isDirectory)
     }
 
-    private func performDownload(from source: ASRModelSource) async {
-        try? FileManager.default.createDirectory(
-            at: Self.directory, withIntermediateDirectories: true)
-
-        let totalWeight = Self.files.reduce(0) { $0 + $1.expectedBytes }
-        var doneWeight: Int64 = 0
-        for file in Self.files {
-            do {
-                try Task.checkCancellation()
-                let base = doneWeight
-                try await fetch(file, from: source) { [weak self] fileFraction in
-                    let blended = Double(base) / Double(totalWeight)
-                        + fileFraction * Double(file.expectedBytes) / Double(totalWeight)
-                    self?.progress = min(blended, 1)
-                }
-                doneWeight += file.expectedBytes
-            } catch is CancellationError {
-                return
-            } catch let error as URLError where error.code == .cancelled {
-                return
-            } catch {
-                logger.error("download \(file.name) failed: \(error)")
-                lastError = String(
-                    localized: "Download failed — check your connection and try again.")
-                return
-            }
-        }
-        progress = 1
+    nonisolated static func fileURL(_ name: String) -> URL {
+        directory.appending(path: name)
     }
 
-    /// Download one file through the segmented downloader: parallel Range
-    /// connections for the big recognizer, one stream for the small files.
-    /// Retries, .part checkpointing, and cross-launch resume live there.
-    private func fetch(
-        _ file: RemoteFile,
-        from source: ASRModelSource,
-        onProgress: @escaping @MainActor (Double) -> Void
-    ) async throws {
-        let final = Self.fileURL(file.name)
-        if let size = try? final.resourceValues(forKeys: [.fileSizeKey]).fileSize,
-           Int64(size) >= file.minBytes {
-            onProgress(1)
-            return
-        }
+    /// All files present and plausibly sized.
+    nonisolated static var isInstalled: Bool {
+        ModelFileDownloader.allInstalled(files, in: directory)
+    }
 
-        let url = URL(string: "https://\(source.host)/\(file.path(for: source))")!
-        try await ModelFileDownloader.download(
-            url: url, to: final, expectedBytes: file.expectedBytes
-        ) { bytes in
-            let fraction = min(1, Double(bytes) / Double(file.expectedBytes))
-            Task { @MainActor in onProgress(fraction) }
-        }
+    // Shared download shell (state + cancel-able task); forwarding keeps
+    // every call site and observation untouched.
+    private let downloads = ModelStoreDownloads(
+        files: files, directory: directory, logCategory: "dolphin")
+    var downloading: Bool { downloads.downloading }
+    var progress: Double { downloads.progress }
+    var lastError: String? { downloads.lastError }
+    func download(from source: ASRModelSource) async { await downloads.download(from: source) }
+    func cancelDownload() { downloads.cancelDownload() }
 
-        let size = Int64(
-            (try? final.resourceValues(forKeys: [.fileSizeKey]).fileSize) ?? 0)
-        guard size >= file.minBytes else {
-            try? FileManager.default.removeItem(at: final)
-            throw URLError(.cannotParseResponse)
-        }
-        onProgress(1)
+    /// Removes the installed files — also how the user leaves Dolphin:
+    /// with it gone, backend selection returns to SenseVoice/Apple.
+    func removeInstalled() {
+        try? FileManager.default.removeItem(at: Self.directory)
     }
 }

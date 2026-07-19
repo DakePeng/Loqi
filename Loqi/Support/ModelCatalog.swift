@@ -16,41 +16,6 @@ enum ModelSource: String, CaseIterable, Identifiable, Sendable {
     }
 }
 
-/// Where the speaker-recognition (diarization) models download from.
-/// ModelScope is not an option here: the FluidInference CoreML repos are
-/// not mirrored there (verified — "record not found"). HF-Mirror proxies
-/// all of Hugging Face with identical URL paths and works where
-/// huggingface.co is blocked.
-enum DiarizerSource: String, CaseIterable, Identifiable, Sendable {
-    case huggingFace
-    case hfMirror
-
-    var id: String { rawValue }
-
-    static let defaultsKey = "diarizer.source"
-
-    /// Persisted choice; absence of the key = .huggingFace.
-    static var current: DiarizerSource {
-        DiarizerSource(
-            rawValue: UserDefaults.standard.string(forKey: defaultsKey) ?? ""
-        ) ?? .huggingFace
-    }
-
-    var displayName: String {
-        switch self {
-        case .huggingFace: "Hugging Face"
-        case .hfMirror: "HF-Mirror 镜像"
-        }
-    }
-
-    var baseURL: String {
-        switch self {
-        case .huggingFace: "https://huggingface.co"
-        case .hfMirror: "https://hf-mirror.com"
-        }
-    }
-}
-
 /// Refinement models the app offers. Qwen3.5-2B is small enough for every
 /// supported device (iPhone 15+), so there is no per-device tier.
 struct ModelOption: Identifiable, Sendable, Equatable {
@@ -97,41 +62,66 @@ enum ModelCatalog {
         downloadBytes: 652_000_000,
         supportsVision: true)
 
-    /// Experimental text-only 8B (Qwen3-8B arch), ternary weights stored in
-    /// MLX 2-bit format — which stock mlx-swift loads out of the box (the
-    /// 1-bit build needs a custom fork and aborts: upstream MLX `quantize`
-    /// only supports 2/3/4/5/6/8 bits). No vision tower, so when picked, photo
-    /// description routes to the live VLM (see SummaryJobCenter). Hidden behind
-    /// `model.bonsaiEnabled` (off by default).
+    /// Text-only 8B (Qwen3-8B arch), ternary weights stored in MLX 2-bit
+    /// format — which stock mlx-swift loads out of the box (the 1-bit build
+    /// needs a custom fork and aborts: upstream MLX `quantize` only supports
+    /// 2/3/4/5/6/8 bits). No vision tower, so when picked, photo description
+    /// routes to the live VLM (see SummaryJobCenter). Standard summary
+    /// option since 2026-07 — validated on device.
     static let bonsai8b = ModelOption(
         id: "prism-ml/Ternary-Bonsai-8B-mlx-2bit",
-        displayName: "Bonsai 8B (ternary 2-bit) — experimental",
+        displayName: "Bonsai 8B (ternary 2-bit)",
         requiredHeadroom: 3_000_000_000,   // ~2.3 GB weights + cache; tune on device
         downloadBytes: 2_300_000_000,
         supportsVision: false)
 
     static let `default` = qwen35_2b
-    /// Model that runs *during* a live recording: the fast, low-memory,
-    /// low-heat tier. Always 0.8B regardless of the user's quality pick, so
-    /// translation refinement and live notes never load the heavy VLM beside
-    /// SenseVoice's in-process ONNX.
+    /// Model that runs *during* a live recording for photo description:
+    /// the fast, low-memory, low-heat vision-capable tier. Always 0.8B
+    /// regardless of the user's quality pick, so live photo description and
+    /// the post-session vision back-fill (see SummaryJobCenter) never load
+    /// the heavy VLM beside SenseVoice's in-process ONNX. Vision-only role:
+    /// the live-refine role is locked to `liveRefineModel` (LFM2.5).
     static let liveModel = qwen35_0_8b
+
+    /// Experimental text-only 230M live-refine candidate (Liquid AI's
+    /// LFM2.5), first-party MLX port — mlx-swift-lm 3.31.3 already ships
+    /// `LFM2.swift`, so no fork is needed (config.json model_type "lfm2").
+    /// No vision tower: while active, a photo attached live falls back to
+    /// OCR-only (AttachmentDescribeQueue already treats every
+    /// `describeImage` failure as best-effort). Live-refine only: it
+    /// cannot do stable structured output, so it never summarizes and
+    /// live notes defer to post-session mapping.
+    static let lfm2_5_230m = ModelOption(
+        id: "LiquidAI/LFM2.5-230M-MLX-4bit",
+        displayName: "Liquid LFM2.5 230M — experimental",
+        // ~151 MB weights would fit in far less, but the headroom must stay
+        // ABOVE CaptionPipeline.memoryShedFloor (400 MB): a load admitted
+        // below the floor re-enables the shed-thrash loop the pressure
+        // handler exists to prevent (admit at ~350 MB free → critical event
+        // sheds → silence-gap reload → repeat).
+        requiredHeadroom: 500_000_000,
+        downloadBytes: 151_000_000,
+        supportsVision: false)
+
+    /// Model `CaptionPipeline` loads during recording for live transcript
+    /// cleanup — sentence refinement (text-only path; never touches
+    /// vision). Locked to the 230M: monolingual cleanup is within its
+    /// capability, and it runs far cooler beside ASR + diarization than
+    /// the 0.8B did.
+    static let liveRefineModel = lfm2_5_230m
 
     /// Model post-session summary / title / vocabulary runs on: the user's
     /// quality pick (default 2B). Equals `liveModel` when the user picked the
     /// fast tier, in which case the boundary swap is a no-op.
     static var summaryModel: ModelOption { current }
 
-    /// Whether the experimental Bonsai tier is offered. Off by default; it
-    /// needs the 1-bit-kernel mlx-swift fork present to actually load.
-    static func bonsaiEnabled(_ defaults: UserDefaults = .standard) -> Bool {
-        defaults.bool(forKey: "model.bonsaiEnabled")
-    }
-
-    /// Selectable summary models. Bonsai (text-only) appears only when its
-    /// flag is set; the live/vision roles never use it.
+    /// Selectable summary models. The live tiers (0.8B, LFM2.5) never
+    /// appear: live and summary roles are fully split. Bonsai is standard —
+    /// validated on device (text-only; photo description routes via the
+    /// live VLM).
     static func availableModels(defaults: UserDefaults = .standard) -> [ModelOption] {
-        bonsaiEnabled(defaults) ? [qwen35_2b, qwen35_0_8b, bonsai8b] : [qwen35_2b, qwen35_0_8b]
+        [qwen35_2b, bonsai8b]
     }
 
     static var all: [ModelOption] { availableModels() }

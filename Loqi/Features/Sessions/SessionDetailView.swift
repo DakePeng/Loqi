@@ -33,10 +33,18 @@ struct SessionDetailView: View {
     @State private var isEditingSummary = false
     @State private var summaryDraft = ""
     @State private var confirmRegenerate = false
-    @State private var confirmRetranscribe = false
+    @State private var showingRetranscribeOptions = false
+    @State private var showingIdentifySpeakers = false
     @State private var timelineExpanded = false
     @State private var confirmDeleteAudio = false
     @State private var showingChat = false
+    @State private var showingLanguages = false
+    /// A style/length change awaiting the "replace edited summary?" confirm.
+    @State private var pendingRegenerate: PendingRegenerate?
+    /// A heavy action held while the "stop the other running task?" confirm
+    /// is up — one ASR/LLM pass at a time keeps the device from thrashing.
+    @State private var pendingHeavyAction: (() -> Void)?
+    @State private var confirmStopOtherJob = false
     @State private var autoStarted = false
     /// Shared with PlaybackBar so tapping a transcript line can seek.
     @State private var playback = AudioPlaybackController()
@@ -44,10 +52,6 @@ struct SessionDetailView: View {
     @State private var showingCamera = false
     @State private var showingPhotoLibrary = false
     @State private var photoItem: PhotosPickerItem?
-    /// Style picked while the replace-edited-summary confirm is up; only
-    /// persisted on Replace so Cancel fully reverts the picker.
-    @State private var pendingStyle: SummaryStyle?
-    @State private var pendingLength: SummaryLength?
     /// AI action waiting on the user's one-time model-download consent.
     @State private var pendingDownload: DownloadAction?
     /// Last style the user picked anywhere — the default for new sessions.
@@ -58,12 +62,18 @@ struct SessionDetailView: View {
     @AppStorage("record.autoSuggest") private var autoSuggest = true
     @AppStorage("summary.autoPostProcessNewRecordings")
     private var autoPostProcessNewRecordings = false
+    /// Diagnostic: render each entry's pre-cleanup ASR text (`rawSourceText`)
+    /// under the displayed line when they differ, to tell whether the
+    /// LFM2.5 cleanup dropped words vs the decoder never producing them.
+    @AppStorage("debug.showOriginalRecognition")
+    private var showOriginalRecognition = false
 
     /// What to run once the user consents to downloading the model.
     private enum DownloadAction: Equatable {
         case summarize(SummaryStyle, SummaryLength, suggestVocabulary: Bool)
         case postProcessNewRecording(SummaryStyle, SummaryLength, suggestVocabulary: Bool)
-        case retranscribe
+        // Carries the sheet's picks so a download detour doesn't lose them.
+        case retranscribe(MicSensitivity, backend: OfflineTranscriber.Backend?)
         case suggestHotwords
     }
 
@@ -77,22 +87,18 @@ struct SessionDetailView: View {
 
     private var jobRunning: Bool { jobActivity != nil }
 
-    /// A legacy summary without a stored style was written meeting-shaped;
-    /// it must show Meeting, not whatever the user picked elsewhere since.
     private var selectedStyle: SummaryStyle {
-        if let raw = session?.summaryStyle, let style = SummaryStyle(rawValue: raw) {
-            return style
-        }
-        if session?.summary != nil { return .meeting }
-        return SummaryStyle(rawValue: defaultStyleRaw) ?? .meeting
+        SummaryStyle.effective(
+            storedRaw: session?.summaryStyle,
+            hasSummary: session?.summary != nil,
+            defaultRaw: defaultStyleRaw)
     }
 
     private var selectedLength: SummaryLength {
-        if let raw = session?.summaryLength, let length = SummaryLength(rawValue: raw) {
-            return length
-        }
-        if session?.summary != nil { return .standard }
-        return SummaryLength(rawValue: defaultLengthRaw) ?? .standard
+        SummaryLength.effective(
+            storedRaw: session?.summaryLength,
+            hasSummary: session?.summary != nil,
+            defaultRaw: defaultLengthRaw)
     }
 
     var body: some View {
@@ -109,14 +115,19 @@ struct SessionDetailView: View {
             if let session {
                 recordingSection(session)
                 speakerRetrySection(session)
-                if jobRunning, session.summary == nil {
+                // Whenever a job runs — gating on `summary == nil` hid the
+                // entire ASR half of a re-transcribe (and all of a
+                // re-summarize) on any session that already had a summary.
+                if jobRunning {
                     Section {
                         jobProgressRow
                     } header: {
-                        // An import filling this record isn't "Summary" work.
-                        if case .importing = jobActivity {
+                        // Transcript-producing phases aren't "Summary" work.
+                        switch jobActivity {
+                        case .importing, .retranscribing, .preparing,
+                             .queuedRetranscribe, .downloadingSpeakerModel:
                             Text("Processing")
-                        } else {
+                        default:
                             Text("Summary")
                         }
                     }
@@ -168,6 +179,17 @@ struct SessionDetailView: View {
         }
         .sheet(isPresented: $showingChat) {
             SessionChatSheet(pipeline: pipeline, sessionID: sessionID)
+        }
+        .sheet(isPresented: $showingLanguages) {
+            SessionLanguagesSheet(pipeline: pipeline, sessionID: sessionID)
+        }
+        .sheet(isPresented: $showingRetranscribeOptions) {
+            RetranscribeOptionsSheet(pipeline: pipeline, sessionID: sessionID) { sensitivity, backend in
+                requestRetranscribe(sensitivity: sensitivity, backend: backend)
+            }
+        }
+        .sheet(isPresented: $showingIdentifySpeakers) {
+            IdentifySpeakersSheet(pipeline: pipeline, sessionID: sessionID)
         }
         #if os(iOS)
         .fullScreenCover(isPresented: $showingCamera) {
@@ -247,35 +269,33 @@ struct SessionDetailView: View {
             isPresented: $confirmRegenerate,
             titleVisibility: .visible
         ) {
+            // Backs both the wand's Re-summarize (pending == nil, same
+            // settings) and an inline style/length change (pending set).
             Button("Replace", role: .destructive) {
-                if pendingStyle != nil || pendingLength != nil {
-                    let style = pendingStyle ?? selectedStyle
-                    let length = pendingLength ?? selectedLength
-                    pendingStyle = nil
-                    pendingLength = nil
-                    applySummaryPreferences(style: style, length: length)
+                if let pending = pendingRegenerate {
+                    applySummaryPreferences(style: pending.style, length: pending.length)
                 } else {
                     requestSummarize(style: selectedStyle, length: selectedLength)
                 }
+                pendingRegenerate = nil
             }
-            Button("Cancel", role: .cancel) {
-                pendingStyle = nil
-                pendingLength = nil
-            }
+            Button("Cancel", role: .cancel) { pendingRegenerate = nil }
         } message: {
             Text("You edited this summary. Summarizing again will replace your changes.")
         }
         .confirmationDialog(
-            "Re-transcribe this session?",
-            isPresented: $confirmRetranscribe,
+            "Another session is still processing",
+            isPresented: $confirmStopOtherJob,
             titleVisibility: .visible
         ) {
-            Button("Re-transcribe", role: .destructive) {
-                requestRetranscribe()
+            Button("Stop it and continue", role: .destructive) {
+                for id in otherBusySessionIDs { pipeline.jobs.cancel(id) }
+                pendingHeavyAction?()
+                pendingHeavyAction = nil
             }
-            Button("Cancel", role: .cancel) {}
+            Button("Not now", role: .cancel) { pendingHeavyAction = nil }
         } message: {
-            Text("Replaces the transcript with a fresh transcription of the recording, then summarizes again. Edits to the old summary are lost.")
+            Text("Only one recording or session can be processed at a time. Stop the other task to start this one.")
         }
         .confirmationDialog(
             "Delete this session's audio?",
@@ -314,16 +334,23 @@ struct SessionDetailView: View {
         }
     }
 
+    private func clearUnseen() {
+        guard let session, session.unseen == true else { return }
+        var seen = session
+        seen.unseen = nil
+        pipeline.archive.update(seen)
+    }
+
     private func list(proxy: ScrollViewProxy) -> some View {
         dialogHost
         .task {
             // Opening the session clears its "new" dot in the list.
-            if let session, session.unseen == true {
-                var seen = session
-                seen.unseen = nil
-                pipeline.archive.update(seen)
-            }
+            clearUnseen()
         }
+        // An import that COMPLETES while this screen is open stamps the
+        // record unseen — the user just watched it finish, so clear the
+        // dot again instead of flagging a session they've already seen.
+        .onChange(of: session?.unseen) { clearUnseen() }
         .task {
             guard let style = autoSummarizeStyle, !autoStarted,
                   let session, session.summary == nil else { return }
@@ -359,6 +386,24 @@ struct SessionDetailView: View {
         }
     }
 
+    /// Speaker diarization reports NO progress during its first pass
+    /// (whole-file segmentation), only during the later embedding sweep —
+    /// so a 0% determinate bar sits frozen for the segmentation window
+    /// (minutes on a long/throttled file). Show it's working instead;
+    /// switch to a real bar once fractions arrive.
+    @ViewBuilder
+    private func speakerProgress(_ fraction: Double) -> some View {
+        if fraction <= 0 {
+            HStack(spacing: 8) {
+                ProgressView()
+                Text("Identifying speakers…").foregroundStyle(.secondary)
+            }
+        } else {
+            PercentProgressRow(
+                label: "Identifying speakers…", fraction: fraction, detail: remainingText)
+        }
+    }
+
     /// Progress row matching the job's current stage.
     @ViewBuilder
     private var jobProgressRow: some View {
@@ -368,28 +413,48 @@ struct SessionDetailView: View {
         case .retranscribing(.transcribing(let fraction)):
             PercentProgressRow(
                 label: "Re-transcribing…", fraction: fraction, detail: remainingText)
-        case .retranscribing(.identifyingSpeakers(let fraction)):
+        case .retranscribing(.cleaningUpTranscript(let fraction)):
             PercentProgressRow(
-                label: "Identifying speakers…", fraction: fraction, detail: remainingText)
+                label: "Cleaning up transcript…", fraction: fraction, detail: remainingText)
+        case .retranscribing(.identifyingSpeakers(let fraction)):
+            speakerProgress(fraction)
         case .retranscribing(.translating(let fraction)):
             PercentProgressRow(
                 label: "Translating…", fraction: fraction, detail: remainingText)
         case .importing(.transcribing(let fraction)):
             PercentProgressRow(
                 label: "Transcribing…", fraction: fraction, detail: remainingText)
+        case .importing(.cleaningUpTranscript(let fraction)):
+            PercentProgressRow(
+                label: "Cleaning up transcript…", fraction: fraction, detail: remainingText)
         case .importing(.fetchingSpeakerModel(let fraction)):
             PercentProgressRow(
                 label: "Downloading speaker model…", fraction: fraction,
                 detail: remainingText)
         case .importing(.identifyingSpeakers(let fraction)):
-            PercentProgressRow(
-                label: "Identifying speakers…", fraction: fraction,
-                detail: remainingText)
+            speakerProgress(fraction)
         case .importing(.translating(let fraction)):
             PercentProgressRow(
                 label: "Translating…", fraction: fraction, detail: remainingText)
+        case .downloadingSpeakerModel(let fraction):
+            PercentProgressRow(
+                label: "Downloading speaker model…", fraction: fraction,
+                detail: remainingText)
+        case .retranscribing(.coolingDown), .importing(.coolingDown):
+            Label("Paused to cool down — resumes automatically",
+                  systemImage: "thermometer.high")
+                .foregroundStyle(.secondary)
+        case .preparing:
+            HStack(spacing: 8) {
+                ProgressView()
+                Text("Preparing…")
+                    .foregroundStyle(.secondary)
+            }
         case .queuedRetranscribe:
-            Label("Waiting to re-transcribe…", systemImage: "clock")
+            Label(pipeline.jobs.finishingPreviousAttempt
+                    ? "Finishing the previous attempt…"
+                    : "Waiting to re-transcribe…",
+                  systemImage: "clock")
                 .foregroundStyle(.secondary)
         case .pausedForRecording:
             Label("Paused — recording in progress", systemImage: "pause.circle")
@@ -398,9 +463,19 @@ struct SessionDetailView: View {
             Label("Paused — open Loqi to continue", systemImage: "pause.circle")
                 .foregroundStyle(.secondary)
         case .summarizing(let done, let total) where total > 1:
-            // Map chunks and stitched detail sections report real counts.
-            ProgressView(value: Double(done), total: Double(total)) {
-                Text("Summarizing…")
+            // Map chunks and stitched detail sections report real counts;
+            // the last step is the reduce — one long generation with no
+            // intermediate progress, so name it instead of parking a bar.
+            if done >= total - 1 {
+                HStack(spacing: 8) {
+                    ProgressView()
+                    Text("Finalizing summary…")
+                        .foregroundStyle(.secondary)
+                }
+            } else {
+                ProgressView(value: Double(done), total: Double(total)) {
+                    Text("Summarizing…")
+                }
             }
         default:
             HStack(spacing: 8) {
@@ -408,6 +483,14 @@ struct SessionDetailView: View {
                 Text("Summarizing…")
                     .foregroundStyle(.secondary)
             }
+        }
+        if jobRunning {
+            // The list row's long-press menu was the app's ONLY cancel;
+            // the session's own screen needs one too.
+            Button("Cancel processing", systemImage: "xmark.circle", role: .destructive) {
+                pipeline.jobs.cancel(sessionID)
+            }
+            .font(.footnote)
         }
     }
 
@@ -428,6 +511,16 @@ struct SessionDetailView: View {
         case .summarizing(let done, let total) where total > 1:
             Text("\(done)/\(total)")
                 .font(.caption.monospacedDigit())
+        case .queuedRetranscribe, .preparing:
+            // Parked, not working — a spinner here claimed active work.
+            Image(systemName: "clock")
+                .font(.caption)
+        case .pausedForRecording, .pausedForBackground:
+            Image(systemName: "pause.circle")
+                .font(.caption)
+        case .retranscribing(.coolingDown), .importing(.coolingDown):
+            Image(systemName: "thermometer.high")
+                .font(.caption)
         case .some:
             ProgressView()
         case .none:
@@ -471,67 +564,113 @@ struct SessionDetailView: View {
 
     private var actionsMenu: some View {
         Menu {
-            Button {
-                if session?.summaryEdited == true {
-                    // Stale pendingStyle from an abandoned style change
-                    // must not hijack a plain re-summarize.
-                    pendingStyle = nil
-                    pendingLength = nil
-                    confirmRegenerate = true
-                } else {
-                    requestSummarize(style: selectedStyle, length: selectedLength)
-                }
-            } label: {
-                Label(session?.summary == nil ? "Summarize" : "Re-summarize",
-                      systemImage: "sparkles")
-            }
-            .disabled(jobRunning || isEditingSummary)
-            if let session, SessionRetranscriber.canRetranscribe(session) {
+            // Grouped by intent so the menu reads as three short clusters
+            // instead of one flat wall: (1) produce the summary — the cheap
+            // re-summarize first, then the expensive source-level redos;
+            // (2) adjust how it's made; (3) edit this session. Niche tools
+            // sit in their own trailing group so they don't compete with
+            // the everyday actions.
+            Section {
                 Button {
-                    confirmRetranscribe = true
+                    if blockedByRecording() { return }
+                    startHeavyAction {
+                        if session?.summaryEdited == true {
+                            pendingRegenerate = nil   // same settings; not a style change
+                            confirmRegenerate = true
+                        } else {
+                            requestSummarize(style: selectedStyle, length: selectedLength)
+                        }
+                    }
                 } label: {
-                    Label("Re-transcribe & summarize",
-                          systemImage: "arrow.trianglehead.2.clockwise.rotate.90")
+                    Label(session?.summary == nil ? "Summarize" : "Re-summarize",
+                          systemImage: "sparkles")
                 }
-                .disabled(jobRunning || isEditingSummary || pipeline.isRunning)
-            }
-            Picker("Summary style", selection: styleBinding) {
-                ForEach(SummaryStyle.allCases) { style in
-                    Label(style.displayName, systemImage: style.symbolName)
-                        .tag(style)
+                .disabled(jobRunning || isEditingSummary)
+                if let session, SessionRetranscriber.canRetranscribe(session) {
+                    // Tappable during a recording so the tap shows WHY it's
+                    // blocked (a bare grey button explained nothing); disabled
+                    // only for states the progress/edit UI already explains.
+                    Button {
+                        if blockedByRecording() { return }
+                        startHeavyAction { showingRetranscribeOptions = true }
+                    } label: {
+                        Label("Re-transcribe & summarize",
+                              systemImage: "arrow.trianglehead.2.clockwise.rotate.90")
+                    }
+                    .disabled(jobRunning || isEditingSummary)
+                    // Run/redo diarization alone: labels a session that never
+                    // got them, or re-clusters one that split badly — without
+                    // paying for a re-transcribe.
+                    Button {
+                        if blockedByRecording() { return }
+                        startHeavyAction { showingIdentifySpeakers = true }
+                    } label: {
+                        Label("Identify speakers", systemImage: "person.2.wave.2")
+                    }
+                    .disabled(jobRunning || isEditingSummary)
                 }
             }
-            .disabled(jobRunning || isEditingSummary)
-            Picker("Summary length", selection: lengthBinding) {
-                ForEach(SummaryLength.allCases) { length in
-                    Label(length.displayName, systemImage: length.symbolName)
-                        .tag(length)
+            Section {
+                // Inline style/length pickers: choosing one regenerates in
+                // that style in a single gesture (SwiftUI renders a Picker
+                // in a menu as a checkmarked submenu). Replaces the old
+                // "Summary options" sheet round-trip. Selecting the current
+                // value is a no-op — the "Re-summarize" button above is the
+                // same-settings redo.
+                Picker("Summary style", selection: Binding(
+                    get: { selectedStyle },
+                    set: { regenerateSummary(style: $0, length: selectedLength) })
+                ) {
+                    ForEach(SummaryStyle.allCases) { style in
+                        Label(style.displayName, systemImage: style.symbolName).tag(style)
+                    }
+                }
+                .disabled(jobRunning || isEditingSummary)
+                Picker("Summary length", selection: Binding(
+                    get: { selectedLength },
+                    set: { regenerateSummary(style: selectedStyle, length: $0) })
+                ) {
+                    ForEach(SummaryLength.allCases) { length in
+                        Label(length.displayName, systemImage: length.symbolName).tag(length)
+                    }
+                }
+                .disabled(jobRunning || isEditingSummary)
+                if session != nil {
+                    Button {
+                        if blockedByRecording() { return }
+                        showingLanguages = true
+                    } label: {
+                        Label("Languages", systemImage: "globe")
+                    }
                 }
             }
-            .disabled(jobRunning || isEditingSummary)
-            Button {
-                requestSuggestHotwords()
-            } label: {
-                Label("Suggest hotwords", systemImage: "character.magnify")
-            }
-            .disabled(suggesting)
-            Button {
-                titleDraft = session?.title ?? ""
-                renamingTitle = true
-            } label: {
-                Label("Rename session", systemImage: "pencil")
-            }
-            Menu {
-                #if os(iOS)
-                Button("Take photo", systemImage: "camera") {
-                    showingCamera = true
+            Section {
+                Button {
+                    titleDraft = session?.title ?? ""
+                    renamingTitle = true
+                } label: {
+                    Label("Rename session", systemImage: "pencil")
                 }
-                #endif
-                Button("Photo library", systemImage: "photo.on.rectangle") {
-                    showingPhotoLibrary = true
+                Menu {
+                    #if os(iOS)
+                    Button("Take photo", systemImage: "camera") {
+                        showingCamera = true
+                    }
+                    #endif
+                    Button("Photo library", systemImage: "photo.on.rectangle") {
+                        showingPhotoLibrary = true
+                    }
+                } label: {
+                    Label("Add photo", systemImage: "photo.badge.plus")
                 }
-            } label: {
-                Label("Add photo", systemImage: "photo.badge.plus")
+            }
+            Section {
+                Button {
+                    startHeavyAction { requestSuggestHotwords() }
+                } label: {
+                    Label("Suggest hotwords", systemImage: "character.magnify")
+                }
+                .disabled(suggesting || jobRunning)
             }
         } label: {
             wandLabel
@@ -723,22 +862,37 @@ struct SessionDetailView: View {
                         .foregroundStyle(.tint)
                 }
             }
-            ForEach(block.3) { entry in
+            // One row per PARAGRAPH (consecutive entries flowed together);
+            // tap seeks to the paragraph's first entry.
+            ForEach(TranscriptParagraphs.group(block.3), id: \.first?.id) { paragraph in
+                let translations = paragraph.compactMap(\.translation)
+                let raws = paragraph.map { $0.rawSourceText ?? $0.sourceText }
                 VStack(alignment: .leading, spacing: 2) {
-                    Text(entry.sourceText)
+                    Text(TranscriptParagraphs.joined(paragraph.map(\.sourceText)))
                         .font(.caption)
                         .foregroundStyle(.secondary)
-                    if let translation = entry.translation {
-                        Text(translation)
+                    // Diagnostic: the pre-cleanup ASR text, shown only when
+                    // it differs from the displayed text. Words present here
+                    // but missing above = the LFM2.5 cleanup dropped them.
+                    if showOriginalRecognition, raws != paragraph.map(\.sourceText) {
+                        Text(TranscriptParagraphs.joined(raws))
+                            .font(.caption2.monospaced())
+                            .foregroundStyle(.orange)
+                            .textSelection(.enabled)
+                    }
+                    if !translations.isEmpty {
+                        Text(TranscriptParagraphs.joined(translations))
                     }
                 }
-                .id(entry.id)
+                .id(paragraph.first?.id)
                 .background(
-                    entry.id == currentPlayingEntryID
+                    paragraph.contains { $0.id == currentPlayingEntryID }
                         ? Color.accentColor.opacity(0.12) : Color.clear,
                     in: RoundedRectangle(cornerRadius: 6))
                 .contentShape(Rectangle())
-                .onTapGesture { seekPlayback(to: entry) }
+                .onTapGesture {
+                    if let first = paragraph.first { seekPlayback(to: first) }
+                }
             }
         }
         .padding(.vertical, 2)
@@ -801,6 +955,34 @@ struct SessionDetailView: View {
         }
     }
 
+    /// True (and shows the reason) when a live recording blocks post-hoc
+    /// work: these actions share the LLM + GPU with live capture and the
+    /// job center silently rejects them mid-recording, so the tap must
+    /// explain itself instead of no-op'ing. Actions call this first.
+    private func blockedByRecording() -> Bool {
+        guard pipeline.isRunning else { return false }
+        showNotice(String(localized: "Wait until the current recording finishes."))
+        return true
+    }
+
+    /// Sessions OTHER than this one with a running/queued job.
+    private var otherBusySessionIDs: [UUID] {
+        pipeline.jobs.activities.keys.filter { $0 != sessionID }
+    }
+
+    /// Gate a heavy (ASR/LLM) action: run it now if nothing else is
+    /// processing, else confirm — the device can't run two ASR/summary
+    /// passes at once without thrashing, so offer to stop the other task
+    /// rather than silently queueing a second heavy job behind it.
+    private func startHeavyAction(_ action: @escaping () -> Void) {
+        if otherBusySessionIDs.isEmpty {
+            action()
+        } else {
+            pendingHeavyAction = action
+            confirmStopOtherJob = true
+        }
+    }
+
     /// Every photo for the session, oldest first — all shown together in the
     /// Photos section (anchoring is kept only to ground descriptions).
     private func allAttachments(
@@ -859,6 +1041,9 @@ struct SessionDetailView: View {
     private func requestSummarize(
         style: SummaryStyle, length: SummaryLength, suggestVocabulary: Bool = false
     ) {
+        // Backstop for the summarize triggers (a recording can begin after
+        // a confirm dialog opened); the job center would reject it silently.
+        guard !blockedByRecording() else { return }
         guard pipeline.llmEnabled else {
             showNotice(String(
                 localized: "AI features are off — turn them on in Settings to summarize."))
@@ -896,22 +1081,27 @@ struct SessionDetailView: View {
             suggestVocabulary: suggestVocabulary)
     }
 
-    private func requestRetranscribe() {
+    private func requestRetranscribe(
+        sensitivity: MicSensitivity, backend: OfflineTranscriber.Backend?
+    ) {
         guard !pipeline.isRunning else { return }
-        guard pipeline.llmEnabled else {
-            showNotice(String(
-                localized: "AI features are off — turn them on in Settings to summarize."))
-            return
-        }
-        guard pipeline.llmDownloaded else {
-            pendingDownload = .retranscribe
+        // ASR + fixup need no LLM; only the re-summary does. With AI on but
+        // the model absent, prompt to download it (for the summary). With
+        // AI off, re-transcribe runs ASR-only and skips the summary.
+        if pipeline.llmEnabled, !pipeline.llmDownloaded {
+            pendingDownload = .retranscribe(sensitivity, backend: backend)
             return
         }
         pipeline.jobs.retranscribeAndSummarize(
-            sessionID: sessionID, style: selectedStyle, length: selectedLength)
+            sessionID: sessionID, style: selectedStyle, length: selectedLength,
+            sensitivity: sensitivity, backend: backend)
     }
 
     private func requestSuggestHotwords() {
+        // Critical: this loads the summary model straight onto pipeline.llm
+        // (no heavyGate), which mid-recording swaps the live-refine model
+        // out from under live capture and fights it for the GPU. Guard it.
+        guard !blockedByRecording() else { return }
         guard pipeline.llmEnabled else {
             showNotice(String(
                 localized: "AI features are off — turn them on in Settings for suggestions."))
@@ -934,48 +1124,18 @@ struct SessionDetailView: View {
             pipeline.jobs.postProcessAndSummarizeNewSession(
                 sessionID: sessionID, style: style, length: length,
                 allowDownload: true, suggestVocabulary: suggestVocabulary)
-        case .retranscribe:
+        case .retranscribe(let sensitivity, let backend):
             pipeline.jobs.retranscribeAndSummarize(
                 sessionID: sessionID, style: selectedStyle, length: selectedLength,
-                allowDownload: true)
+                sensitivity: sensitivity, backend: backend, allowDownload: true)
         case .suggestHotwords:
             suggestHotwords(allowDownload: true)
         }
     }
 
-    /// Picking a style persists it (and regenerates when a summary exists)
-    /// unless an edited summary needs confirming first — then the choice
-    /// parks in `pendingStyle` so Cancel reverts the picker untouched.
-    private var styleBinding: Binding<SummaryStyle> {
-        Binding(
-            get: { selectedStyle },
-            set: { style in
-                guard style != selectedStyle else { return }
-                if session?.summary != nil, session?.summaryEdited == true {
-                    pendingStyle = style
-                    pendingLength = selectedLength
-                    confirmRegenerate = true
-                } else {
-                    applySummaryPreferences(style: style, length: selectedLength)
-                }
-            })
-    }
-
-    private var lengthBinding: Binding<SummaryLength> {
-        Binding(
-            get: { selectedLength },
-            set: { length in
-                guard length != selectedLength else { return }
-                if session?.summary != nil, session?.summaryEdited == true {
-                    pendingStyle = selectedStyle
-                    pendingLength = length
-                    confirmRegenerate = true
-                } else {
-                    applySummaryPreferences(style: selectedStyle, length: length)
-                }
-            })
-    }
-
+    /// Persists a style/length choice (session + app default) and
+    /// regenerates when a summary exists. The edited-summary confirm
+    /// happens upstream in `regenerateSummary` before this is called.
     private func applySummaryPreferences(style: SummaryStyle, length: SummaryLength) {
         defaultStyleRaw = style.rawValue
         defaultLengthRaw = length.rawValue
@@ -987,6 +1147,28 @@ struct SessionDetailView: View {
         // notes — cheap enough to just do, no extra "apply" step. Length
         // changes reuse the same notes and only alter reduce caps/tokens.
         if updated.summary != nil { requestSummarize(style: style, length: length) }
+    }
+
+    /// Persist a new style/length and regenerate — guarding a hand-edited
+    /// summary behind the same "replace?" confirm the wand's Re-summarize
+    /// uses. (`applySummaryPreferences` only regenerates when a summary
+    /// already exists; picking a style before the first summary just sets
+    /// the preference, matching the old sheet.)
+    private func regenerateSummary(style: SummaryStyle, length: SummaryLength) {
+        if blockedByRecording() { return }
+        startHeavyAction {
+            if session?.summaryEdited == true {
+                pendingRegenerate = PendingRegenerate(style: style, length: length)
+                confirmRegenerate = true
+            } else {
+                applySummaryPreferences(style: style, length: length)
+            }
+        }
+    }
+
+    private struct PendingRegenerate {
+        let style: SummaryStyle
+        let length: SummaryLength
     }
 
     private func startRename(_ slot: Int) {
@@ -1167,5 +1349,360 @@ struct SummaryTextView: View {
         }
         .padding(.vertical, 2)
         .textSelection(.enabled)
+    }
+}
+
+/// Per-record language controls in a labeled form. Selection is STAGED:
+/// browsing the pickers changes nothing — the record persists and the
+/// re-translate job runs only when the user taps Apply. Closing the
+/// sheet without applying discards the staged choices.
+struct SessionLanguagesSheet: View {
+    let pipeline: CaptionPipeline
+    let sessionID: UUID
+    @Environment(\.dismiss) private var dismiss
+
+    @State private var stagedSpoken: String
+    @State private var stagedTranslate: String
+    @State private var stagedSummary: String
+
+    init(pipeline: CaptionPipeline, sessionID: UUID) {
+        self.pipeline = pipeline
+        self.sessionID = sessionID
+        let record = pipeline.archive.sessions.first { $0.id == sessionID }
+        _stagedSpoken = State(initialValue: record?.spokenLanguageRaw ?? "")
+        _stagedTranslate = State(initialValue: Self.currentTranslateRaw(record))
+        _stagedSummary = State(initialValue: record?.summaryLanguageRaw ?? "")
+    }
+
+    private var session: SessionRecord? {
+        pipeline.archive.sessions.first { $0.id == sessionID }
+    }
+
+    private var locked: Bool {
+        pipeline.jobs.isBusy(sessionID) || pipeline.isRunning
+    }
+
+    private var spokenChanged: Bool {
+        // Compare against the EXPLICIT override ("" = Auto/no override),
+        // NOT an inherited display value: for an Auto session the picker
+        // shows "Auto", so picking the first entry's own language still
+        // registers as a change and becomes an explicit override — the
+        // fix for forcing a whole misdetected session to one language.
+        stagedSpoken != (session?.spokenLanguageRaw ?? "")
+    }
+    private var translateChanged: Bool {
+        stagedTranslate != Self.currentTranslateRaw(session)
+    }
+    private var summaryChanged: Bool {
+        stagedSummary != (session?.summaryLanguageRaw ?? "")
+    }
+    private var hasChanges: Bool {
+        spokenChanged || translateChanged || summaryChanged
+    }
+
+    var body: some View {
+        SelectorSheet(
+            title: "Languages",
+            locked: locked,
+            lockedNote: pipeline.isRunning
+                ? "Language changes pause until the current recording finishes."
+                : "Language changes pause while this session is processing.",
+            primaryActionTitle: "Apply",
+            primaryActionDisabled: !hasChanges || locked,
+            primaryAction: { applyStaged() }
+        ) {
+            Section {
+                Picker("Spoken language", selection: $stagedSpoken) {
+                    Text("Auto").tag("")
+                    ForEach(AppLanguage.allCases) { language in
+                        Text(language.displayName).tag(language.rawValue)
+                    }
+                }
+            } footer: {
+                Text("What the recording is in. Auto detects each line on its own; picking a language forces the whole recording to it — fixing a wrong or misdetected language. Re-transcription, translation, and transcript cleanup all follow it.")
+            }
+            Section {
+                Picker("Translate to", selection: $stagedTranslate) {
+                    Text("Off").tag("")
+                    ForEach(AppLanguage.allCases) { language in
+                        Text(language.displayName).tag(language.rawValue)
+                    }
+                }
+            } footer: {
+                VStack(alignment: .leading, spacing: 6) {
+                    Text("Shows a translation under each transcript line.")
+                    if spokenChanged || translateChanged {
+                        Text("Applying re-translates the transcript with the new languages.")
+                    }
+                }
+            }
+            Section {
+                Picker("Summary language", selection: $stagedSummary) {
+                    Text("Auto").tag("")
+                    ForEach(AppLanguage.allCases) { language in
+                        Text(language.displayName).tag(language.rawValue)
+                    }
+                }
+            } footer: {
+                Text("The language summaries are written in. Auto follows your device language. Applies the next time you summarize.")
+            }
+        }
+    }
+
+    /// The target the record was made with; transcribe-only shows as Off.
+    private static func currentTranslateRaw(_ record: SessionRecord?) -> String {
+        if let explicit = record?.translateToRaw { return explicit }
+        guard let base = record?.entries.first?.direction,
+              base.source != base.target else { return "" }
+        return base.target.rawValue
+    }
+
+    private func applyStaged() {
+        guard var updated = session else { return }
+        let translationAffected = spokenChanged || translateChanged
+        // "" (Auto) clears the override back to per-line detection.
+        if spokenChanged {
+            updated.spokenLanguageRaw = stagedSpoken.isEmpty ? nil : stagedSpoken
+        }
+        if translateChanged { updated.translateToRaw = stagedTranslate }
+        if summaryChanged {
+            updated.summaryLanguageRaw = stagedSummary.isEmpty ? nil : stagedSummary
+        }
+        pipeline.archive.update(updated)
+        if translationAffected {
+            pipeline.jobs.retranslate(sessionID: sessionID)
+        }
+        // The retranslate progress shows on the detail view — hand back.
+        dismiss()
+    }
+}
+
+/// Pre-flight for Re-transcribe & summarize — every option is tunable here
+/// so the user never has to leave for Settings or the Languages sheet:
+/// the engine (when more than one is installed for the session's
+/// languages), speaker handling (when the session is unlabeled),
+/// translation target, and mic pickup, with the edited-summary warning
+/// inline. Choices that are session state (translation, speakers) persist
+/// on Start; the engine override rides the job directly.
+struct RetranscribeOptionsSheet: View {
+    @Bindable var pipeline: CaptionPipeline
+    let sessionID: UUID
+    /// Host's requestRetranscribe (handles the AI gates + download consent).
+    let start: (MicSensitivity, OfflineTranscriber.Backend?) -> Void
+    @Environment(\.dismiss) private var dismiss
+
+    @State private var sensitivityRaw: String
+    /// "" until seeded to the auto-picked engine; then a Backend rawValue.
+    @State private var backendRaw: String
+    /// "" = translation off, else an AppLanguage rawValue.
+    @State private var translateToRaw: String
+    /// -1 = Auto; only meaningful when `canChooseSpeakers`.
+    @State private var speakerCount: Int
+
+    init(
+        pipeline: CaptionPipeline, sessionID: UUID,
+        start: @escaping (MicSensitivity, OfflineTranscriber.Backend?) -> Void
+    ) {
+        self.pipeline = pipeline
+        self.sessionID = sessionID
+        self.start = start
+        let record = pipeline.archive.sessions.first { $0.id == sessionID }
+        // Recordings don't store their preset; the current live preset is
+        // the best default (it's what capture just used).
+        _sensitivityRaw = State(initialValue: MicSensitivity.current.rawValue)
+        _backendRaw = State(initialValue: Self.autoBackend(record)?.rawValue ?? "")
+        _translateToRaw = State(initialValue: Self.currentTranslateRaw(record))
+        _speakerCount = State(initialValue: record?.recordingSpeakerCount ?? -1)
+    }
+
+    private var sensitivity: MicSensitivity {
+        MicSensitivity(rawValue: sensitivityRaw) ?? .current
+    }
+
+    private var session: SessionRecord? {
+        pipeline.archive.sessions.first { $0.id == sessionID }
+    }
+
+    /// Installed engines that fit the session's languages, best-first —
+    /// the same priority `currentBackend` auto-picks from.
+    private var availableBackends: [OfflineTranscriber.Backend] {
+        let langs = session?.accuracyPassLanguages ?? []
+        var list: [OfflineTranscriber.Backend] = []
+        if DolphinModelStore.isInstalled, OfflineTranscriber.dolphinSupports(langs) {
+            list.append(.dolphin)
+        }
+        if SenseVoiceModelStore.isInstalled { list.append(.senseVoice) }
+        list.append(.apple)
+        return list
+    }
+
+    private static func autoBackend(_ record: SessionRecord?) -> OfflineTranscriber.Backend? {
+        OfflineTranscriber.currentBackend(
+            sourceLanguages: record?.accuracyPassLanguages ?? [])
+    }
+
+    private var chosenBackend: OfflineTranscriber.Backend {
+        availableBackends.first { $0.rawValue == backendRaw }
+            ?? availableBackends.first ?? .apple
+    }
+
+    /// Speaker count only affects an unlabeled session — a labeled one
+    /// inherits its slots by overlap to protect renames (use "Identify
+    /// speakers" to deliberately re-cluster).
+    private var canChooseSpeakers: Bool {
+        session?.entries.contains { $0.speaker != nil } == false
+            && VoiceprintService.isOfflineDiarizerDownloaded
+    }
+
+    var body: some View {
+        SelectorSheet(
+            title: "Re-transcribe & summarize",
+            // A recording that STARTS while this is open locks it: the job
+            // would be silently rejected otherwise (the menu button that
+            // opened it can't, since the recording began after).
+            locked: pipeline.isRunning,
+            lockedNote: "Re-transcribing pauses until the current recording finishes.",
+            primaryActionTitle: "Start",
+            primaryActionDisabled: pipeline.isRunning,
+            primaryAction: {
+                persistChoices()
+                dismiss()
+                // Force the picked engine only when there was a choice.
+                start(sensitivity, availableBackends.count > 1 ? chosenBackend : nil)
+            }
+        ) {
+            if let session {
+                Section {
+                    if availableBackends.count > 1 {
+                        Picker("Engine", selection: $backendRaw) {
+                            ForEach(availableBackends, id: \.rawValue) { backend in
+                                Text(backend.displayName).tag(backend.rawValue)
+                            }
+                        }
+                    } else {
+                        LabeledContent("Engine", value: chosenBackend.displayName)
+                    }
+                    if canChooseSpeakers {
+                        Picker("Speakers", selection: $speakerCount) {
+                            Text("Auto").tag(-1)
+                            ForEach(2...6, id: \.self) { Text("\($0) speakers").tag($0) }
+                        }
+                    } else {
+                        LabeledContent("Speakers", value: speakersText(session))
+                    }
+                    Picker("Translate to", selection: $translateToRaw) {
+                        Text("Off").tag("")
+                        ForEach(AppLanguage.allCases) { language in
+                            Text(language.displayName).tag(language.rawValue)
+                        }
+                    }
+                    Picker("Mic pickup", selection: $sensitivityRaw) {
+                        ForEach(MicSensitivity.allCases) { preset in
+                            Label(preset.displayName, systemImage: preset.symbolName)
+                                .tag(preset.rawValue)
+                        }
+                    }
+                } footer: {
+                    VStack(alignment: .leading, spacing: 6) {
+                        if pipeline.llmEnabled {
+                            Text("Replaces the transcript with a fresh transcription of the recording, then summarizes again.")
+                        } else {
+                            Text("Replaces the transcript with a fresh transcription of the recording. AI features are off, so it skips cleanup and doesn't re-summarize.")
+                        }
+                        Text("Mic pickup should match how the recording was made — pick a wider setting if distant speakers were missed. Runs much faster than the recording length. Everything stays on this iPhone.")
+                    }
+                }
+                if session.summaryEdited == true {
+                    Section {
+                        Label(
+                            "You edited this summary. Summarizing again will replace your changes.",
+                            systemImage: "exclamationmark.triangle")
+                            .font(.footnote)
+                            .foregroundStyle(.orange)
+                    }
+                }
+            }
+        }
+    }
+
+    /// Persist the choices that are session state, so the job reads them
+    /// when it runs. The engine override isn't stored — it rides `start`.
+    private func persistChoices() {
+        guard var updated = session else { return }
+        var changed = false
+        if translateToRaw != Self.currentTranslateRaw(session) {
+            updated.translateToRaw = translateToRaw
+            changed = true
+        }
+        if canChooseSpeakers, (updated.recordingSpeakerCount ?? -1) != speakerCount {
+            updated.recordingSpeakerCount = speakerCount
+            changed = true
+        }
+        if changed { pipeline.archive.update(updated) }
+    }
+
+    /// The target the record currently translates into; "" = off. Mirrors
+    /// SessionLanguagesSheet so the two stay consistent.
+    private static func currentTranslateRaw(_ record: SessionRecord?) -> String {
+        if let explicit = record?.translateToRaw { return explicit }
+        guard let base = record?.entries.first?.direction,
+              base.source != base.target else { return "" }
+        return base.target.rawValue
+    }
+
+    private func speakersText(_ session: SessionRecord) -> String {
+        if session.entries.contains(where: { $0.speaker != nil }) {
+            return String(localized: "Keeps current labels")
+        }
+        return String(localized: "Not separated")
+    }
+}
+
+/// Pre-flight for Identify speakers: pick how many voices to look for
+/// before the pass runs. Auto discovers the count but can over-split on
+/// hard audio; an exact count is the reliable path when the user knows
+/// how many people were in the room.
+struct IdentifySpeakersSheet: View {
+    let pipeline: CaptionPipeline
+    let sessionID: UUID
+    @Environment(\.dismiss) private var dismiss
+
+    @State private var speakerCount: Int
+
+    init(pipeline: CaptionPipeline, sessionID: UUID) {
+        self.pipeline = pipeline
+        self.sessionID = sessionID
+        let stored = pipeline.archive.sessions
+            .first { $0.id == sessionID }?.recordingSpeakerCount
+        _speakerCount = State(initialValue: stored.flatMap {
+            VoiceprintService.separationEnabled(forPickerValue: $0) ? $0 : nil
+        } ?? -1)
+    }
+
+    var body: some View {
+        SelectorSheet(
+            title: "Identify speakers",
+            locked: pipeline.isRunning,
+            lockedNote: "Speaker identification pauses until the current recording finishes.",
+            primaryActionTitle: "Start",
+            primaryActionDisabled: pipeline.isRunning,
+            primaryAction: {
+                pipeline.jobs.retryDiarization(
+                    sessionID: sessionID, speakerCount: speakerCount)
+                dismiss()
+            }
+        ) {
+            Section {
+                Picker("Speakers", selection: $speakerCount) {
+                    Text("Auto").tag(-1)
+                    ForEach(2...6, id: \.self) { Text("\($0) speakers").tag($0) }
+                }
+            } footer: {
+                VStack(alignment: .leading, spacing: 6) {
+                    Text("Auto discovers the count from the audio. If it finds too many, set the exact number of people.")
+                    Text("Re-identifying reassigns speaker slots, so custom speaker names may move.")
+                }
+            }
+        }
     }
 }

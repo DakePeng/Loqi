@@ -166,4 +166,17 @@ enum SummaryStyle: String, Codable, CaseIterable, Identifiable, Sendable {
                 includeTermsInNotes: false)
         }
     }
+
+    /// Style the summary UI should show for a session: the stored
+    /// per-session value wins; a legacy summary without one was written
+    /// meeting-shaped; otherwise the app-wide default.
+    static func effective(
+        storedRaw: String?, hasSummary: Bool, defaultRaw: String
+    ) -> SummaryStyle {
+        if let storedRaw, let style = SummaryStyle(rawValue: storedRaw) {
+            return style
+        }
+        if hasSummary { return .meeting }
+        return SummaryStyle(rawValue: defaultRaw) ?? .meeting
+    }
 }

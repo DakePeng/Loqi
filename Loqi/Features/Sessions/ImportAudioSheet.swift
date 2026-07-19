@@ -16,15 +16,18 @@ struct ImportAudioSheet: View {
     @State private var sourceRaw: String
     /// Shared with the Record screen: empty = transcribe only (default).
     @AppStorage("captions.translation") private var translationRaw = ""
-    // -1 = Auto (diarize). Default on so imports get speaker labels. Its own
-    // key (not the live "captions.speakerCount") so import and Record keep
-    // independent defaults and don't inherit each other's last choice.
-    @AppStorage("import.speakerCount") private var speakerCount = -1
+    // -1 = Auto (diarize). Default on so imports get speaker labels.
+    // Recordings have no picker anymore — their post-process always runs
+    // Auto when the model is downloaded — but imports keep this control
+    // because a file's speaker count is often known up front. Per-import
+    // @State, deliberately NOT remembered: an explicit count forces
+    // EXACTLY that many clusters, so a stale "3 speakers" from last week's
+    // meeting would split a solo lecture into three phantom speakers.
+    // (The old "import.speakerCount" defaults key is intentionally unread.)
+    @State private var speakerCount = -1
     @AppStorage("import.sensitivity") private var sensitivityRaw
         = MicSensitivity.balanced.rawValue
-    /// Per-import engine choice. Defaults to the fast accurate option;
-    /// Qwen3-ASR decodes near realtime, so it's an explicit pick per file,
-    /// never an auto-upgrade (re-transcribe is the automatic Qwen3 pass).
+    /// Per-import engine choice. Defaults to the fast accurate option.
     @State private var importEngine = SenseVoiceModelStore.isInstalled
         ? "sensevoice" : "apple"
     /// Shown when the user asks for speaker labels but the offline
@@ -61,11 +64,17 @@ struct ImportAudioSheet: View {
 
     /// Diarization is requested but the model isn't on disk yet.
     private var needsSpeakerModelConsent: Bool {
-        VoiceprintService.clusterCap(forPickerValue: speakerCount) != nil
+        VoiceprintService.separationEnabled(forPickerValue: speakerCount)
             && !VoiceprintService.isOfflineDiarizerDownloaded
     }
 
     private func startImport(speakerCount: Int) {
+        // No sherpa runtime in the macOS target: diarizeFile throws
+        // unsupportedPlatform there, so force separation off (the picker
+        // is also hidden below).
+        #if os(macOS)
+        let speakerCount = 0
+        #endif
         pipeline.jobs.startImport(
             url: url,
             direction: LanguagePair(
@@ -89,6 +98,14 @@ struct ImportAudioSheet: View {
                     .onChange(of: sourceRaw) {
                         UserDefaults.standard.set(sourceRaw, forKey: "captions.source")
                         if translationRaw == source.rawValue { translationRaw = "" }
+                        // Dolphin has no English: switching the language
+                        // hides its row, and a stale pick would silently
+                        // fall through to Apple at import time.
+                        if importEngine == "dolphin",
+                           !OfflineTranscriber.dolphinSupports(source) {
+                            importEngine = SenseVoiceModelStore.isInstalled
+                                ? "sensevoice" : "apple"
+                        }
                     }
                     Picker("Translation", selection: $translationRaw) {
                         Text("Off").tag("")
@@ -96,11 +113,13 @@ struct ImportAudioSheet: View {
                             Text($0.displayName).tag($0.rawValue)
                         }
                     }
+                    #if os(iOS)
                     Picker("Speakers", selection: $speakerCount) {
                         Text("One voice").tag(0)
                         Text("Auto").tag(-1)
                         ForEach(2...6, id: \.self) { Text("\($0) speakers").tag($0) }
                     }
+                    #endif
                     if importEngine != "apple" {
                         Picker("Speech pickup", selection: $sensitivityRaw) {
                             ForEach(MicSensitivity.allCases) { preset in
@@ -113,16 +132,13 @@ struct ImportAudioSheet: View {
                         if SenseVoiceModelStore.isInstalled {
                             Text("SenseVoice (accurate)").tag("sensevoice")
                         }
-                        if Qwen3ASRModelStore.isInstalled {
-                            Text("Qwen3-ASR (highest accuracy)").tag("qwen3")
+                        if DolphinModelStore.isInstalled,
+                           OfflineTranscriber.dolphinSupports(source) {
+                            Text("Dolphin (best for 中/日/한)").tag("dolphin")
                         }
                     }
                 } footer: {
-                    if importEngine == "qwen3" {
-                        Text("Highest accuracy — typically takes about as long as the recording itself. Everything runs on this iPhone.")
-                    } else {
-                        Text("Everything runs on this iPhone. Speaker separation downloads its model on first use.")
-                    }
+                    Text("Everything runs on this iPhone. Speaker separation downloads its model on first use.")
                 }
             }
             .navigationTitle("Import Audio")

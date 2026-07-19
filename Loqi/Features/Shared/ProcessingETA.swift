@@ -3,9 +3,9 @@ import Foundation
 /// Remaining-time estimate for a long job reporting completion fractions.
 /// Phase changes must `reset()` — each phase has its own 0…1 scale.
 ///
-/// Qwen3-ASR progress is bursty: silence skips advance several percent in a
-/// blink, then a minute-long decode barely moves. Two guards keep the
-/// readout honest there (a 25-minute decode once opened with "~30 sec
+/// Offline decode progress is bursty: silence skips advance several percent
+/// in a blink, then a long decode barely moves. Two guards keep the
+/// readout honest there (a long decode once opened with "~30 sec
 /// left"): nothing shows until the phase has both run and progressed enough
 /// to mean something, and the projected rate is the *lower* of a
 /// time-weighted recent rate and the whole-phase average — bursts can't

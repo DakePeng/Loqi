@@ -1,48 +1,13 @@
 import Foundation
 
-/// Builds the refinement prompt. The LLM *edits* the tier-1 draft rather
-/// than translating from scratch: outputs are shorter and more stable, and
-/// "draft is already good" is a cheap no-op.
+/// Builds the live LLM prompts. During recording the LLM *cleans the
+/// source sentence* (Apple's Translation framework does all translating);
+/// post-session it powers notes, summaries, and the hotword restore.
 ///
 /// Pure logic — unit-testable without MLX or a device.
 struct PromptBuilder: Sendable {
-    /// Rolling history turns included for context (register, honorifics,
-    /// pronouns, topic continuity).
-    var historyLimit = 6
-    /// Rough prompt budget; history is trimmed oldest-first to stay under.
+    /// Rough prompt budget; context is trimmed oldest-first to stay under.
     var maxPromptCharacters = 2200
-
-    struct HistoryTurn: Sendable {
-        var sourceLanguage: AppLanguage
-        var sourceText: String
-        var translation: String
-    }
-
-    func systemPrompt(direction: LanguagePair) -> String {
-        """
-        You are an expert \(direction.source.promptName)-to-\(direction.target.promptName) interpreter. \
-        Improve the draft translation of the given sentence. Preserve the meaning; \
-        fix register, honorifics, pronouns, and terminology using the conversation \
-        context. Output ONLY the improved \(direction.target.promptName) translation, \
-        nothing else. If the draft is already good, output it unchanged.
-        """
-    }
-
-    /// Parse the refinement output into the improved translation. Tolerates
-    /// a leading "T:" tag (fullwidth colon too) from older prompt shapes;
-    /// untagged output IS the translation. (The "S:" cleaned-source line is
-    /// gone with the transcript-polish feature — the transcript is the
-    /// record of what was said, not LLM material.)
-    func parseRefinement(_ raw: String) -> String? {
-        for line in cleanResponse(raw).split(separator: "\n") {
-            let trimmed = line.trimmingCharacters(in: .whitespaces)
-            if let value = tagged(trimmed, "T") {
-                return value
-            }
-        }
-        let whole = cleanResponse(raw)
-        return whole.isEmpty ? nil : whole
-    }
 
     /// Match a tagged line (`H: value`), tolerant of the decorations small
     /// models wrap them in: leading bullets/numbering/markdown headers,
@@ -135,71 +100,218 @@ struct PromptBuilder: Sendable {
     }
 
     /// Parse the restored sentence ("S:" tagged, fullwidth colon tolerated;
-    /// untagged output is taken whole).
+    /// untagged single-line output is taken whole). Uses the sentence-safe
+    /// cleaner: transcripts legitimately contain markup ("use the <title>
+    /// tag") and the fidelity gate would accept its deletion, so only KNOWN
+    /// model wrapper tags are stripped here — unlike `cleanResponse`.
     func parseRestoredSentence(_ raw: String) -> String? {
-        for line in cleanResponse(raw).split(separator: "\n") {
+        for line in cleanSentenceResponse(raw).split(separator: "\n") {
             let trimmed = line.trimmingCharacters(in: .whitespaces)
             if let value = tagged(trimmed, "S") {
                 return value
             }
         }
-        let whole = cleanResponse(raw)
-        return whole.isEmpty ? nil : whole
+        // Untagged fallback. Small models sometimes prepend a preamble line
+        // ("以下は…翻訳です：", "Here is the corrected sentence:") that the
+        // fidelity gate accepts on long sentences — drop leading
+        // colon-terminated lines. Output still spanning multiple lines
+        // after that isn't the "exactly one line" the prompts demand, and
+        // guessing risks a false record: reject so the caller keeps the
+        // ASR original.
+        var lines = cleanSentenceResponse(raw).split(separator: "\n")
+            .map { $0.trimmingCharacters(in: .whitespaces) }
+            .filter { !$0.isEmpty }
+        while lines.count > 1, let first = lines.first,
+              first.hasSuffix(":") || first.hasSuffix("：") {
+            lines.removeFirst()
+        }
+        guard lines.count == 1 else { return nil }
+        return lines[0]
     }
 
     /// Fidelity gate for the restore: a sentence that diverges beyond a
     /// term swap is a false record — worse than a misheard true one.
     func isAcceptableHotwordRestore(_ restored: String, original: String) -> Bool {
-        guard !restored.isEmpty, !Self.hasDegenerateRepetition(restored) else { return false }
+        hotwordRestoreRejection(restored, original: original) == nil
+    }
+
+    /// Which check refused `restored` (nil = acceptable), with the failing
+    /// score — so a log full of rejections says WHY: a model that rewrites
+    /// (similarity), truncates (length-ratio), or loops (repetition) each
+    /// need a different fix. The Bool gates wrap this, so accept/reject
+    /// can never drift from the diagnostic.
+    func hotwordRestoreRejection(_ restored: String, original: String) -> String? {
+        if restored.isEmpty { return "empty" }
+        if Self.hasDegenerateRepetition(restored) { return "repetition" }
         let ratio = Double(restored.count) / Double(max(original.count, 1))
-        guard ratio >= 0.5, ratio <= 1.6 else { return false }
-        return HotwordMatcher.similarity(
-            Self.comparisonForm(restored), Self.comparisonForm(original)) >= 0.55
+        if ratio < 0.5 || ratio > 1.6 {
+            return "length-ratio \(String(format: "%.2f", ratio))"
+        }
+        let similarity = HotwordMatcher.similarity(
+            Self.comparisonForm(restored), Self.comparisonForm(original))
+        if similarity < 0.55 {
+            return "similarity \(String(format: "%.2f", similarity))"
+        }
+        return nil
     }
 
     private static func comparisonForm(_ text: String) -> String {
         String(text.lowercased().filter { $0.isLetter || $0.isNumber })
     }
 
-    func userPrompt(
-        source: String,
-        draft: String,
-        direction: LanguagePair,
-        history: [HistoryTurn],
+    // MARK: Live sentence refinement (monolingual)
+
+    /// The ONE context-window knob for sentence cleanup — the live queue,
+    /// the offline polisher, and the prompt trimming all read this.
+    static let refineContextLimit = 3
+    /// Output ≈ input sentence; sized so merged offline sentences (up to
+    /// 200 chars of CJK via UtteranceMerger's paragraph joining) still
+    /// fit — an over-budget generation gets truncated and the fidelity
+    /// gate then silently keeps the raw text, which reads as "cleanup
+    /// never runs".
+    static let refineMaxTokens = 256
+
+    /// Pre-seeded assistant opening for cleanup generations (see
+    /// `LLMService.generate(responsePrefix:)`). The 230M left to choose
+    /// its own opening echoes the instructions or narrates ("Here is the
+    /// corrected sentence: …") — a device pass rejected 66/66 sentences
+    /// that way. Anchored to the parser's "S:" tag, the model can only
+    /// continue with the sentence itself, and any trailing ramble lands
+    /// on later lines the tag parse ignores. Call sites that build a
+    /// generate closure for `refineSentence` must pass this prefix.
+    static let refineResponsePrefix = "S: "
+
+    /// One sentence through the full cleanup contract — prompt, generate,
+    /// parse, fidelity gate — shared by the live RefinementQueue and the
+    /// offline polisher so the two paths can't drift.
+    enum SentenceRefinement: Sendable, Equatable {
+        /// Accepted AND different from the input.
+        case cleaned(String)
+        /// The model says the sentence has no errors.
+        case unchanged
+        /// Parse or fidelity-gate failure; raw output for the caller's
+        /// log, plus which check refused it ("parse", "similarity 0.41" …).
+        case rejected(raw: String, reason: String)
+    }
+
+    func refineSentence(
+        _ sentence: String,
+        language: AppLanguage,
+        context: [String],
+        glossary: [String],
+        generate: @Sendable (_ system: String, _ user: String, _ maxTokens: Int) async throws -> String
+    ) async throws -> SentenceRefinement {
+        let raw = try await generate(
+            sentenceRefineSystemPrompt(language: language),
+            sentenceRefineUserPrompt(
+                sentence: sentence, language: language,
+                context: context, glossary: glossary),
+            Self.refineMaxTokens)
+        guard let cleaned = parseRefinedSentence(raw) else {
+            return .rejected(raw: raw, reason: "parse")
+        }
+        if let reason = sentenceRefinementRejection(cleaned, original: sentence) {
+            return .rejected(raw: raw, reason: reason)
+        }
+        return cleaned == sentence ? .unchanged : .cleaned(cleaned)
+    }
+
+    /// Live transcript cleanup: the LLM fixes recognition errors in the
+    /// source sentence; Apple's Translation framework re-translates the
+    /// result. Monolingual by design — a task even the 230M tier can do,
+    /// unlike translation refinement or structured output. Kept SHORT and
+    /// single-format on purpose: the 230M echoes long instruction lists
+    /// back as its answer (the "Misheard words, homophone errors…"
+    /// rejection flood), and the "S:" line mirrors `refineResponsePrefix`.
+    func sentenceRefineSystemPrompt(language: AppLanguage) -> String {
+        """
+        Fix speech-recognition errors in one \(language.promptName) sentence: \
+        misheard words, homophones, missing or wrong punctuation. Stay in \
+        \(language.promptName) — never translate, never rephrase correct \
+        wording, never explain. If the sentence has no errors, repeat it \
+        exactly. Output exactly one line and nothing else:
+        S: <sentence>
+        """
+    }
+
+    func sentenceRefineUserPrompt(
+        sentence: String,
+        language: AppLanguage,
+        context: [String],
         glossary: [String] = []
     ) -> String {
-        var historyLines = history.suffix(historyLimit).map { turn in
-            "[\(turn.sourceLanguage.promptName)] \(turn.sourceText) → \(turn.translation)"
-        }
-
-        // Glossary outranks history: it never gets trimmed.
+        // Glossary outranks context: it never gets trimmed.
         let glossaryBlock = glossary.isEmpty
             ? ""
-            : "Glossary — the sentence may contain mis-transcriptions of these "
-                + "terms; restore them and use these exact renderings:\n"
+            : "Vocabulary — the sentence may contain mis-transcriptions of these "
+                + "terms; use these exact spellings:\n"
                 + glossary.joined(separator: "\n") + "\n\n"
-
-        let request = """
-        Sentence (\(direction.source.promptName)): \(source)
-        Draft (\(direction.target.promptName)): \(draft)
-        """
-
-        // Trim oldest history until the prompt fits the budget.
+        var contextLines = context.suffix(Self.refineContextLimit).map { "- \($0)" }
+        let request = "Sentence (\(language.promptName)): \(sentence)"
         func assembled() -> String {
-            let context = historyLines.isEmpty
+            let contextBlock = contextLines.isEmpty
                 ? ""
-                : "Conversation so far:\n" + historyLines.joined(separator: "\n") + "\n\n"
-            return glossaryBlock + context + request
+                : "Earlier lines, for context only:\n"
+                    + contextLines.joined(separator: "\n") + "\n\n"
+            return glossaryBlock + contextBlock + request
         }
-        while assembled().count > maxPromptCharacters, !historyLines.isEmpty {
-            historyLines.removeFirst()
+        while assembled().count > maxPromptCharacters, !contextLines.isEmpty {
+            contextLines.removeFirst()
         }
         return assembled()
+    }
+
+    /// Parse the cleaned sentence — same tolerance as the hotword restore
+    /// ("S:" tagged or whole output), plus stripping the user-prompt label
+    /// the model sometimes echoes ("Sentence (English): …"); on long
+    /// inputs the echoed label would otherwise pass the fidelity gate and
+    /// pollute the saved transcript.
+    func parseRefinedSentence(_ raw: String) -> String? {
+        guard let value = parseRestoredSentence(raw) else { return nil }
+        let stripped = Self.strippedPromptLabelEcho(value)
+        return stripped.isEmpty ? nil : stripped
+    }
+
+    static func strippedPromptLabelEcho(_ text: String) -> String {
+        guard let regex = try? NSRegularExpression(
+            pattern: #"^Sentence \([A-Za-z]+\)\s*[:：]\s*"#) else { return text }
+        let range = NSRange(text.startIndex..<text.endIndex, in: text)
+        return regex.stringByReplacingMatches(
+            in: text, range: range, withTemplate: "")
+    }
+
+    /// Fidelity gate: the hotword-restore checks (length ratio, similarity,
+    /// repetition) plus the broken-decode check the old translation gate
+    /// had. A rewrite is a false record — worse than a misheard true one.
+    func isAcceptableSentenceRefinement(_ cleaned: String, original: String) -> Bool {
+        sentenceRefinementRejection(cleaned, original: original) == nil
+    }
+
+    /// Reason variant of the gate above; nil = acceptable.
+    func sentenceRefinementRejection(_ cleaned: String, original: String) -> String? {
+        guard cleaned.unicodeScalars.allSatisfy({ $0 != "\u{FFFD}" }) else {
+            return "broken-decode"
+        }
+        return hotwordRestoreRejection(cleaned, original: original)
     }
 
     /// Defensive cleanup: strip any thinking block the chat template let
     /// through, surrounding quotes, and label prefixes the model might add.
     func cleanResponse(_ raw: String) -> String {
+        cleaned(raw, strippingTags: Self.stripModelTags)
+    }
+
+    /// Sentence-safe variant for source-transcript output: strips only
+    /// KNOWN model wrapper tags, because spoken content can legitimately
+    /// contain markup ("use the <title> tag") that `stripModelTags`'s
+    /// any-tag regex would silently delete.
+    func cleanSentenceResponse(_ raw: String) -> String {
+        cleaned(raw, strippingTags: Self.stripKnownWrapperTags)
+    }
+
+    private func cleaned(
+        _ raw: String, strippingTags: (String) -> String
+    ) -> String {
         var text = raw
         while let start = text.range(
             of: "<think>", options: [.caseInsensitive]
@@ -218,12 +330,23 @@ struct PromptBuilder: Sendable {
         if let junk = text.range(of: "<|") {
             text = String(text[..<junk.lowerBound])
         }
-        text = Self.stripModelTags(text)
+        text = strippingTags(text)
         text = text.trimmingCharacters(in: .whitespacesAndNewlines)
         if text.hasPrefix("\"") && text.hasSuffix("\"") && text.count > 1 {
             text = String(text.dropFirst().dropLast())
         }
         return text.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    /// The wrapper tags small models actually leak around sentence output.
+    private static let knownWrapperTags = #"</?(?:think|thinking|answer|response|summary|output|result)>"#
+
+    static func stripKnownWrapperTags(_ text: String) -> String {
+        guard let regex = try? NSRegularExpression(
+            pattern: knownWrapperTags, options: [.caseInsensitive]) else { return text }
+        let range = NSRange(text.startIndex..<text.endIndex, in: text)
+        return regex.stringByReplacingMatches(
+            in: text, range: range, withTemplate: "")
     }
 
     /// Content fields must read as prose: the model copies its source-id
@@ -238,7 +361,13 @@ struct PromptBuilder: Sendable {
         guard text.contains("m") else { return text }
         // Swift Regex has no lookbehind: capture the preceding non-letter
         // (if any) and re-emit it, so words like "team004" stay intact.
-        let idRun = /(?:^|([^A-Za-z]))m\d{2,4}(?:\s*[-–—~,，、]\s*m?\d{1,4})*\s*[:：]?\s*/
+        // The continuation alternatives cover both range citations
+        // ("m004-005") AND whitespace-separated runs ("m004 m009 m003…"),
+        // which the model sometimes dumps whole into a text field. Without
+        // the `\s+m\d` alternative, the trailing `\s*` consumed each
+        // separator space, so the next id's required leading non-letter
+        // was gone and every OTHER id leaked through, rendering as junk.
+        let idRun = /(?:^|([^A-Za-z]))m\d{2,4}(?:\s*[-–—~,，、]\s*m?\d{1,4}|\s+m\d{2,4})*\s*[:：]?\s*/
         var cleaned = text.replacing(idRun) { match in
             match.output.1.map(String.init) ?? ""
         }
@@ -1235,14 +1364,6 @@ struct PromptBuilder: Sendable {
     /// wildly longer than any plausible translation, full of replacement
     /// characters, or a degenerate repetition loop — in all those cases the
     /// NMT draft must stand.
-    func isAcceptable(_ refined: String, draft: String) -> Bool {
-        guard !refined.isEmpty else { return false }
-        guard refined.unicodeScalars.allSatisfy({ $0 != "\u{FFFD}" }) else { return false }
-        guard !Self.hasDegenerateRepetition(refined) else { return false }
-        let limit = max(draft.count * 3, 120)
-        return refined.count <= limit
-    }
-
     /// Detects "this, this, this…" style generation loops, in both spaced
     /// (Latin) and unspaced (CJK) text.
     static func hasDegenerateRepetition(_ text: String) -> Bool {

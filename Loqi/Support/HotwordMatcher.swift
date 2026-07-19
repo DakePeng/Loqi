@@ -41,6 +41,17 @@ struct HotwordMatcher: Sendable {
         hotwords.contains { score($0, in: text, language: language) >= refineThreshold }
     }
 
+    /// A hotword that plausibly appears MISRECOGNIZED: fuzzy-band score
+    /// (≥ refineThreshold but below exact). Exact mentions score 1.0 and
+    /// need no repair, so this is the "still worth an LLM restore" test
+    /// the summarize-time hygiene pass keys on.
+    func hasUnresolvedNearMiss(_ text: String, language: AppLanguage) -> Bool {
+        hotwords.contains { hotword in
+            let score = score(hotword, in: text, language: language)
+            return score >= refineThreshold && score < 1
+        }
+    }
+
     /// Formatted glossary lines for hotwords plausibly present in `text`.
     func glossaryLines(direction: LanguagePair, sourceText: String) -> [String] {
         hotwords
@@ -63,17 +74,24 @@ struct HotwordMatcher: Sendable {
             .map(\.1)
     }
 
-    /// Monolingual glossary for the notes pipeline: hotwords plausibly
-    /// present in `text`, rendered in its own language. Same scoring and
-    /// budget as `glossaryLines`, without the translation column.
+    /// Monolingual glossary for the notes and cleanup pipelines: hotwords
+    /// plausibly present in `text`, rendered in its own language. Same
+    /// scoring and budget as `glossaryLines`, without the translation
+    /// column. Aliases ride along so the cleanup model knows a spoken
+    /// nickname is already correct and must not be rewritten to the
+    /// canonical form.
     func noteGlossaryLines(language: AppLanguage, text: String) -> [String] {
         hotwords
             .compactMap { hotword -> (Double, String)? in
                 let score = score(hotword, in: text, language: language)
                 guard score >= glossaryThreshold else { return nil }
                 let term = hotword.rendering(for: language)
+                let akaForms = (hotword.aliases ?? [])
+                    .filter { !$0.isEmpty && $0 != term }
+                let aka = akaForms.isEmpty
+                    ? "" : " (aka \(akaForms.joined(separator: ", ")))"
                 let note = hotword.note.isEmpty ? "" : " (\(hotword.note))"
-                return (score, "\(term)\(note)")
+                return (score, "\(term)\(aka)\(note)")
             }
             .sorted { $0.0 > $1.0 }
             .prefix(glossaryLimit)

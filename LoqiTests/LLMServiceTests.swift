@@ -164,31 +164,13 @@ struct PipelineResourceTests {
             .llm: "Warming up the AI model...",
             .thermal: "AI features off (device hot)",
             .memory: "AI features paused (low memory)",
-            .diarizer: "Preparing speaker separation...",
+            .asr: "SenseVoice unavailable...",
         ]
 
         #expect(CaptionPipeline.visibleStatusMessages(from: messages) == [
             "AI features paused (low memory)",
-            "Preparing speaker separation...",
+            "SenseVoice unavailable...",
         ])
-    }
-
-    @Test func memoryWarningKeepsVoiceprintForActiveDiarization() {
-        #expect(!CaptionPipeline.shouldUnloadVoiceprintOnMemoryWarning(
-            isRunning: true, diarizationActive: true))
-        #expect(CaptionPipeline.shouldUnloadVoiceprintOnMemoryWarning(
-            isRunning: true, diarizationActive: false))
-        #expect(CaptionPipeline.shouldUnloadVoiceprintOnMemoryWarning(
-            isRunning: false, diarizationActive: true))
-    }
-
-    @Test func liveDiarizationStopsWhenBackgrounded() {
-        #expect(CaptionPipeline.shouldRunLiveDiarization(
-            diarizationActive: true, isBackgrounded: false))
-        #expect(!CaptionPipeline.shouldRunLiveDiarization(
-            diarizationActive: true, isBackgrounded: true))
-        #expect(!CaptionPipeline.shouldRunLiveDiarization(
-            diarizationActive: false, isBackgrounded: false))
     }
 
     @Test func backgroundSuspendsPostHocWorkThatCanReachMetal() {
@@ -200,7 +182,18 @@ struct PipelineResourceTests {
         #expect(SummaryJobCenter.shouldSuspendForBackground(
             .retranscribing(.transcribing(0))))
         #expect(SummaryJobCenter.shouldSuspendForBackground(
+            .retranscribing(.cleaningUpTranscript(0))))
+        #expect(SummaryJobCenter.shouldSuspendForBackground(
             .importing(.transcribing(0))))
+        // The parked-but-started states must suspend too — a .preparing job
+        // is mid-setup and a speaker download reaches the ANE/Metal; leaving
+        // either running in the background risks the process abort.
+        #expect(SummaryJobCenter.shouldSuspendForBackground(.preparing))
+        #expect(SummaryJobCenter.shouldSuspendForBackground(.downloadingSpeakerModel(0)))
+        // Already-parked states are NOT re-suspended (nothing to cancel).
+        #expect(!SummaryJobCenter.shouldSuspendForBackground(.queuedRetranscribe))
+        #expect(!SummaryJobCenter.shouldSuspendForBackground(.pausedForRecording))
+        #expect(!SummaryJobCenter.shouldSuspendForBackground(.pausedForBackground))
     }
 
     @Test func recordingResumeLeavesLLMJobsPausedWhileBackgrounded() {
@@ -216,6 +209,8 @@ struct PipelineResourceTests {
         #expect(SummaryJobCenter.usesLLM(.downloadingModel(0)))
         #expect(SummaryJobCenter.usesLLM(.retranscribing(.transcribing(0))))
         #expect(!SummaryJobCenter.usesLLM(.importing(.transcribing(0))))
+        // …except the cleanup phase, which actively generates on the 230M.
+        #expect(SummaryJobCenter.usesLLM(.importing(.cleaningUpTranscript(0))))
         #expect(!SummaryJobCenter.usesLLM(.queuedRetranscribe))
         #expect(!SummaryJobCenter.usesLLM(.pausedForBackground))
     }

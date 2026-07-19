@@ -4,65 +4,97 @@ import Testing
 @testable import Loqi
 
 struct ImportEngineTests {
-    /// Re-transcribe always prefers the Qwen3-ASR model when it's
-    /// installed — downloading it IS the opt-in; otherwise the live-engine
-    /// choice applies, falling back to Apple.
-    @Test func qwen3WinsWheneverInstalled() {
+    /// Dolphin is the high-accuracy tier: while installed it takes every
+    /// session whose languages ALL fit (installing IS the opt-in; removing
+    /// it falls back) — but it has NO English, so any English in the
+    /// session keeps the multilingual backends.
+    @Test func dolphinTakesItsLanguagesWhileInstalled() {
         #expect(OfflineTranscriber.effectiveBackend(
-            engineChoice: "apple", senseVoiceInstalled: false, qwen3Installed: true)
-            == .qwen3ASR)
+            sourceLanguages: [.japanese],
+            senseVoiceInstalled: false, dolphinInstalled: true)
+            == .dolphin)
         #expect(OfflineTranscriber.effectiveBackend(
-            engineChoice: "sensevoice", senseVoiceInstalled: true, qwen3Installed: true)
-            == .qwen3ASR)
-    }
-
-    @Test func senseVoiceUsedOnlyWhenChosenAndInstalled() {
-        #expect(OfflineTranscriber.effectiveBackend(
-            engineChoice: "sensevoice", senseVoiceInstalled: true, qwen3Installed: false)
+            sourceLanguages: [.english],
+            senseVoiceInstalled: false, dolphinInstalled: true)
+            == .apple)
+        #expect(OfflineTranscriber.postProcessBackend(
+            sourceLanguages: [.chinese, .japanese],
+            senseVoiceInstalled: false, dolphinInstalled: true)
+            == .dolphin)
+        // The flagship zh/en code-switching meeting must keep the
+        // multilingual pass — Dolphin would garble every English utterance.
+        #expect(OfflineTranscriber.postProcessBackend(
+            sourceLanguages: [.chinese, .english],
+            senseVoiceInstalled: true, dolphinInstalled: true)
             == .senseVoice)
-        // Chosen but not downloaded → fall back to Apple.
+        // No entries yet (audio-only session) fails closed to multilingual.
+        #expect(OfflineTranscriber.postProcessBackend(
+            sourceLanguages: [],
+            senseVoiceInstalled: true, dolphinInstalled: true)
+            == .senseVoice)
+        #expect(!OfflineTranscriber.dolphinSupports(.english))
+        #expect(OfflineTranscriber.dolphinSupports(.korean))
+    }
+
+    /// No live-engine choice remains (hybrid is the only live engine):
+    /// SenseVoice is the re-transcribe backend whenever it's installed.
+    @Test func senseVoiceUsedWheneverInstalled() {
         #expect(OfflineTranscriber.effectiveBackend(
-            engineChoice: "sensevoice", senseVoiceInstalled: false, qwen3Installed: false)
-            == .apple)
-        // Apple chosen → never SenseVoice, even if installed.
+            sourceLanguages: [.japanese],
+            senseVoiceInstalled: true, dolphinInstalled: false)
+            == .senseVoice)
+        // Not downloaded → fall back to Apple.
         #expect(OfflineTranscriber.effectiveBackend(
-            engineChoice: "apple", senseVoiceInstalled: true, qwen3Installed: false)
-            == .apple)
-        #expect(OfflineTranscriber.effectiveBackend(
-            engineChoice: "", senseVoiceInstalled: true, qwen3Installed: false)
+            sourceLanguages: [.japanese],
+            senseVoiceInstalled: false, dolphinInstalled: false)
             == .apple)
     }
 
-    /// Imports never auto-upgrade to Qwen3-ASR (near-realtime decode would
-    /// turn a long import into an hour-long wait) — it runs only when the
-    /// user explicitly picks it in the import options.
+    /// Imports honor the per-file pick; unavailable picks (including the
+    /// retired "qwen3" choice from an old checkpoint) fall back to Apple.
     @Test func importsHonorTheExplicitChoiceOnly() {
-        // The key regression: Qwen3 installed must NOT hijack an import.
+        // The key regression: an installed model must NOT hijack an import.
         #expect(OfflineTranscriber.importBackend(
-            choice: "sensevoice", senseVoiceInstalled: true, qwen3Installed: true)
+            choice: "sensevoice", source: .japanese,
+            senseVoiceInstalled: true, dolphinInstalled: true)
             == .senseVoice)
         #expect(OfflineTranscriber.importBackend(
-            choice: "apple", senseVoiceInstalled: true, qwen3Installed: true)
-            == .apple)
-        // Explicit pick is honored when installed, falls back when not.
-        #expect(OfflineTranscriber.importBackend(
-            choice: "qwen3", senseVoiceInstalled: false, qwen3Installed: true)
-            == .qwen3ASR)
-        #expect(OfflineTranscriber.importBackend(
-            choice: "qwen3", senseVoiceInstalled: false, qwen3Installed: false)
+            choice: "apple", source: .japanese,
+            senseVoiceInstalled: true, dolphinInstalled: true)
             == .apple)
         #expect(OfflineTranscriber.importBackend(
-            choice: "sensevoice", senseVoiceInstalled: false, qwen3Installed: false)
+            choice: "dolphin", source: .japanese,
+            senseVoiceInstalled: false, dolphinInstalled: true)
+            == .dolphin)
+        // A stale Dolphin pick on an English import falls back to Apple.
+        #expect(OfflineTranscriber.importBackend(
+            choice: "dolphin", source: .english,
+            senseVoiceInstalled: false, dolphinInstalled: true)
+            == .apple)
+        #expect(OfflineTranscriber.importBackend(
+            choice: "sensevoice", source: .japanese,
+            senseVoiceInstalled: false, dolphinInstalled: false)
+            == .apple)
+        // Retired engine choice from an old import checkpoint.
+        #expect(OfflineTranscriber.importBackend(
+            choice: "qwen3", source: .japanese,
+            senseVoiceInstalled: true, dolphinInstalled: true)
             == .apple)
     }
 
     @Test func newRecordingPostProcessUsesDownloadedASROnly() {
         #expect(OfflineTranscriber.postProcessBackend(
-            senseVoiceInstalled: true, qwen3Installed: true) == .qwen3ASR)
+            sourceLanguages: [.japanese],
+            senseVoiceInstalled: true, dolphinInstalled: true)
+            == .dolphin)
         #expect(OfflineTranscriber.postProcessBackend(
-            senseVoiceInstalled: true, qwen3Installed: false) == .senseVoice)
+            sourceLanguages: [.japanese],
+            senseVoiceInstalled: true, dolphinInstalled: false)
+            == .senseVoice)
         #expect(OfflineTranscriber.postProcessBackend(
-            senseVoiceInstalled: false, qwen3Installed: false) == nil)
+            sourceLanguages: [.japanese],
+            senseVoiceInstalled: false, dolphinInstalled: false)
+            == nil)
     }
 
     @MainActor
@@ -82,10 +114,9 @@ struct ImportEngineTests {
         buffer.frameLength = 16_000
         try writer.write(from: buffer)
 
-        let reader = try AVAudioFile(forReading: url)
         let task = Task { @MainActor in
             try await OfflineTranscriber.transcribe(
-                reader,
+                contentsOf: url,
                 language: .english,
                 backend: .senseVoice
             ) { _ in }
@@ -139,6 +170,141 @@ struct ImportEngineTests {
             coreCount: 6, hardCap: 3) == 1)
     }
 
+    @Test func backendRawValuesStayStable() {
+        // Persisted in RetranscribeCheckpoint.backendRaw — a rename breaks
+        // every in-flight resume.
+        #expect(OfflineTranscriber.Backend.apple.rawValue == "apple")
+        #expect(OfflineTranscriber.Backend.senseVoice.rawValue == "sensevoice")
+        #expect(OfflineTranscriber.Backend.dolphin.rawValue == "dolphin")
+    }
+
+    @Test func retranscribeReusesOnlySameBackendSegments() {
+        let segments = [
+            SessionRecord.ImportCheckpoint.Segment(start: 0, end: 3.5, text: "黒川さんのボス"),
+        ]
+        let checkpoint = SessionRecord.RetranscribeCheckpoint(
+            backendRaw: "dolphin", segments: segments)
+        #expect(SessionRetranscriber.reusableSegments(
+            checkpoint: checkpoint, backend: .dolphin).count == 1)
+        // A SenseVoice pass must never seed from Dolphin segments.
+        #expect(SessionRetranscriber.reusableSegments(
+            checkpoint: checkpoint, backend: .senseVoice).isEmpty)
+        #expect(SessionRetranscriber.reusableSegments(
+            checkpoint: nil, backend: .dolphin).isEmpty)
+        // A checkpoint persisted by the retired Qwen3-ASR backend seeds
+        // nothing — the current pass starts clean.
+        let stale = SessionRecord.RetranscribeCheckpoint(
+            backendRaw: "qwen3asr", segments: segments)
+        #expect(SessionRetranscriber.reusableSegments(
+            checkpoint: stale, backend: .dolphin).isEmpty)
+    }
+
+    /// The Languages-menu resolution: spoken override wins over the
+    /// recorded source; translate-to inherits (nil), disables (""), or
+    /// overrides the target; transcribe-only records stay transcribe-only
+    /// when only the source moves.
+    @Test func languageDirectionHonorsRecordOverrides() {
+        var record = SessionRecord(
+            mode: .captions, startedAt: .now, endedAt: .now,
+            entries: [SessionRecord.Entry(
+                sourceText: "こんにちは",
+                translation: nil,
+                speaker: nil,
+                direction: LanguagePair(source: .japanese, target: .chinese),
+                timestamp: .now)])
+
+        // nil overrides → recorded pair.
+        #expect(SessionRetranscriber.languageDirection(for: record)
+            == LanguagePair(source: .japanese, target: .chinese))
+        // Spoken override moves the source, target inherited.
+        record.spokenLanguageRaw = AppLanguage.korean.rawValue
+        #expect(SessionRetranscriber.languageDirection(for: record)
+            == LanguagePair(source: .korean, target: .chinese))
+        // Explicit off → transcribe-only.
+        record.translateToRaw = ""
+        #expect(SessionRetranscriber.languageDirection(for: record)
+            == LanguagePair(source: .korean, target: .korean))
+        // Explicit target.
+        record.translateToRaw = AppLanguage.english.rawValue
+        #expect(SessionRetranscriber.languageDirection(for: record)
+            == LanguagePair(source: .korean, target: .english))
+        // Transcribe-only record + spoken override stays transcribe-only.
+        var plain = record
+        plain.spokenLanguageRaw = AppLanguage.chinese.rawValue
+        plain.translateToRaw = nil
+        plain.entries[0].direction = LanguagePair(source: .japanese, target: .japanese)
+        #expect(SessionRetranscriber.languageDirection(for: plain)
+            == LanguagePair(source: .chinese, target: .chinese))
+        // No entries → nil.
+        plain.entries = []
+        #expect(SessionRetranscriber.languageDirection(for: plain) == nil)
+    }
+
+    /// Manual re-transcribe diarizes ONLY a label-less session — labels
+    /// present means inherit-by-overlap, protecting renamed slots.
+    @Test func manualRetranscribeDiarizesOnlyLabellessSessions() {
+        #expect(SessionRetranscriber.manualRetranscribeDiarizes(
+            entriesHaveSpeakers: false, diarizerDownloaded: true, speakerCount: -1))
+        #expect(SessionRetranscriber.manualRetranscribeDiarizes(
+            entriesHaveSpeakers: false, diarizerDownloaded: true, speakerCount: 3))
+        // Existing labels → inherit, never re-cluster.
+        #expect(!SessionRetranscriber.manualRetranscribeDiarizes(
+            entriesHaveSpeakers: true, diarizerDownloaded: true, speakerCount: -1))
+        // No model → nothing to run.
+        #expect(!SessionRetranscriber.manualRetranscribeDiarizes(
+            entriesHaveSpeakers: false, diarizerDownloaded: false, speakerCount: -1))
+        // Separation off (one voice) → skip.
+        #expect(!SessionRetranscriber.manualRetranscribeDiarizes(
+            entriesHaveSpeakers: false, diarizerDownloaded: true, speakerCount: 0))
+    }
+
+    /// An over-split Auto result is refused before it shreds the transcript
+    /// — the same bound the standalone retry applies, now shared so the
+    /// re-transcribe path can't diverge.
+    @Test func autoDiarizationRefusesImplausibleResults() {
+        func segments(_ count: Int) -> [SpeakerAttribution.Segment] {
+            (0..<count).map { .init(slot: $0, start: Double($0), end: Double($0) + 1) }
+        }
+        // Auto claiming more than the bound → refused.
+        #expect(SessionRetranscriber.isImplausibleAutoResult(
+            segments: segments(9), speakerCount: -1))
+        // Auto within the bound → accepted.
+        #expect(!SessionRetranscriber.isImplausibleAutoResult(
+            segments: segments(8), speakerCount: -1))
+        // A fixed count the user asked for is never second-guessed.
+        #expect(!SessionRetranscriber.isImplausibleAutoResult(
+            segments: segments(20), speakerCount: 4))
+    }
+
+    @Test func thermalHardHoldOnlyAtCritical() {
+        // .serious no longer hard-stops (it degrades to one decoder — see
+        // the cap test); only .critical, where iOS starts killing apps,
+        // holds the loop entirely.
+        #expect(!VADSegmentedTranscriber.shouldHoldForThermals(.nominal))
+        #expect(!VADSegmentedTranscriber.shouldHoldForThermals(.fair))
+        #expect(!VADSegmentedTranscriber.shouldHoldForThermals(.serious))
+        #expect(VADSegmentedTranscriber.shouldHoldForThermals(.critical))
+    }
+
+    @Test func thermalConcurrencyDegradesAtSeriousOrInBackground() {
+        // Cool + foreground → full pool.
+        #expect(VADSegmentedTranscriber.thermalConcurrencyCap(
+            poolSize: 3, state: .nominal, background: false) == 3)
+        #expect(VADSegmentedTranscriber.thermalConcurrencyCap(
+            poolSize: 3, state: .fair, background: false) == 3)
+        // .serious → a single decoder even in the foreground.
+        #expect(VADSegmentedTranscriber.thermalConcurrencyCap(
+            poolSize: 3, state: .serious, background: false) == 1)
+        #expect(VADSegmentedTranscriber.thermalConcurrencyCap(
+            poolSize: 3, state: .critical, background: false) == 1)
+        // A background window caps to one decoder even when cool.
+        #expect(VADSegmentedTranscriber.thermalConcurrencyCap(
+            poolSize: 3, state: .nominal, background: true) == 1)
+        // Never below one, even from a degenerate pool.
+        #expect(VADSegmentedTranscriber.thermalConcurrencyCap(
+            poolSize: 0, state: .nominal, background: false) == 1)
+    }
+
     @Test func cachedTextMatchesOnlyExactRange() {
         let checkpoint = [
             SessionRecord.ImportCheckpoint.Segment(start: 0, end: 4.5, text: "大家好"),
@@ -171,76 +337,23 @@ struct ImportAudioSheetTests {
     }
 }
 
-struct SpeakerDefaultTests {
-    @Test func missingSpeakerModelDefaultsLiveCaptionsToOneVoice() {
-        let value = VoiceprintService.defaultLiveSpeakerPickerValue(isModelCached: false)
-        #expect(value == 0)
-        #expect(VoiceprintService.clusterCap(forPickerValue: value) == nil)
+/// Empty-decode rescue: a CTC (Dolphin) blank is re-decoded with silence
+/// padding — not split into shorter halves, which blanks harder.
+struct SilencePadRescueTests {
+    @Test func wrapsSamplesWithSilenceBothSides() {
+        let pad = VADSegmentedTranscriber.emptyRetryPadSamples
+        let speech = [Float](repeating: 0.5, count: 8_000)
+        let padded = VADSegmentedTranscriber.silencePadded(speech)
+        #expect(padded.count == speech.count + 2 * pad)
+        // Silence at the head and tail; the speech survives in the middle.
+        #expect(padded.prefix(pad).allSatisfy { $0 == 0 })
+        #expect(padded.suffix(pad).allSatisfy { $0 == 0 })
+        #expect(Array(padded[pad..<(pad + speech.count)]) == speech)
     }
 
-    @Test func cachedSpeakerModelStillDefaultsLiveCaptionsToOneVoice() {
-        let value = VoiceprintService.defaultLiveSpeakerPickerValue(isModelCached: true)
-        #expect(value == 0)
-        #expect(VoiceprintService.clusterCap(forPickerValue: value) == nil)
-    }
-}
-
-/// The Qwen3-ASR store's file manifest: per-source paths and the local
-/// layout the recognizer config depends on (tokenizer/ subdirectory).
-struct Qwen3ASRModelStoreTests {
-    @Test func manifestCoversRecognizerAndVAD() {
-        let names = Qwen3ASRModelStore.files.map(\.name)
-        #expect(names.contains("conv_frontend.onnx"))
-        #expect(names.contains("encoder.int8.onnx"))
-        #expect(names.contains("decoder.int8.onnx"))
-        #expect(names.contains("tokenizer/vocab.json"))
-        #expect(names.contains("tokenizer/merges.txt"))
-        #expect(names.contains("tokenizer/tokenizer_config.json"))
-        // Own VAD copy: the post-pass must not depend on SenseVoice.
-        #expect(names.contains("silero_vad.onnx"))
-    }
-
-    @Test func everyFileResolvesAPathPerSource() {
-        for file in Qwen3ASRModelStore.files {
-            for source in ASRModelSource.allCases {
-                let path = file.path(for: source)
-                #expect(!path.isEmpty)
-                #expect(path.hasSuffix((file.name as NSString).lastPathComponent))
-            }
-            #expect(file.minBytes > 0)
-            #expect(file.expectedBytes >= file.minBytes)
-        }
-    }
-
-    @Test func totalSizeMatchesTheDownloadButtonCopy() {
-        // "~990 MB" in Settings; keep the claim honest as files change.
-        let total = Qwen3ASRModelStore.totalExpectedBytes
-        #expect(total > 950_000_000 && total < 1_050_000_000)
-    }
-
-    @Test func tokenizerDirectoryIsInsideTheStore() {
-        #expect(Qwen3ASRModelStore.tokenizerDirectory.path.hasPrefix(
-            Qwen3ASRModelStore.directory.path))
-    }
-}
-
-/// Empty-decode rescue: suspicious segments split into exact halves so a
-/// blanked autoregressive decode can't silently eat transcript content.
-struct RetryHalvesTests {
-    @Test func halvesCoverTheSegmentExactly() {
-        let halves = VADSegmentedTranscriber.retryHalves(start: 16_000, count: 161_000)
-        #expect(halves.count == 2)
-        #expect(halves[0].start == 16_000)
-        #expect(halves[0].count == 80_500)
-        #expect(halves[1].start == 96_500)
-        #expect(halves[1].count == 80_500)
-        #expect(halves[0].count + halves[1].count == 161_000)
-    }
-
-    @Test func oddCountsLoseNothing() {
-        let halves = VADSegmentedTranscriber.retryHalves(start: 0, count: 33)
-        #expect(halves[0].count + halves[1].count == 33)
-        #expect(halves[1].start == 16)
+    @Test func padIsAQuarterSecondScaleAt16k() {
+        // 0.3s each side at 16 kHz — enough CTC settling frames.
+        #expect(VADSegmentedTranscriber.emptyRetryPadSamples == 4_800)
     }
 }
 
@@ -271,44 +384,3 @@ struct SpeakerSeparationRetryTests {
     }
 }
 
-/// Mid-utterance speaker split: grouping a final utterance's timed runs into
-/// consecutive same-speaker parts (the pure half of the live split).
-struct CaptionRunGroupingTests {
-    @Test func groupsConsecutiveRunsAndAttachesNilToPrevious() {
-        let runs = [
-            TimedRun(text: "Hello ", start: 0, end: 1),
-            TimedRun(text: "there ", start: 1, end: 2),
-            TimedRun(text: "yes ", start: 2, end: 3),   // unattributed → joins prev
-            TimedRun(text: "no", start: 3, end: 4),
-        ]
-        let parts = CaptionPipeline.groupRuns(runs, slots: [0, 0, nil, 1])
-        #expect(parts.map(\.speaker) == [0, 1])
-        #expect(parts.map(\.text) == ["Hello there yes ", "no"])
-        #expect(parts.map(\.start) == [0, 3])
-    }
-
-    @Test func leadingUnattributedRunStartsItsOwnPart() {
-        let runs = [
-            TimedRun(text: "um ", start: 0, end: 1),
-            TimedRun(text: "okay", start: 1, end: 2),
-        ]
-        let parts = CaptionPipeline.groupRuns(runs, slots: [nil, 0])
-        #expect(parts.map(\.speaker) == [nil, 0])
-        #expect(parts.map(\.text) == ["um ", "okay"])
-    }
-
-    @Test func alignsRunTimesToDiarizerUtteranceClock() {
-        let runs = [
-            TimedRun(text: "first ", start: 42, end: 43),
-            TimedRun(text: "second", start: 43, end: 44),
-        ]
-
-        let aligned = CaptionPipeline.runsInDiarizerClock(
-            runs, utteranceStart: 3)
-
-        #expect(aligned == [
-            TimedRun(text: "first ", start: 3, end: 4),
-            TimedRun(text: "second", start: 4, end: 5),
-        ])
-    }
-}

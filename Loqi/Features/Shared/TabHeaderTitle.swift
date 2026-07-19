@@ -9,3 +9,63 @@ extension View {
             .toolbarTitleDisplayMode(.inlineLarge)
     }
 }
+
+/// The app's selector-sheet chrome: a bottom sheet of labeled Form rows
+/// (each Picker shows its name + current value) with a footer under each
+/// section explaining what the choice drives. Shared by the Languages,
+/// Summary options, and Recording options sheets — Pickers embedded in
+/// context Menus rendered as an unlabeled run of checkmarked options,
+/// which is exactly what this replaces. Sections stay bespoke per caller.
+struct SelectorSheet<Content: View>: View {
+    let title: LocalizedStringKey
+    /// Grays the rows (NOT the toolbar) while a job could race the selection.
+    var locked: Bool = false
+    /// Shown as a banner above the rows while `locked`, so a greyed sheet
+    /// explains why it can't be changed (e.g. a recording is in progress).
+    var lockedNote: LocalizedStringKey? = nil
+    /// Staged sheets: a bold top-right action (e.g. Apply) with Cancel on
+    /// the leading edge. Live-apply sheets omit it and get a plain Done.
+    var primaryActionTitle: LocalizedStringKey? = nil
+    var primaryActionDisabled: Bool = false
+    var primaryAction: (() -> Void)? = nil
+    @ViewBuilder var content: Content
+    @Environment(\.dismiss) private var dismiss
+
+    var body: some View {
+        NavigationStack {
+            Form {
+                // The note stays readable; only `content` is disabled, so
+                // the greyed rows have their explanation right above them.
+                if locked, let lockedNote {
+                    Label(lockedNote, systemImage: "pause.circle")
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                }
+                content
+                    // .disabled wraps only the rows so neither the toolbar
+                    // buttons nor the locked note lock.
+                    .disabled(locked)
+            }
+                .navigationTitle(title)
+                #if os(iOS)
+                .navigationBarTitleDisplayMode(.inline)
+                #endif
+                .toolbar {
+                    if let primaryActionTitle, let primaryAction {
+                        ToolbarItem(placement: .cancellationAction) {
+                            Button("Cancel") { dismiss() }
+                        }
+                        ToolbarItem(placement: .confirmationAction) {
+                            Button(primaryActionTitle, action: primaryAction)
+                                .disabled(primaryActionDisabled)
+                        }
+                    } else {
+                        ToolbarItem(placement: .confirmationAction) {
+                            Button("Done") { dismiss() }
+                        }
+                    }
+                }
+        }
+        .presentationDetents([.medium, .large])
+    }
+}
