@@ -88,6 +88,12 @@ final class SummaryJobCenter {
     @ObservationIgnored private var activeRetranscribeRequest: [UUID: RetranscribeRequest] = [:]
     /// True while the scene is backgrounded; LLM-generation jobs must not run.
     @ObservationIgnored private var isBackgrounded = false
+    /// Imports whose task was cancelled by a SUSPEND (background / yield /
+    /// window-expiry), not a user cancel — so its checkpoint must be kept
+    /// for resume. Read by the import's CancellationError handler instead
+    /// of the activity badge, which a late progress callback can race back
+    /// to `.importing` and turn a suspend into a delete (data loss).
+    @ObservationIgnored private var suspendedImportIDs: Set<UUID> = []
     /// True while a BGProcessingTask window is running. It relaxes the
     /// resume guards for the CPU ASR/diarization jobs ONLY (import,
     /// re-transcribe, new-recording post-process) so a backgrounded decode
@@ -275,10 +281,11 @@ final class SummaryJobCenter {
                 activities[sessionID] = .pausedForRecording
                 tasks[sessionID]?.cancel()
             case .importing:
-                // Marking pausedForRecording BEFORE cancelling tells the
-                // import task's CancellationError handler this was a yield,
-                // not a user cancel — it keeps the placeholder + checkpoint
-                // instead of deleting them.
+                // Mark the suspension (race-free) so the import's
+                // CancellationError handler keeps the placeholder +
+                // checkpoint instead of deleting them — a yield, not a
+                // user cancel.
+                suspendedImportIDs.insert(sessionID)
                 activities[sessionID] = .pausedForRecording
                 tasks[sessionID]?.cancel()
             case .queuedRetranscribe:
@@ -380,21 +387,34 @@ final class SummaryJobCenter {
     /// mean an interrupted decode loses no audio, and the LLM cleanup/
     /// summary phases park for foreground (isBackgrounded stays true).
     func runBackgroundASRWindow() async {
-        guard isBackgrounded else { return }   // foreground handles it directly
+        guard isBackgrounded, !isRecording() else { return }
         backgroundProcessingActive = true
-        // Kick every ASR-first resume path — the relaxed guards let them run.
+        // Un-pause the ASR-first jobs the background suspend parked, exactly
+        // as resumeBackgroundJobs does on foreground — otherwise
+        // resumeUnfinishedImports (which needs a nil badge) skips them and
+        // the window decodes nothing.
+        for (sessionID, activity) in activities
+        where activity == .pausedForBackground {
+            if archive.sessions.first(where: { $0.id == sessionID })?.importing == true {
+                activities[sessionID] = nil
+            } else if retranscribeQueue.contains(where: { $0.sessionID == sessionID }) {
+                activities[sessionID] = .queuedRetranscribe
+            }
+        }
         resumeUnfinishedImports()
         resumePendingPostProcesses()
         drainRetranscribeQueue()
-        // Hold the window: iOS bounds it and cancels us at expiration. The
-        // decode jobs advance and checkpoint meanwhile.
-        while !Task.isCancelled {
+        // Hold the window while still backgrounded; iOS cancels this task at
+        // expiration, and a foreground (isBackgrounded=false) also ends it so
+        // the foreground resume takes over cleanly.
+        while !Task.isCancelled, isBackgrounded {
             try? await Task.sleep(for: .seconds(2))
         }
-        // Window over — stop the in-flight decodes the same way a normal
-        // background does (cancel + keep checkpoints), then clear the flag.
         backgroundProcessingActive = false
-        suspendBackgroundUnsafeJobs()
+        // Only re-suspend if we're STILL backgrounded (OS expiry). If the
+        // app foregrounded, resumeBackgroundJobs already owns these jobs —
+        // suspending them here would cancel a foreground-running import.
+        if isBackgrounded { suspendBackgroundUnsafeJobs() }
     }
 
     nonisolated static func shouldSuspendForBackground(_ activity: Activity) -> Bool {
@@ -516,6 +536,8 @@ final class SummaryJobCenter {
                     retiredRetranscribeTasks[sessionID] = retranscribeWorker ?? tasks[sessionID]
                 }
             }
+            // Mark a suspended import so its cancel keeps the checkpoint.
+            if isImport { suspendedImportIDs.insert(sessionID) }
             activities[sessionID] = .pausedForBackground
             tasks[sessionID]?.cancel()
         }
@@ -1373,6 +1395,9 @@ final class SummaryJobCenter {
     ) {
         // "Preparing…" through the gate wait, file copy, and audio
         // extraction — the engine's first real tick shows a true fraction.
+        // A fresh/resumed attempt is running, not suspended: a later
+        // user cancel of it must delete, not keep.
+        suspendedImportIDs.remove(sessionID)
         activities[sessionID] = .preparing
         beginGrace(sessionID, name: "import")
         tasks[sessionID] = Task { [weak self] in
@@ -1391,14 +1416,17 @@ final class SummaryJobCenter {
                 // automatically once transcription lands.
                 self.autoSummarizeAfterImport(sessionID: sessionID)
             } catch is CancellationError {
-                let held = self.activities[sessionID] == .pausedForRecording
-                    || self.activities[sessionID] == .pausedForBackground
+                // Race-free: a suspend marks the id BEFORE cancelling; a
+                // user cancel does not. Reading the activity badge here
+                // instead let a late progress tick reset it to .importing
+                // and delete a suspended, still-checkpointed import.
+                let suspended = self.suspendedImportIDs.contains(sessionID)
                 let checkpointed = self.archive.sessions
                     .first(where: { $0.id == sessionID })?.importCheckpoint != nil
-                if held, checkpointed {
-                    // Preempted by a recording or the scene backgrounding —
-                    // the checkpoint stays; resumeAfterRecording()/
-                    // resumeBackgroundJobs() re-enqueues it.
+                if suspended, checkpointed {
+                    // Preempted by a recording / backgrounding / bg window —
+                    // the checkpoint stays; resumeAfterRecording() /
+                    // resumeBackgroundJobs() / the next window re-enqueue it.
                 } else {
                     // User cancel, or a preempt BEFORE the durable audio +
                     // checkpoint landed (e.g. still extracting a video's
@@ -1409,6 +1437,7 @@ final class SummaryJobCenter {
                     self.archive.delete(id: sessionID)
                     self.activities[sessionID] = nil
                 }
+                self.suspendedImportIDs.remove(sessionID)
             } catch {
                 self.errors[sessionID] = error.localizedDescription
                 // A failed import must not auto-retry (the finishJob
