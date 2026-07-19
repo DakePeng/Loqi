@@ -41,6 +41,10 @@ struct SessionDetailView: View {
     @State private var showingLanguages = false
     /// A style/length change awaiting the "replace edited summary?" confirm.
     @State private var pendingRegenerate: PendingRegenerate?
+    /// A heavy action held while the "stop the other running task?" confirm
+    /// is up — one ASR/LLM pass at a time keeps the device from thrashing.
+    @State private var pendingHeavyAction: (() -> Void)?
+    @State private var confirmStopOtherJob = false
     @State private var autoStarted = false
     /// Shared with PlaybackBar so tapping a transcript line can seek.
     @State private var playback = AudioPlaybackController()
@@ -278,6 +282,20 @@ struct SessionDetailView: View {
             Button("Cancel", role: .cancel) { pendingRegenerate = nil }
         } message: {
             Text("You edited this summary. Summarizing again will replace your changes.")
+        }
+        .confirmationDialog(
+            "Another session is still processing",
+            isPresented: $confirmStopOtherJob,
+            titleVisibility: .visible
+        ) {
+            Button("Stop it and continue", role: .destructive) {
+                for id in otherBusySessionIDs { pipeline.jobs.cancel(id) }
+                pendingHeavyAction?()
+                pendingHeavyAction = nil
+            }
+            Button("Not now", role: .cancel) { pendingHeavyAction = nil }
+        } message: {
+            Text("Only one recording or session can be processed at a time. Stop the other task to start this one.")
         }
         .confirmationDialog(
             "Delete this session's audio?",
@@ -540,11 +558,13 @@ struct SessionDetailView: View {
             Section {
                 Button {
                     if blockedByRecording() { return }
-                    if session?.summaryEdited == true {
-                        pendingRegenerate = nil   // same settings; not a style change
-                        confirmRegenerate = true
-                    } else {
-                        requestSummarize(style: selectedStyle, length: selectedLength)
+                    startHeavyAction {
+                        if session?.summaryEdited == true {
+                            pendingRegenerate = nil   // same settings; not a style change
+                            confirmRegenerate = true
+                        } else {
+                            requestSummarize(style: selectedStyle, length: selectedLength)
+                        }
                     }
                 } label: {
                     Label(session?.summary == nil ? "Summarize" : "Re-summarize",
@@ -557,7 +577,7 @@ struct SessionDetailView: View {
                     // only for states the progress/edit UI already explains.
                     Button {
                         if blockedByRecording() { return }
-                        showingRetranscribeOptions = true
+                        startHeavyAction { showingRetranscribeOptions = true }
                     } label: {
                         Label("Re-transcribe & summarize",
                               systemImage: "arrow.trianglehead.2.clockwise.rotate.90")
@@ -568,7 +588,7 @@ struct SessionDetailView: View {
                     // paying for a re-transcribe.
                     Button {
                         if blockedByRecording() { return }
-                        showingIdentifySpeakers = true
+                        startHeavyAction { showingIdentifySpeakers = true }
                     } label: {
                         Label("Identify speakers", systemImage: "person.2.wave.2")
                     }
@@ -631,7 +651,7 @@ struct SessionDetailView: View {
             }
             Section {
                 Button {
-                    requestSuggestHotwords()
+                    startHeavyAction { requestSuggestHotwords() }
                 } label: {
                     Label("Suggest hotwords", systemImage: "character.magnify")
                 }
@@ -930,6 +950,24 @@ struct SessionDetailView: View {
         return true
     }
 
+    /// Sessions OTHER than this one with a running/queued job.
+    private var otherBusySessionIDs: [UUID] {
+        pipeline.jobs.activities.keys.filter { $0 != sessionID }
+    }
+
+    /// Gate a heavy (ASR/LLM) action: run it now if nothing else is
+    /// processing, else confirm — the device can't run two ASR/summary
+    /// passes at once without thrashing, so offer to stop the other task
+    /// rather than silently queueing a second heavy job behind it.
+    private func startHeavyAction(_ action: @escaping () -> Void) {
+        if otherBusySessionIDs.isEmpty {
+            action()
+        } else {
+            pendingHeavyAction = action
+            confirmStopOtherJob = true
+        }
+    }
+
     /// Every photo for the session, oldest first — all shown together in the
     /// Photos section (anchoring is kept only to ground descriptions).
     private func allAttachments(
@@ -1103,11 +1141,13 @@ struct SessionDetailView: View {
     /// the preference, matching the old sheet.)
     private func regenerateSummary(style: SummaryStyle, length: SummaryLength) {
         if blockedByRecording() { return }
-        if session?.summaryEdited == true {
-            pendingRegenerate = PendingRegenerate(style: style, length: length)
-            confirmRegenerate = true
-        } else {
-            applySummaryPreferences(style: style, length: length)
+        startHeavyAction {
+            if session?.summaryEdited == true {
+                pendingRegenerate = PendingRegenerate(style: style, length: length)
+                confirmRegenerate = true
+            } else {
+                applySummaryPreferences(style: style, length: length)
+            }
         }
     }
 
