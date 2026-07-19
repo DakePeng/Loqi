@@ -111,11 +111,23 @@ enum UtteranceMerger {
         return false
     }
 
+    /// CJK for JOINING purposes: Han/kana plus CJK punctuation and
+    /// fullwidth forms ("。」！" etc.), so sentences joined across a
+    /// terminal mark don't grow an ASCII space inside zh/ja text.
+    /// (`Character.isCJK` itself stays letters-only — HotwordMatcher
+    /// depends on that.)
+    private static func isCJKBoundary(_ character: Character) -> Bool {
+        if character.isCJK { return true }
+        guard let scalar = character.unicodeScalars.first else { return false }
+        return (0x3000...0x303F).contains(scalar.value)   // CJK punctuation
+            || (0xFF00...0xFFEF).contains(scalar.value)   // fullwidth forms
+    }
+
     /// "" when both boundary characters are CJK (no space inside zh/ja
     /// text), else " " (Latin and Korean use real spaces).
     static func joiner(between left: String, and right: String) -> String {
         guard let last = left.last, let first = right.first,
-              last.isCJK, first.isCJK else { return " " }
+              isCJKBoundary(last), isCJKBoundary(first) else { return " " }
         return ""
     }
 
@@ -142,24 +154,56 @@ enum UtteranceMerger {
         maxDuration: TimeInterval = 20,
         maxCharacters: Int = 200
     ) -> [Utterance] {
+        mergeAttributed(
+            utterances,
+            slots: [Int?](repeating: nil, count: utterances.count),
+            maxGap: maxGap, maxDuration: maxDuration, maxCharacters: maxCharacters
+        ).utterances
+    }
+
+    /// Speaker-aware merge for the offline paths, run AFTER each raw
+    /// utterance has been attributed to a diarization slot. Knowing the
+    /// speakers removes the turn-change worry behind `merge`'s tight
+    /// `maxGap`: same-slot neighbors heal across real pause-length gaps
+    /// (`sameSpeakerGap`) and join even across terminal punctuation, so a
+    /// speaker's consecutive sentences flow into paragraph-shaped entries
+    /// up to the duration/character caps. Different slots never merge;
+    /// unattributed (nil) neighbors keep the conservative rules. Returns
+    /// merged utterances with their slots, index-aligned.
+    static func mergeAttributed(
+        _ utterances: [Utterance],
+        slots: [Int?],
+        sameSpeakerGap: TimeInterval = 1.2,
+        maxGap: TimeInterval = 0.4,
+        maxDuration: TimeInterval = 20,
+        maxCharacters: Int = 200
+    ) -> (utterances: [Utterance], slots: [Int?]) {
         var merged: [Utterance] = []
-        for utterance in utterances {
+        var mergedSlots: [Int?] = []
+        for (utterance, slot) in zip(utterances, slots) {
             guard let current = merged.last else {
                 merged.append(utterance)
+                mergedSlots.append(slot)
                 continue
             }
+            let currentSlot = mergedSlots[mergedSlots.count - 1]
             let joined = current.text
                 + joiner(between: current.text, and: utterance.text)
                 + utterance.text
-            if !endsSentence(current.text),
-               utterance.start - current.end <= maxGap,
-               utterance.end - current.start <= maxDuration,
-               joined.count <= maxCharacters {
+            let gap = utterance.start - current.end
+            let withinCaps = utterance.end - current.start <= maxDuration
+                && joined.count <= maxCharacters
+            let joins = currentSlot == slot && withinCaps
+                && (currentSlot != nil
+                    ? gap <= sameSpeakerGap
+                    : !endsSentence(current.text) && gap <= maxGap)
+            if joins {
                 merged[merged.count - 1] = (joined, current.start, utterance.end)
             } else {
                 merged.append(utterance)
+                mergedSlots.append(slot)
             }
         }
-        return merged
+        return (merged, mergedSlots)
     }
 }

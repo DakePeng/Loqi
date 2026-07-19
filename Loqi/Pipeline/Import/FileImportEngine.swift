@@ -15,6 +15,9 @@ final class FileImportEngine {
         case fetchingSpeakerModel(Double)   // first diarized import only
         case identifyingSpeakers(Double)
         case translating(Double)
+        /// Decode held at thermal .serious — progress is deliberately
+        /// frozen; ends with the next transcribing tick.
+        case coolingDown
     }
 
     private let translator: TranslationCoordinator
@@ -114,7 +117,8 @@ final class FileImportEngine {
             language: direction.source,
             backend: backend,
             sensitivity: sensitivity,
-            onSegmentComplete: onSegmentComplete
+            onSegmentComplete: onSegmentComplete,
+            onThermalPause: { onPhase(.coolingDown) }
         ) { fraction in
             onPhase(.transcribing(fraction))
         }
@@ -157,7 +161,8 @@ final class FileImportEngine {
             backend: backend,
             sensitivity: sensitivity,
             alreadyDecoded: checkpoint.segments,
-            onSegmentComplete: onSegmentComplete
+            onSegmentComplete: onSegmentComplete,
+            onThermalPause: { onPhase(.coolingDown) }
         ) { fraction in
             onPhase(.transcribing(fraction))
         }
@@ -171,11 +176,11 @@ final class FileImportEngine {
             recordedAt: checkpoint.recordedAt, duration: checkpoint.duration, onPhase: onPhase)
     }
 
-    /// Transcript polish + diarization + tier-1 translation, then the final
-    /// record. Shared by a fresh import and a resumed one — by the time
-    /// this runs the durable audio copy already exists at `recordingName`
-    /// either way, and the ASR checkpoints have persisted (an interrupted
-    /// polish simply re-runs on resume).
+    /// Diarization + speaker-aware merge + transcript polish + tier-1
+    /// translation, then the final record. Shared by a fresh import and a
+    /// resumed one — by the time this runs the durable audio copy already
+    /// exists at `recordingName` either way, and the ASR checkpoints have
+    /// persisted (an interrupted polish simply re-runs on resume).
     private func finishImport(
         sessionID: UUID,
         direction: LanguagePair,
@@ -187,65 +192,16 @@ final class FileImportEngine {
         duration: TimeInterval,
         onPhase: @escaping @MainActor @Sendable (Phase) -> Void
     ) async throws -> SessionRecord {
-        // Reassemble VAD fragments into sentences FIRST: every consumer
-        // below (polish indices, entries, diarization spans, translation)
-        // reads this one array, so merging here keeps them aligned.
-        let utterances = UtteranceMerger.merge(utterances)
-        // Polish before the translation drafts so Apple translates the
-        // cleaned text: hotword fixup for every backend, LFM2.5 cleanup
-        // for the non-accuracy-pass ones. Imports keep no resident LLM
-        // outside the cleanup phase — including when the phase throws
-        // (cancelled, backgrounded, yielded to a recording) — so the
-        // unload also runs on the error path.
-        let polished: OfflineTranscriptPolisher.Output
-        do {
-            let (output, ranCleanup) = try await OfflineTranscriptPolisher.run(
-                texts: utterances.map(\.text),
-                language: direction.source,
-                backend: backend,
-                llm: llm,
-                llmEnabled: llmCleanupEnabled,
-                matcher: hotwords?.matcher,
-                onProgress: { onPhase(.cleaningUpTranscript($0)) })
-            if ranCleanup { await llm?.unload() }
-            polished = output
-        } catch {
-            await llm?.unload()
-            throw error
-        }
-
-        var entries = utterances.enumerated().map { index, utterance in
-            SessionRecord.Entry(
-                sourceText: polished.texts[index],
-                translation: nil,
-                speaker: nil,
-                direction: direction,
-                timestamp: recordedAt.addingTimeInterval(utterance.start),
-                rawSourceText: polished.originals[index],
-                audioOffset: utterance.start)
-        }
         let recordingURL = SessionArchive.recordingURL(fileName: recordingName)
 
-        // The two phases are independent — diarization reads the audio and
-        // writes speaker slots; translation reads source text and writes the
-        // translation field — so when both run, the tier-1 drafts overlap the
-        // off-main diarizer (which owns the visible progress, including any
-        // first-use model download). With no diarization, translation drives
-        // the progress bar itself, exactly as before. Same-language imports
-        // are transcribe-only and skip translation entirely.
-        try Task.checkCancellation()
-        let needsTranslation = direction.source != direction.target
-        if needsTranslation { await translator.addDirection(direction) }
-
+        // Diarize BEFORE merging: with every raw VAD utterance attributed
+        // to a speaker, the merger can heal pause-broken sentences and
+        // join a speaker's consecutive sentences with no risk of fusing a
+        // turn change — the risk that forced the blind merge's gap below
+        // the VAD's minimum silence (so it healed only cap-splits).
+        var slots = [Int?](repeating: nil, count: utterances.count)
         var speakerSeparationFailed = false
         if VoiceprintService.separationEnabled(forPickerValue: speakerCount) {
-            // Snapshot the entries (a `let`) so the concurrent draft pass and
-            // the diarization speaker-writes below don't contend for `entries`.
-            let entriesSnapshot = entries
-            async let drafts: [String?] = Self.draftAll(
-                entries: entriesSnapshot, direction: direction,
-                translator: needsTranslation ? translator : nil)
-
             onPhase(.identifyingSpeakers(0))
             do {
                 let segments = try await voiceprint.diarizeFile(
@@ -260,13 +216,10 @@ final class FileImportEngine {
                         }
                     }
                 }
-                let slots = SpeakerAttribution.denselyRenumbered(
+                slots = SpeakerAttribution.denselyRenumbered(
                     SpeakerAttribution.attribute(
                         utterances: utterances.map { ($0.start, $0.end) },
                         to: segments))
-                for index in entries.indices {
-                    entries[index].speaker = slots[index]
-                }
                 logger.info("import: \(Set(segments.map(\.slot)).count) speakers across \(segments.count) segments")
             } catch is CancellationError {
                 // A background/yield preempt mid-diarization must stop the
@@ -282,19 +235,58 @@ final class FileImportEngine {
                 speakerSeparationFailed = true
                 logger.error("import diarization failed: \(error.localizedDescription)")
             }
+        }
 
-            // Apply the translations drafted concurrently with diarization.
-            let translations = try await drafts
-            for index in entries.indices where index < translations.count {
-                entries[index].translation = translations[index]
-            }
-        } else if needsTranslation {
+        // Every consumer below (polish indices, entries, translation)
+        // reads this one merged array, so indices stay aligned.
+        let (merged, mergedSlots) = UtteranceMerger.mergeAttributed(
+            utterances, slots: slots)
+        // Polish before the translation drafts so Apple translates the
+        // cleaned text: hotword fixup for every backend, LFM2.5 cleanup
+        // for the non-accuracy-pass ones. Imports keep no resident LLM
+        // outside the cleanup phase — including when the phase throws
+        // (cancelled, backgrounded, yielded to a recording) — so the
+        // unload also runs on the error path.
+        let polished: OfflineTranscriptPolisher.Output
+        do {
+            let (output, ranCleanup) = try await OfflineTranscriptPolisher.run(
+                texts: merged.map(\.text),
+                language: direction.source,
+                backend: backend,
+                llm: llm,
+                llmEnabled: llmCleanupEnabled,
+                matcher: hotwords?.matcher,
+                onProgress: { onPhase(.cleaningUpTranscript($0)) })
+            if ranCleanup { await llm?.unload() }
+            polished = output
+        } catch {
+            await llm?.unload()
+            throw error
+        }
+
+        var entries = merged.enumerated().map { index, utterance in
+            SessionRecord.Entry(
+                sourceText: polished.texts[index],
+                translation: nil,
+                speaker: mergedSlots[index],
+                direction: direction,
+                timestamp: recordedAt.addingTimeInterval(utterance.start),
+                rawSourceText: polished.originals[index],
+                audioOffset: utterance.start)
+        }
+
+        // Same-language imports are transcribe-only and skip translation.
+        try Task.checkCancellation()
+        if direction.source != direction.target {
+            await translator.addDirection(direction)
             for index in entries.indices {
                 try Task.checkCancellation()
                 onPhase(.translating(Double(index) / Double(max(entries.count, 1))))
                 entries[index].translation = try? await translator.draft(
                     entries[index].sourceText, direction: direction)
             }
+            // Terminal tick — the last per-entry emission was (n-1)/n.
+            onPhase(.translating(1))
         }
 
         guard entries.count >= 1 else { throw ImportError.nothingTranscribed }
@@ -312,25 +304,6 @@ final class FileImportEngine {
             ? recordingName : nil
         record.speakerSeparationFailed = speakerSeparationFailed ? true : nil
         return record
-    }
-
-    /// Draft every entry's tier-1 translation, in order. Extracted so it can
-    /// run as an `async let` overlapping the off-main diarizer; a nil
-    /// translator (same-language import) yields no drafts.
-    private static func draftAll(
-        entries: [SessionRecord.Entry],
-        direction: LanguagePair,
-        translator: TranslationCoordinator?
-    ) async throws -> [String?] {
-        guard let translator else { return [] }
-        var drafts: [String?] = []
-        drafts.reserveCapacity(entries.count)
-        for entry in entries {
-            try Task.checkCancellation()
-            drafts.append(try? await translator.draft(
-                entry.sourceText, direction: direction))
-        }
-        return drafts
     }
 
     // MARK: Audio extraction (video → audio)

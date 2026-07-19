@@ -64,6 +64,9 @@ struct SessionsView: View {
                             } label: {
                                 searchRowLabel(session, match: match)
                             }
+                            // Same affordances as the normal rows — search
+                            // used to hide a busy session's only cancel.
+                            .contextMenu { rowMenuItems(session) }
                         }
                     }
                 }
@@ -236,11 +239,27 @@ struct SessionsView: View {
             } label: {
                 rowContent(session)
             }
-            .contextMenu {
-                if pipeline.jobs.isBusy(session.id) {
-                    Button("Cancel processing", systemImage: "xmark.circle", role: .destructive) {
-                        pipeline.jobs.cancel(session.id)
-                    }
+            .contextMenu { rowMenuItems(session) }
+        }
+    }
+
+    /// Shared long-press menu for normal AND search rows.
+    @ViewBuilder
+    private func rowMenuItems(_ session: SessionRecord) -> some View {
+        if pipeline.jobs.isBusy(session.id) {
+            Button("Cancel processing", systemImage: "xmark.circle", role: .destructive) {
+                pipeline.jobs.cancel(session.id)
+            }
+        }
+        // A failure label used to linger for the whole app session with
+        // no way to acknowledge it.
+        if pipeline.jobs.error(for: session.id) != nil || session.importError != nil {
+            Button("Dismiss error", systemImage: "checkmark.circle") {
+                pipeline.jobs.clearError(for: session.id)
+                if session.importError != nil {
+                    var cleared = session
+                    cleared.importError = nil
+                    pipeline.archive.update(cleared)
                 }
             }
         }
@@ -250,6 +269,14 @@ struct SessionsView: View {
         VStack(alignment: .leading, spacing: 4) {
             sessionRowLabel(session)
             SessionRowStatus(jobs: pipeline.jobs, sessionID: session.id)
+            // A failed import used to vanish at the next launch; the error
+            // now survives on the record until dismissed.
+            if !pipeline.jobs.isBusy(session.id), let importError = session.importError {
+                Label(importError, systemImage: "exclamationmark.triangle")
+                    .font(.caption)
+                    .foregroundStyle(.red)
+                    .lineLimit(2)
+            }
         }
     }
 
@@ -297,7 +324,9 @@ struct SessionsView: View {
     ) -> some View {
         HStack(alignment: .center, spacing: 8) {
             VStack(alignment: .leading, spacing: 3) {
-                sessionRowLabel(session)
+                // Full row content, not just the label — search used to
+                // hide a busy session's progress and its error entirely.
+                rowContent(session)
                 Text(match.snippet)
                     .font(.caption2)
                     .foregroundStyle(.secondary)
@@ -397,7 +426,10 @@ private struct SessionRowStatus: View {
     var body: some View {
         if let activity = jobs.activity(for: sessionID) {
             if case .queuedRetranscribe = activity {
-                Label("Waiting to re-transcribe…", systemImage: "clock")
+                Label(jobs.finishingPreviousAttempt
+                        ? "Finishing the previous attempt…"
+                        : "Waiting to re-transcribe…",
+                      systemImage: "clock")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             } else if case .pausedForRecording = activity {
@@ -433,8 +465,13 @@ private struct SessionRowStatus: View {
         case .downloadingModel(let f):
             (String(localized: "Downloading AI model…"), f)
         case .summarizing(let done, let total):
-            (String(localized: "Summarizing…"),
-             total > 1 ? Double(done) / Double(total) : nil)
+            // The last step is the reduce — one long generation with no
+            // intermediate progress; name it instead of parking the bar
+            // one tick from the end.
+            (total > 1 && done >= total - 1
+                ? String(localized: "Finalizing summary…")
+                : String(localized: "Summarizing…"),
+             total > 1 && done < total - 1 ? Double(done) / Double(total) : nil)
         case .retranscribing(.transcribing(let f)):
             (String(localized: "Re-transcribing…"), f)
         case .retranscribing(.cleaningUpTranscript(let f)):
@@ -453,6 +490,12 @@ private struct SessionRowStatus: View {
             (String(localized: "Identifying speakers…"), f)
         case .importing(.translating(let f)):
             (String(localized: "Translating…"), f)
+        case .downloadingSpeakerModel(let f):
+            (String(localized: "Downloading speaker model…"), f)
+        case .retranscribing(.coolingDown), .importing(.coolingDown):
+            (String(localized: "Paused to cool down…"), nil)
+        case .preparing:
+            (String(localized: "Preparing…"), nil)
         case .queuedRetranscribe:
             (String(localized: "Waiting to re-transcribe…"), nil)
         case .pausedForRecording:

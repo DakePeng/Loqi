@@ -24,6 +24,7 @@ actor SenseVoiceFileTranscriber {
         sensitivity: MicSensitivity = .balanced,
         alreadyDecoded: [SessionRecord.ImportCheckpoint.Segment] = [],
         onSegmentComplete: (@MainActor @Sendable (SessionRecord.ImportCheckpoint.Segment) -> Void)? = nil,
+        onThermalPause: (@MainActor @Sendable () -> Void)? = nil,
         onProgress: @MainActor @Sendable (Double) -> Void
     ) async throws -> [Utterance] {
         guard SenseVoiceModelStore.isInstalled else {
@@ -57,6 +58,7 @@ actor SenseVoiceFileTranscriber {
             decoders: decoders,
             alreadyDecoded: alreadyDecoded,
             onSegmentComplete: onSegmentComplete,
+            onThermalPause: onThermalPause,
             onProgress: onProgress)
         logger.info("import: SenseVoice produced \(utterances.count) utterances from a \(poolSize)-decoder pool")
         return utterances
@@ -80,6 +82,7 @@ actor DolphinFileTranscriber {
         sensitivity: MicSensitivity = .balanced,
         alreadyDecoded: [SessionRecord.ImportCheckpoint.Segment] = [],
         onSegmentComplete: (@MainActor @Sendable (SessionRecord.ImportCheckpoint.Segment) -> Void)? = nil,
+        onThermalPause: (@MainActor @Sendable () -> Void)? = nil,
         onProgress: @MainActor @Sendable (Double) -> Void
     ) async throws -> [Utterance] {
         guard DolphinModelStore.isInstalled else {
@@ -106,6 +109,7 @@ actor DolphinFileTranscriber {
             decoders: decoders,
             alreadyDecoded: alreadyDecoded,
             onSegmentComplete: onSegmentComplete,
+            onThermalPause: onThermalPause,
             onProgress: onProgress)
         logger.info("import: Dolphin produced \(utterances.count) utterances from a \(poolSize)-decoder pool")
         return utterances
@@ -152,6 +156,7 @@ actor SenseVoiceFileTranscriber {
         sensitivity: MicSensitivity = .balanced,
         alreadyDecoded: [SessionRecord.ImportCheckpoint.Segment] = [],
         onSegmentComplete: (@MainActor @Sendable (SessionRecord.ImportCheckpoint.Segment) -> Void)? = nil,
+        onThermalPause: (@MainActor @Sendable () -> Void)? = nil,
         onProgress: @MainActor @Sendable (Double) -> Void
     ) async throws -> [Utterance] {
         throw SenseVoiceError.unavailableOnMac
@@ -166,6 +171,7 @@ actor DolphinFileTranscriber {
         sensitivity: MicSensitivity = .balanced,
         alreadyDecoded: [SessionRecord.ImportCheckpoint.Segment] = [],
         onSegmentComplete: (@MainActor @Sendable (SessionRecord.ImportCheckpoint.Segment) -> Void)? = nil,
+        onThermalPause: (@MainActor @Sendable () -> Void)? = nil,
         onProgress: @MainActor @Sendable (Double) -> Void
     ) async throws -> [Utterance] {
         throw DolphinError.unavailableOnMac

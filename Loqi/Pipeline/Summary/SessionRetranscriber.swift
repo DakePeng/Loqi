@@ -17,6 +17,9 @@ struct SessionRetranscriber {
         case cleaningUpTranscript(Double)
         case identifyingSpeakers(Double)
         case translating(Double)
+        /// Decode held at thermal .serious — progress is deliberately
+        /// frozen; ends with the next transcribing tick.
+        case coolingDown
     }
 
     enum RetranscribeError: LocalizedError {
@@ -118,17 +121,23 @@ struct SessionRetranscriber {
             backend: backend,
             sensitivity: sensitivity,
             alreadyDecoded: alreadyDecoded,
-            onSegmentComplete: onSegmentComplete
+            onSegmentComplete: onSegmentComplete,
+            onThermalPause: { onPhase(.coolingDown) }
         ) { fraction in
             onPhase(.transcribing(fraction))
         }
         guard !rawUtterances.isEmpty else { throw ImportError.nothingTranscribed }
-        // Drop punctuation-only finals (imports do the same) and
-        // reassemble VAD fragments into sentences — polish indices,
-        // entries, speaker inheritance, and translation all read this
-        // one array, so merging here keeps them aligned.
-        let utterances = UtteranceMerger.merge(
-            rawUtterances.filter { $0.text.hasSpeechContent })
+        // Drop punctuation-only finals (imports do the same), attribute
+        // speakers to the RAW utterances (inherited from the old record's
+        // labeled ranges), then merge speaker-aware — same order as
+        // imports, so pause-broken sentences heal and a speaker's
+        // consecutive sentences join without fusing turn changes. Polish,
+        // entries, and translation all read the merged array, aligned.
+        let spoken = rawUtterances.filter { $0.text.hasSpeechContent }
+        let (utterances, slots) = UtteranceMerger.mergeAttributed(
+            spoken,
+            slots: Self.inheritSpeakers(
+                for: spoken.map { ($0.start, $0.end) }, from: record))
         // All punctuation-only noise counts as nothing transcribed.
         guard !utterances.isEmpty else { throw ImportError.nothingTranscribed }
         logger.info("retranscribe: \(rawUtterances.count) raw -> \(utterances.count) merged utterances replace \(record.entries.count) entries")
@@ -146,13 +155,11 @@ struct SessionRetranscriber {
             matcher: hotwords?.matcher,
             onProgress: { onPhase(.cleaningUpTranscript($0)) })
 
-        let speakers = Self.inheritSpeakers(
-            for: utterances.map { ($0.start, $0.end) }, from: record)
         var entries = utterances.enumerated().map { index, utterance in
             SessionRecord.Entry(
                 sourceText: polished.texts[index],
                 translation: nil,
-                speaker: speakers[index],
+                speaker: slots[index],
                 direction: direction,
                 timestamp: record.startedAt.addingTimeInterval(utterance.start),
                 rawSourceText: polished.originals[index],
@@ -166,6 +173,8 @@ struct SessionRetranscriber {
                 entries[index].translation = try? await translator.draft(
                     entries[index].sourceText, direction: direction)
             }
+            // Terminal tick — the last per-entry emission was (n-1)/n.
+            onPhase(.translating(1))
         }
 
         var updated = record

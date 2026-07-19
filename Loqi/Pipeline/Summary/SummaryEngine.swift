@@ -432,7 +432,11 @@ struct SummaryEngine {
     static func hasSpokenSubstance(_ records: [SessionRecord.SummaryRecord]) -> Bool {
         records.contains { record in
             record.source != .photo && record.kind != .topic
-                && !record.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                // Scrubbed, not raw: an id-only record ("m004 m009 …") has
+                // non-empty raw text but no real content — it must not make
+                // the reduce invent a summary from noise.
+                && !PromptBuilder.strippedSourceIDTokens(record.text)
+                    .trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
         }
     }
 
@@ -1017,6 +1021,13 @@ enum SummaryRecordReducer {
         _ record: Record,
         usedKeys: inout [String]
     ) -> String? {
+        // Bail on the FINAL displayed text: a record whose text was nothing
+        // but source-id citations ("m004 m009 …") scrubs to empty here and
+        // must not render as a bare "- " bullet. dedupText isn't scrubbed,
+        // so its non-empty key alone couldn't catch this.
+        let display = displayText(record, includeSource: true)
+        guard !display.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        else { return nil }
         let key = SummaryEngine.dedupKey(dedupText(record))
         guard !key.isEmpty else { return nil }
         for prior in usedKeys
@@ -1025,7 +1036,7 @@ enum SummaryRecordReducer {
             return nil
         }
         usedKeys.append(key)
-        return displayText(record, includeSource: true)
+        return display
     }
 
     private static func cap(

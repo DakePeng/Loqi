@@ -821,11 +821,23 @@ struct SummaryEngineTests {
             "其中m004-007价格 80 元/斤") == "其中价格 80 元/斤")
         // Id-only content scrubs to empty (record then drops out).
         #expect(PromptBuilder.strippedSourceIDTokens("m005").isEmpty)
+        // Space-separated id RUNS scrub whole — the device screenshot bug:
+        // a whole "m004 m009 m003 …" list dumped into a detail bullet. The
+        // old regex stripped only every OTHER id (the trailing \s* ate each
+        // separator space, so the next id lost its required leading
+        // boundary) and the rest rendered as junk.
+        #expect(PromptBuilder.strippedSourceIDTokens(
+            "m004 m009 m003 m008 m004 m006 m001 m005 m002").isEmpty)
+        #expect(PromptBuilder.strippedSourceIDTokens(
+            "结论 m004 m009 m003 m008") == "结论")
         // Clean prose and lookalike words survive.
         #expect(PromptBuilder.strippedSourceIDTokens(
             "预算定为 42 万") == "预算定为 42 万")
         #expect(PromptBuilder.strippedSourceIDTokens(
             "team004 shipped a small fix") == "team004 shipped a small fix")
+        // A real word after an id run is kept (run ends at the non-id word).
+        #expect(PromptBuilder.strippedSourceIDTokens(
+            "m004 m009 完成付款") == "完成付款")
     }
 
     /// End to end: a record line whose text field carries copied ids

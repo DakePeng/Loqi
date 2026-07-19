@@ -103,21 +103,29 @@ actor RefinementQueue {
                 switch try await prompts.refineSentence(
                     job.source, language: job.language,
                     context: job.context, glossary: job.glossary,
+                    // Near-greedy, no repetition penalty: cleanup's correct
+                    // output is a copy of the input (which sits in the
+                    // penalty ring's prompt tail), so the default penalty
+                    // pushes the 230M to paraphrase; the fidelity gate
+                    // catches the loops the penalty existed for.
                     generate: { try await llm.generate(
-                        system: $0, user: $1, maxTokens: $2) }) {
+                        system: $0, user: $1, maxTokens: $2,
+                        temperature: 0.1, repetitionPenalty: nil,
+                        responsePrefix: PromptBuilder.refineResponsePrefix) }) {
                 case .cleaned(let cleaned):
                     outcome.cleanedSource = cleaned
                 case .unchanged:
                     break   // the model found no errors — draft stands
-                case .rejected(let raw):
+                case .rejected(let raw, let reason):
                     // Raw sentence stays; log the output so a model whose
                     // cleanups keep getting discarded (repetition, rewrite,
                     // garbled decode) is distinguishable from one that
-                    // never generated at all. .private: it derives from the
-                    // user's speech — visible while debugging in Xcode,
-                    // redacted in sysdiagnoses and Console.app.
+                    // never generated at all. The reason is metadata and
+                    // stays public; the output derives from the user's
+                    // speech — visible while debugging in Xcode, redacted
+                    // in sysdiagnoses and Console.app.
                     logger.warning(
-                        "refinement rejected, raw sentence kept: \(raw, privacy: .private)")
+                        "refinement rejected (\(reason, privacy: .public)), raw sentence kept: \(raw, privacy: .private)")
                 }
             } catch {
                 logger.warning(

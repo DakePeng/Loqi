@@ -417,6 +417,7 @@ actor LLMService {
         user: String,
         maxTokens: Int = 120,
         temperature: Float = 0.3,
+        repetitionPenalty: Float? = 1.15,
         responsePrefix: String? = nil
     ) async throws -> String {
         // Never begin Metal work from the background — it aborts the process.
@@ -456,6 +457,11 @@ actor LLMService {
                 }
                 // Repetition penalty is essential for small quantized models:
                 // without it they degenerate into "this, this, this…" loops.
+                // BUT the ring seeds from the prompt tail, so a copy-shaped
+                // task (sentence cleanup: correct output ≈ the input sitting
+                // right there in the prompt) is penalized for copying and
+                // pushed to paraphrase — those callers pass nil and rely on
+                // their fidelity gate to catch loops instead.
                 // The small prefill window bounds each un-gateable GPU burst
                 // to roughly a decode step, so the prefill gate can fire well
                 // inside the .inactive→.background transition even with the
@@ -464,7 +470,7 @@ actor LLMService {
                     maxTokens: maxTokens,
                     temperature: temperature,
                     topP: 0.9,
-                    repetitionPenalty: 1.15,
+                    repetitionPenalty: repetitionPenalty,
                     repetitionContextSize: 64,
                     prefillStepSize: 64)
 

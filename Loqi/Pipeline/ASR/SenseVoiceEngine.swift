@@ -40,6 +40,13 @@ actor SenseVoiceEngine: SpeechEngine {
     /// Forces a segment split when steady noise keeps the VAD open past
     /// what the partial cap already shows (see SpeechRunLimiter).
     private var runLimiter = SpeechRunLimiter(limit: maxUtteranceSamples)
+    /// VAD segment cap chosen at prepare(): finals-only (hybrid record
+    /// role) affords ~20s segments — each gets ONE decode at close and
+    /// Apple's volatile text masks the finalization wait. With partials
+    /// on, the whole growing utterance re-decodes every pulse, so 12s
+    /// stays the heat ceiling. (A mid-session degrade to partials keeps
+    /// the 20s cap; the utterance buffer still trims to 20s.)
+    private var vadMaxSpeechSeconds: Float = 12
 
     /// Cumulative wall time spent in SenseVoice decode this session (partial
     /// + final), the ASR counterpart to LLMService.generateActiveSeconds.
@@ -129,6 +136,7 @@ actor SenseVoiceEngine: SpeechEngine {
         // tolerates the smear. Preset changes mid-session restart the turn,
         // so prepare() always sees the current choice.
         let sensitivity = MicSensitivity.current
+        vadMaxSpeechSeconds = emitsPartials ? 12 : 20
         var vadConfig = sherpaOnnxVadModelConfig(
             sileroVad: sherpaOnnxSileroVadModelConfig(
                 model: SenseVoiceModelStore.fileURL("silero_vad.onnx").path,
@@ -138,7 +146,7 @@ actor SenseVoiceEngine: SpeechEngine {
                 windowSize: 512,
                 // Force a finalized segment mid-monologue so long speech
                 // doesn't postpone translation/refinement indefinitely.
-                maxSpeechDuration: 12),
+                maxSpeechDuration: vadMaxSpeechSeconds),
             sampleRate: Int32(Self.sampleRate),
             numThreads: 1)
         vad = SherpaOnnxVoiceActivityDetectorWrapper(
@@ -165,7 +173,10 @@ actor SenseVoiceEngine: SpeechEngine {
         speaking = false
         generation = 0
         samplesSincePartial = 0
-        runLimiter = SpeechRunLimiter(limit: Self.maxUtteranceSamples)
+        // 2× the VAD cap, mirroring the offline convention: the gate only
+        // tightens at the cap, so give it headroom before the hard flush.
+        runLimiter = SpeechRunLimiter(
+            limit: Int(vadMaxSpeechSeconds * 2) * Self.sampleRate)
         return events
     }
 
@@ -184,7 +195,7 @@ actor SenseVoiceEngine: SpeechEngine {
         // natural pause; speech re-detects on the very next window.
         if runLimiter.shouldSplit(
             isSpeech: vad.isSpeechDetected(), samples: samples.count) {
-            logger.warning("speech run hit \(Self.maxUtteranceSamples) samples; forcing VAD flush")
+            logger.warning("speech run hit \(self.runLimiter.limit) samples; forcing VAD flush")
             vad.flush()
         }
 

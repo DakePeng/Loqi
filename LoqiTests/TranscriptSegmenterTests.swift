@@ -274,6 +274,9 @@ struct UtteranceMergerTests {
         #expect(UtteranceMerger.joiner(between: "and then", and: "we left") == " ")
         // Mixed boundary gets a space.
         #expect(UtteranceMerger.joiner(between: "using G1", and: "です") == " ")
+        // Sentences joining across CJK terminal punctuation stay spaceless.
+        #expect(UtteranceMerger.joiner(between: "終わりました。", and: "次です") == "")
+        #expect(UtteranceMerger.joiner(between: "そうです！", and: "「はい」") == "")
     }
 
     @Test func mergeStopsAtBoundaries() {
@@ -326,5 +329,52 @@ struct UtteranceMergerTests {
         #expect(UtteranceMerger.merge([
             u("重なって", 0, 4), u("います。", 3.5, 6),
         ]).count == 1)
+    }
+
+    @Test func sameSpeakerHealsPauseBrokenSentence() {
+        // A 0.6s thinking pause closes the VAD segment; with both halves
+        // attributed to the same speaker the sentence heals — the case the
+        // blind merge can never fix (its gap sits below the VAD silence).
+        let (merged, slots) = UtteranceMerger.mergeAttributed([
+            u("会議の予算は", 0, 3), u("来年からです。", 3.6, 6),
+        ], slots: [0, 0])
+        #expect(merged.count == 1)
+        #expect(merged[0].text == "会議の予算は来年からです。")
+        #expect(slots == [0])
+    }
+
+    @Test func sameSpeakerSentencesJoinIntoParagraph() {
+        // Complete sentences from one speaker flow together (paragraph-
+        // shaped entries), still bounded by the duration/character caps.
+        let (merged, slots) = UtteranceMerger.mergeAttributed([
+            u("終わりました。", 0, 3), u("次の話です。", 3.8, 6),
+        ], slots: [1, 1])
+        #expect(merged.count == 1)
+        #expect(slots == [1])
+        // Beyond sameSpeakerGap they stay apart.
+        #expect(UtteranceMerger.mergeAttributed([
+            u("終わりました。", 0, 3), u("次の話です。", 5, 8),
+        ], slots: [1, 1]).utterances.count == 2)
+    }
+
+    @Test func differentOrUnknownSpeakersNeverFuse() {
+        // Different slots: no merge even at a cap-split-sized gap.
+        #expect(UtteranceMerger.mergeAttributed([
+            u("それで", 0, 3), u("続きです", 3.05, 6),
+        ], slots: [0, 1]).utterances.count == 2)
+        // Slot next to nil: no merge (attribution is uncertain there).
+        #expect(UtteranceMerger.mergeAttributed([
+            u("それで", 0, 3), u("続きです", 3.05, 6),
+        ], slots: [0, nil]).utterances.count == 2)
+        // nil/nil neighbors keep the conservative blind rules: a 0.6s
+        // pause still splits, a ~0 cap-split gap still heals.
+        #expect(UtteranceMerger.mergeAttributed([
+            u("それで", 0, 3), u("続きです", 3.6, 6),
+        ], slots: [nil, nil]).utterances.count == 2)
+        let (healed, healedSlots) = UtteranceMerger.mergeAttributed([
+            u("それで", 0, 3), u("続きです", 3.05, 6),
+        ], slots: [nil, nil])
+        #expect(healed.count == 1)
+        #expect(healedSlots == [nil])
     }
 }

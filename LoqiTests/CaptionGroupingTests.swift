@@ -65,6 +65,31 @@ struct CaptionGroupingTests {
     }
 }
 
+struct TranscriptParagraphsTests {
+    private func entry(_ text: String, at offset: TimeInterval) -> SessionRecord.Entry {
+        SessionRecord.Entry(
+            sourceText: text,
+            direction: LanguagePair(source: .japanese, target: .japanese),
+            timestamp: Date(timeIntervalSince1970: offset))
+    }
+
+    @Test func flowsUntilGapOrBudget() {
+        let paragraphs = TranscriptParagraphs.group([
+            entry("予算の話。", at: 0),
+            entry("続きです。", at: 10),
+            entry("再開します。", at: 100),   // past the 30s start gap
+        ])
+        #expect(paragraphs.count == 2)
+        #expect(TranscriptParagraphs.joined(
+            paragraphs[0].map(\.sourceText)) == "予算の話。続きです。")
+        // Character budget bounds a paragraph.
+        #expect(TranscriptParagraphs.group([
+            entry(String(repeating: "あ", count: 300), at: 0),
+            entry("続き", at: 5),
+        ]).count == 2)
+    }
+}
+
 struct CaptionRunGroupingTests {
     private func entry(
         _ text: String,
@@ -78,18 +103,22 @@ struct CaptionRunGroupingTests {
             createdAt: Date(timeIntervalSince1970: offset))
     }
 
-    @Test func unpunctuatedFragmentsJoinPunctuatedSplit() {
+    @Test func fragmentsAndSentencesFlowIntoOneParagraph() {
         let fragments = [
             entry("会議の予算は", at: 0),
             entry("来年からです。", at: 5),
             entry("次の議題。", at: 9),
         ]
         let runs = CaptionRunGrouping.runs(entries: fragments, lastEntryID: nil)
-        #expect(runs.count == 2)
-        #expect(runs[0].entries.count == 2)
+        #expect(runs.count == 1)
         #expect(runs[0].id == fragments[0].id)
-        #expect(runs[0].displayEntry.sourceText == "会議の予算は来年からです。")
-        #expect(runs[1].entries.count == 1)
+        #expect(runs[0].displayEntry.sourceText == "会議の予算は来年からです。次の議題。")
+    }
+
+    @Test func characterBudgetBoundsARun() {
+        let a = entry(String(repeating: "あ", count: 250), at: 0)
+        let b = entry("続きです", at: 5)
+        #expect(CaptionRunGrouping.runs(entries: [a, b], lastEntryID: nil).count == 2)
     }
 
     @Test func latestAndVolatileAlwaysRenderAlone() {
@@ -104,7 +133,7 @@ struct CaptionRunGroupingTests {
 
     @Test func joinGapBoundsARun() {
         let a = entry("間が空いた", at: 0)
-        let b = entry("続き", at: 20)   // beyond the 12s join gap
+        let b = entry("続き", at: 40)   // beyond the 30s join gap
         #expect(CaptionRunGrouping.runs(entries: [a, b], lastEntryID: nil).count == 2)
     }
 

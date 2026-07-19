@@ -484,7 +484,12 @@ final class CaptionPipeline {
             try await beginTurn(route: route)
         } catch {
             // Unwind everything beginSession set up, or a failed start
-            // leaks state for a session that doesn't exist.
+            // leaks state for a session that doesn't exist. That includes
+            // un-yielding the job center: yieldToRecording() above paused
+            // every post-hoc job, and with no recording there is no stop
+            // path to resume them — they'd stay wedged (drain held by
+            // pausedForRecording) until the next successful record cycle.
+            jobs.resumeAfterRecording()
             await recorder?.abort()
             recorder = nil
             sessionID = nil

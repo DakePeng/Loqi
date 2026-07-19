@@ -59,11 +59,18 @@ struct OfflineTranscriptPolisher {
         matcher: HotwordMatcher?,
         onProgress: (Double) -> Void
     ) async throws -> (output: Output, ranLLMCleanup: Bool) {
+        let refineModelDownloaded = LLMService.isDownloaded(
+            model: ModelCatalog.liveRefineModel)
         let runCleanup = llm != nil && shouldRunLLMCleanup(
             backend: backend,
             llmEnabled: llmEnabled,
-            refineModelDownloaded: LLMService.isDownloaded(
-                model: ModelCatalog.liveRefineModel))
+            refineModelDownloaded: refineModelDownloaded)
+        if !runCleanup {
+            // A silently-skipped cleanup is indistinguishable from a broken
+            // one from the outside — say which gate closed.
+            Logger(subsystem: "com.kunzhipeng.loqi", category: "offlinePolish")
+                .notice("offline cleanup skipped: llm=\(llm != nil) enabled=\(llmEnabled) refineModelDownloaded=\(refineModelDownloaded)")
+        }
         if runCleanup {
             onProgress(0)
             await llm?.setModel(ModelCatalog.liveRefineModel)
@@ -72,7 +79,13 @@ struct OfflineTranscriptPolisher {
             texts, language: language, runLLMCleanup: runCleanup,
             generate: { [llm] in
                 guard let llm else { throw LLMServiceError.modelNotLoaded }
-                return try await llm.generate(system: $0, user: $1, maxTokens: $2)
+                // Near-greedy, no repetition penalty — cleanup copies its
+                // input, which the penalty ring would punish (see the
+                // matching closure in RefinementQueue).
+                return try await llm.generate(
+                    system: $0, user: $1, maxTokens: $2,
+                    temperature: 0.1, repetitionPenalty: nil,
+                    responsePrefix: PromptBuilder.refineResponsePrefix)
             },
             onProgress: onProgress)
         return (output, runCleanup)
@@ -92,6 +105,10 @@ struct OfflineTranscriptPolisher {
         guard runLLMCleanup, !fixed.isEmpty else { return Output(texts: fixed) }
 
         var output = Output(texts: fixed)
+        // Outcome tally for the summary line below — the one number that
+        // says whether the cleanup pass is earning its keep.
+        var cleaned = 0, unchanged = 0, failed = 0
+        var rejections: [String: Int] = [:]
         for index in fixed.indices {
             try Task.checkCancellation()
             onProgress(Double(index) / Double(fixed.count))
@@ -105,22 +122,25 @@ struct OfflineTranscriptPolisher {
                     glossary: matcher?.noteGlossaryLines(
                         language: language, text: sentence) ?? [],
                     generate: generate) {
-                case .cleaned(let cleaned):
+                case .cleaned(let text):
+                    cleaned += 1
                     // Second fixup pass: the cleanup can drift a term the
                     // deterministic matcher knows how to spell.
-                    let final = fixup(cleaned, language: language)
+                    let final = fixup(text, language: language)
                     if final != sentence {
                         output.texts[index] = final
                         output.originals[index] = sentence
                     }
                 case .unchanged:
-                    break   // the model found no errors
-                case .rejected(let raw):
-                    // .private: the output derives from the user's speech;
-                    // Xcode's console still shows it while debugging, but
-                    // it stays out of sysdiagnoses and Console.app.
+                    unchanged += 1   // the model found no errors
+                case .rejected(let raw, let reason):
+                    // The reason ("parse", "similarity 0.41" …) is metadata
+                    // and stays public; the output derives from the user's
+                    // speech — visible in Xcode while debugging, redacted
+                    // in sysdiagnoses and Console.app.
+                    rejections[reason.split(separator: " ").first.map(String.init) ?? reason, default: 0] += 1
                     logger.warning(
-                        "offline cleanup rejected, fixed sentence kept: \(raw, privacy: .private)")
+                        "offline cleanup rejected (\(reason, privacy: .public)), fixed sentence kept: \(raw, privacy: .private)")
                 }
             } catch is CancellationError {
                 throw CancellationError()
@@ -134,10 +154,17 @@ struct OfflineTranscriptPolisher {
                 logger.info("offline cleanup aborted: not enough memory to load")
                 break
             } catch {
+                failed += 1
                 logger.warning(
                     "offline cleanup generate failed, fixed sentence kept: \(error.localizedDescription, privacy: .public)")
             }
         }
+        let rejectionSummary = rejections.isEmpty
+            ? "0"
+            : rejections.sorted { $0.value > $1.value }
+                .map { "\($0.key): \($0.value)" }.joined(separator: ", ")
+        logger.notice(
+            "offline cleanup: \(fixed.count) sentences — \(cleaned) cleaned, \(unchanged) unchanged, rejected [\(rejectionSummary, privacy: .public)], \(failed) failed")
         onProgress(1)
         return output
     }

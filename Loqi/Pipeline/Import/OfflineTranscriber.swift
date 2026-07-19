@@ -120,6 +120,7 @@ enum OfflineTranscriber {
         sensitivity: MicSensitivity = .balanced,
         alreadyDecoded: [SessionRecord.ImportCheckpoint.Segment] = [],
         onSegmentComplete: (@MainActor @Sendable (SessionRecord.ImportCheckpoint.Segment) -> Void)? = nil,
+        onThermalPause: (@MainActor @Sendable () -> Void)? = nil,
         onProgress: @escaping (Double) -> Void
     ) async throws -> [Utterance] {
         switch backend {
@@ -127,11 +128,13 @@ enum OfflineTranscriber {
             return try await transcribeWithDolphin(
                 url, sensitivity: sensitivity,
                 alreadyDecoded: alreadyDecoded, onSegmentComplete: onSegmentComplete,
+                onThermalPause: onThermalPause,
                 onProgress: onProgress)
         case .senseVoice:
             return try await transcribeWithSenseVoice(
                 url, language: language, sensitivity: sensitivity,
                 alreadyDecoded: alreadyDecoded, onSegmentComplete: onSegmentComplete,
+                onThermalPause: onThermalPause,
                 onProgress: onProgress)
         case .apple:
             // Header-only open — cheap; the analyzer streams the file.
@@ -150,13 +153,15 @@ enum OfflineTranscriber {
         sensitivity: MicSensitivity,
         alreadyDecoded: [SessionRecord.ImportCheckpoint.Segment] = [],
         onSegmentComplete: (@MainActor @Sendable (SessionRecord.ImportCheckpoint.Segment) -> Void)? = nil,
+        onThermalPause: (@MainActor @Sendable () -> Void)? = nil,
         onProgress: @escaping (Double) -> Void
     ) async throws -> [Utterance] {
         let samples = try await decodeMono16k(contentsOf: url)
         let transcriber = DolphinFileTranscriber()
         let utterances = try await transcriber.transcribe(
             samples16k: samples, sensitivity: sensitivity,
-            alreadyDecoded: alreadyDecoded, onSegmentComplete: onSegmentComplete
+            alreadyDecoded: alreadyDecoded, onSegmentComplete: onSegmentComplete,
+            onThermalPause: onThermalPause
         ) { fraction in
             onProgress(fraction)
         }
@@ -208,13 +213,15 @@ enum OfflineTranscriber {
         sensitivity: MicSensitivity,
         alreadyDecoded: [SessionRecord.ImportCheckpoint.Segment] = [],
         onSegmentComplete: (@MainActor @Sendable (SessionRecord.ImportCheckpoint.Segment) -> Void)? = nil,
+        onThermalPause: (@MainActor @Sendable () -> Void)? = nil,
         onProgress: @escaping (Double) -> Void
     ) async throws -> [Utterance] {
         let samples = try await decodeMono16k(contentsOf: url)
         let transcriber = SenseVoiceFileTranscriber(language: language)
         let utterances = try await transcriber.transcribe(
             samples16k: samples, sensitivity: sensitivity,
-            alreadyDecoded: alreadyDecoded, onSegmentComplete: onSegmentComplete
+            alreadyDecoded: alreadyDecoded, onSegmentComplete: onSegmentComplete,
+            onThermalPause: onThermalPause
         ) { fraction in
             onProgress(fraction)
         }

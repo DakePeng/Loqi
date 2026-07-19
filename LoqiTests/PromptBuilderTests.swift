@@ -45,8 +45,11 @@ struct PromptBuilderTests {
     @Test func sentenceRefineSystemPromptDemandsSentenceOnly() {
         let prompt = builder.sentenceRefineSystemPrompt(language: .chinese)
         #expect(prompt.contains("Chinese"))
-        #expect(prompt.contains("Output ONLY"))
-        #expect(prompt.contains("Never translate"))
+        #expect(prompt.contains("never translate"))
+        // The output format mirrors the response prefix the call sites
+        // pre-seed, so the model continues the tag the parser reads.
+        #expect(prompt.contains("\nS: <sentence>"))
+        #expect(PromptBuilder.refineResponsePrefix == "S: ")
     }
 
     @Test func sentenceRefineUserPromptCarriesSentenceContextAndGlossary() {
@@ -114,6 +117,59 @@ struct PromptBuilderTests {
     @Test func acceptableSentenceRefinementRejectsReplacementCharacters() {
         #expect(!builder.isAcceptableSentenceRefinement(
             "我们和志\u{FFFD}开会", original: "我们和志朋开会"))
+    }
+
+    @Test func rejectionReasonsNameTheFailingCheck() {
+        // A rejection log must say WHY: rewrite → similarity, glued-on
+        // explanation → length-ratio, garbled decode → broken-decode.
+        #expect(builder.sentenceRefinementRejection(
+            "今天天气很好啊", original: "我们明天开会")?.hasPrefix("similarity") == true)
+        // Truncated output (a maxTokens cut-off) → length-ratio.
+        #expect(builder.sentenceRefinementRejection(
+            "我们明天", original: "我们明天开会十点在会议室")?.hasPrefix("length-ratio") == true)
+        // A glued-on repetitive explanation trips the repetition check.
+        #expect(builder.sentenceRefinementRejection(
+            "我们明天开会" + String(repeating: "，这是因为", count: 10),
+            original: "我们明天开会") == "repetition")
+        #expect(builder.sentenceRefinementRejection(
+            "我们和志\u{FFFD}开会", original: "我们和志朋开会") == "broken-decode")
+        #expect(builder.sentenceRefinementRejection(
+            "我们和志鹏开会", original: "我们和志朋开会") == nil)
+    }
+
+    @Test func gateToleratesPunctuationAndMultiFixCleanups() {
+        // Dolphin finals carry no punctuation, so adding it is the
+        // cleanup's whole job there — comparison strips punctuation and
+        // the gate must always pass this.
+        #expect(builder.isAcceptableSentenceRefinement(
+            "我们明天开会，十点在会议室。", original: "我们明天开会十点在会议室"))
+        // Two homophone fixes in one short sentence stay above 0.55.
+        #expect(builder.isAcceptableSentenceRefinement(
+            "会议纪要发给志鹏看看", original: "会议既要发给志朋看看"))
+    }
+
+    @Test func refineSentenceParsesAnchoredOutputWithTrailingRamble() async throws {
+        // With the "S: " response prefix, the sentence rides line 1 and
+        // any assistant ramble lands on later lines the tag parse skips.
+        let result = try await builder.refineSentence(
+            "我们和志朋开会", language: .chinese, context: [], glossary: [],
+            generate: { _, _, _ in "S: 我们和志鹏开会\nLet me know if you'd like more!" })
+        #expect(result == .cleaned("我们和志鹏开会"))
+        // Repeating the sentence exactly reads as "no errors".
+        let unchanged = try await builder.refineSentence(
+            "我们明天开会", language: .chinese, context: [], glossary: [],
+            generate: { _, _, _ in "S: 我们明天开会" })
+        #expect(unchanged == .unchanged)
+    }
+
+    @Test func refineSentenceReportsParseRejections() async throws {
+        // Two content lines can't be trusted as one sentence: the raw
+        // text is kept and the reason says PARSE, not a fidelity check.
+        let raw = "我们明天开会\n没有其他修改"
+        let result = try await builder.refineSentence(
+            "我们明天开会", language: .chinese, context: [], glossary: [],
+            generate: { _, _, _ in raw })
+        #expect(result == .rejected(raw: raw, reason: "parse"))
     }
 
     @Test func parseRefinedSentenceToleratesTagAndUntagged() {

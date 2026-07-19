@@ -132,11 +132,27 @@ struct PromptBuilder: Sendable {
     /// Fidelity gate for the restore: a sentence that diverges beyond a
     /// term swap is a false record — worse than a misheard true one.
     func isAcceptableHotwordRestore(_ restored: String, original: String) -> Bool {
-        guard !restored.isEmpty, !Self.hasDegenerateRepetition(restored) else { return false }
+        hotwordRestoreRejection(restored, original: original) == nil
+    }
+
+    /// Which check refused `restored` (nil = acceptable), with the failing
+    /// score — so a log full of rejections says WHY: a model that rewrites
+    /// (similarity), truncates (length-ratio), or loops (repetition) each
+    /// need a different fix. The Bool gates wrap this, so accept/reject
+    /// can never drift from the diagnostic.
+    func hotwordRestoreRejection(_ restored: String, original: String) -> String? {
+        if restored.isEmpty { return "empty" }
+        if Self.hasDegenerateRepetition(restored) { return "repetition" }
         let ratio = Double(restored.count) / Double(max(original.count, 1))
-        guard ratio >= 0.5, ratio <= 1.6 else { return false }
-        return HotwordMatcher.similarity(
-            Self.comparisonForm(restored), Self.comparisonForm(original)) >= 0.55
+        if ratio < 0.5 || ratio > 1.6 {
+            return "length-ratio \(String(format: "%.2f", ratio))"
+        }
+        let similarity = HotwordMatcher.similarity(
+            Self.comparisonForm(restored), Self.comparisonForm(original))
+        if similarity < 0.55 {
+            return "similarity \(String(format: "%.2f", similarity))"
+        }
+        return nil
     }
 
     private static func comparisonForm(_ text: String) -> String {
@@ -149,10 +165,21 @@ struct PromptBuilder: Sendable {
     /// the offline polisher, and the prompt trimming all read this.
     static let refineContextLimit = 3
     /// Output ≈ input sentence; sized so merged offline sentences (up to
-    /// ~20s of CJK via UtteranceMerger) still fit — an over-budget
-    /// generation gets truncated and the fidelity gate then silently
-    /// keeps the raw text, which reads as "cleanup never runs".
-    static let refineMaxTokens = 220
+    /// 200 chars of CJK via UtteranceMerger's paragraph joining) still
+    /// fit — an over-budget generation gets truncated and the fidelity
+    /// gate then silently keeps the raw text, which reads as "cleanup
+    /// never runs".
+    static let refineMaxTokens = 256
+
+    /// Pre-seeded assistant opening for cleanup generations (see
+    /// `LLMService.generate(responsePrefix:)`). The 230M left to choose
+    /// its own opening echoes the instructions or narrates ("Here is the
+    /// corrected sentence: …") — a device pass rejected 66/66 sentences
+    /// that way. Anchored to the parser's "S:" tag, the model can only
+    /// continue with the sentence itself, and any trailing ramble lands
+    /// on later lines the tag parse ignores. Call sites that build a
+    /// generate closure for `refineSentence` must pass this prefix.
+    static let refineResponsePrefix = "S: "
 
     /// One sentence through the full cleanup contract — prompt, generate,
     /// parse, fidelity gate — shared by the live RefinementQueue and the
@@ -162,8 +189,9 @@ struct PromptBuilder: Sendable {
         case cleaned(String)
         /// The model says the sentence has no errors.
         case unchanged
-        /// Parse or fidelity-gate failure; raw output for the caller's log.
-        case rejected(raw: String)
+        /// Parse or fidelity-gate failure; raw output for the caller's
+        /// log, plus which check refused it ("parse", "similarity 0.41" …).
+        case rejected(raw: String, reason: String)
     }
 
     func refineSentence(
@@ -179,26 +207,30 @@ struct PromptBuilder: Sendable {
                 sentence: sentence, language: language,
                 context: context, glossary: glossary),
             Self.refineMaxTokens)
-        guard let cleaned = parseRefinedSentence(raw),
-              isAcceptableSentenceRefinement(cleaned, original: sentence)
-        else { return .rejected(raw: raw) }
+        guard let cleaned = parseRefinedSentence(raw) else {
+            return .rejected(raw: raw, reason: "parse")
+        }
+        if let reason = sentenceRefinementRejection(cleaned, original: sentence) {
+            return .rejected(raw: raw, reason: reason)
+        }
         return cleaned == sentence ? .unchanged : .cleaned(cleaned)
     }
 
     /// Live transcript cleanup: the LLM fixes recognition errors in the
     /// source sentence; Apple's Translation framework re-translates the
     /// result. Monolingual by design — a task even the 230M tier can do,
-    /// unlike translation refinement or structured output.
+    /// unlike translation refinement or structured output. Kept SHORT and
+    /// single-format on purpose: the 230M echoes long instruction lists
+    /// back as its answer (the "Misheard words, homophone errors…"
+    /// rejection flood), and the "S:" line mirrors `refineResponsePrefix`.
     func sentenceRefineSystemPrompt(language: AppLanguage) -> String {
         """
-        You correct speech-recognition errors in a live \(language.promptName) \
-        transcript. Fix only clear recognition mistakes in the sentence: misheard \
-        words, homophone errors, garbled fragments, and missing or wrong \
-        punctuation. Use the earlier lines and the vocabulary list to resolve \
-        names and terms. Never translate, never rephrase wording that is already \
-        correct, never add or remove information. If the sentence has no errors, \
-        output it unchanged. Output ONLY the corrected \(language.promptName) \
-        sentence, nothing else — no labels, no quotes, no explanation.
+        Fix speech-recognition errors in one \(language.promptName) sentence: \
+        misheard words, homophones, missing or wrong punctuation. Stay in \
+        \(language.promptName) — never translate, never rephrase correct \
+        wording, never explain. If the sentence has no errors, repeat it \
+        exactly. Output exactly one line and nothing else:
+        S: <sentence>
         """
     }
 
@@ -252,8 +284,15 @@ struct PromptBuilder: Sendable {
     /// repetition) plus the broken-decode check the old translation gate
     /// had. A rewrite is a false record — worse than a misheard true one.
     func isAcceptableSentenceRefinement(_ cleaned: String, original: String) -> Bool {
-        guard cleaned.unicodeScalars.allSatisfy({ $0 != "\u{FFFD}" }) else { return false }
-        return isAcceptableHotwordRestore(cleaned, original: original)
+        sentenceRefinementRejection(cleaned, original: original) == nil
+    }
+
+    /// Reason variant of the gate above; nil = acceptable.
+    func sentenceRefinementRejection(_ cleaned: String, original: String) -> String? {
+        guard cleaned.unicodeScalars.allSatisfy({ $0 != "\u{FFFD}" }) else {
+            return "broken-decode"
+        }
+        return hotwordRestoreRejection(cleaned, original: original)
     }
 
     /// Defensive cleanup: strip any thinking block the chat template let
@@ -322,7 +361,13 @@ struct PromptBuilder: Sendable {
         guard text.contains("m") else { return text }
         // Swift Regex has no lookbehind: capture the preceding non-letter
         // (if any) and re-emit it, so words like "team004" stay intact.
-        let idRun = /(?:^|([^A-Za-z]))m\d{2,4}(?:\s*[-–—~,，、]\s*m?\d{1,4})*\s*[:：]?\s*/
+        // The continuation alternatives cover both range citations
+        // ("m004-005") AND whitespace-separated runs ("m004 m009 m003…"),
+        // which the model sometimes dumps whole into a text field. Without
+        // the `\s+m\d` alternative, the trailing `\s*` consumed each
+        // separator space, so the next id's required leading non-letter
+        // was gone and every OTHER id leaked through, rendering as junk.
+        let idRun = /(?:^|([^A-Za-z]))m\d{2,4}(?:\s*[-–—~,，、]\s*m?\d{1,4}|\s+m\d{2,4})*\s*[:：]?\s*/
         var cleaned = text.replacing(idRun) { match in
             match.output.1.map(String.init) ?? ""
         }

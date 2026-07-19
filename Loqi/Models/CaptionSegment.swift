@@ -8,7 +8,11 @@ struct CaptionSegment: Identifiable, Equatable {
 }
 
 enum CaptionGrouping {
-    static let defaultGap: TimeInterval = 12
+    /// createdAt is FINALIZE time, so in continuous speech consecutive
+    /// finals are one whole segment apart (pause + up-to-20s of speech +
+    /// decode). Must exceed the hybrid VAD cap or every cap-split segment
+    /// starts a new card.
+    static let defaultGap: TimeInterval = 30
     static let defaultMaxEntries = 4
 
     static func segments(
@@ -37,10 +41,10 @@ enum CaptionGrouping {
 }
 
 /// One rendered paragraph inside a segment card: consecutive finalized
-/// fragments of the same sentence (VAD cuts at pauses and the 12s cap),
-/// joined for DISPLAY only. Store entries and every entry id are
-/// untouched — the live data path (refinement keying, journal, note
-/// anchors) never sees this.
+/// fragments of the same stretch of speech (VAD cuts at pauses and the
+/// segment cap), joined for DISPLAY only. Store entries and every entry
+/// id are untouched — the live data path (refinement keying, journal,
+/// note anchors) never sees this.
 struct CaptionRun: Identifiable, Equatable {
     /// First fragment's id — stable across updates, and identical to the
     /// segment id for the first run (scroll anchoring keeps resolving).
@@ -82,23 +86,66 @@ struct CaptionRun: Identifiable, Equatable {
     }
 }
 
+/// Flows a saved session's one-sentence entries into paragraph rows for
+/// the transcript view. Display only — the record's entries are untouched,
+/// so seek offsets, refinement keys, and summary anchors all keep working.
+/// Mainly benefits live-recorded sessions, whose archived entries are raw
+/// VAD fragments (offline passes already merge speaker-aware).
+enum TranscriptParagraphs {
+    static let maxCharacters = 300
+    /// Start-to-start bound between entries: they carry no end time, so
+    /// this delta includes the previous entry's whole duration (≤20s
+    /// span) — 30s therefore means a real lull, not just a long entry.
+    static let maxStartGap: TimeInterval = 30
+
+    static func group(_ entries: [SessionRecord.Entry]) -> [[SessionRecord.Entry]] {
+        var paragraphs: [[SessionRecord.Entry]] = []
+        for entry in entries {
+            if var last = paragraphs.last, let previous = last.last,
+               entry.timestamp.timeIntervalSince(previous.timestamp) <= maxStartGap,
+               last.reduce(entry.sourceText.count, { $0 + $1.sourceText.count })
+                   <= maxCharacters {
+                last.append(entry)
+                paragraphs[paragraphs.count - 1] = last
+            } else {
+                paragraphs.append([entry])
+            }
+        }
+        return paragraphs
+    }
+
+    /// CJK-aware join of the paragraph's texts.
+    static func joined(_ texts: [String]) -> String {
+        texts.dropFirst().reduce(texts.first ?? "") {
+            $0 + UtteranceMerger.joiner(between: $0, and: $1) + $1
+        }
+    }
+}
+
 enum CaptionRunGrouping {
     /// createdAt is FINALIZE time, so consecutive finals are separated by
-    /// the next fragment's whole duration (pause + up-to-12s of speech),
-    /// not the audio gap. Punctuation is the real join signal; this gap
-    /// only mirrors the card-grouping bound so a run can't span a lull
-    /// the card itself would have split on.
+    /// the next fragment's whole duration (pause + up-to-20s of speech),
+    /// not the audio gap. This gap only mirrors the card-grouping bound
+    /// so a run can't span a lull the card itself would have split on.
     static let defaultJoinGap: TimeInterval = CaptionGrouping.defaultGap
+
+    /// Paragraph budget for one run. Terminal punctuation can't gate
+    /// joining here: SenseVoice punctuates aggressively (a cut fragment
+    /// often reads as a finished sentence), Dolphin finals carry no
+    /// punctuation at all. Sentences flow into one paragraph until the
+    /// joined source text hits this budget.
+    static let defaultMaxCharacters = 250
 
     /// An entry joins the previous run when: neither it nor the previous
     /// entry is volatile, neither is `lastEntryID` (the live entry always
     /// renders alone — big-type styling and follow anchoring stay
-    /// per-entry), the previous fragment's text lacks terminal
-    /// punctuation, and the createdAt gap is ≤ `joinGap`.
+    /// per-entry), the joined text stays within `maxCharacters`, and the
+    /// createdAt gap is ≤ `joinGap`.
     static func runs(
         entries: [CaptionEntry],
         lastEntryID: UUID?,
-        joinGap: TimeInterval = defaultJoinGap
+        joinGap: TimeInterval = defaultJoinGap,
+        maxCharacters: Int = defaultMaxCharacters
     ) -> [CaptionRun] {
         var runs: [CaptionRun] = []
         for entry in entries {
@@ -108,7 +155,8 @@ enum CaptionRunGrouping {
                entry.state != .volatile,
                previous.id != lastEntryID,
                entry.id != lastEntryID,
-               !UtteranceMerger.endsSentence(previous.sourceText),
+               last.entries.reduce(entry.sourceText.count, { $0 + $1.sourceText.count })
+                   <= maxCharacters,
                entry.createdAt.timeIntervalSince(previous.createdAt) <= joinGap {
                 last.entries.append(entry)
                 runs[runs.count - 1] = last

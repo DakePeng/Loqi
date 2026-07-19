@@ -219,6 +219,10 @@ struct SessionRecord: Identifiable, Codable, Sendable {
     /// once the transcript is complete (`importing` flips to false/nil in
     /// the same write).
     var importCheckpoint: ImportCheckpoint?
+    /// Why the last import attempt failed, persisted so the failure
+    /// survives relaunch (the failed placeholder used to vanish silently
+    /// at the next launch sweep). Cleared by dismissal or a retry.
+    var importError: String?
     /// A summary that was requested but hasn't completed. Persisted so a
     /// summary killed mid-run (jetsam, or the uncatchable background-GPU
     /// abort) restarts at next launch instead of silently vanishing — the

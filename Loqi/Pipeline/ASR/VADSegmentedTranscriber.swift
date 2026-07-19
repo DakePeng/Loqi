@@ -88,10 +88,15 @@ enum VADSegmentedTranscriber {
     /// Sleep-poll until the SoC cools below `.serious`. Cancellation
     /// propagates through `Task.sleep`, so a cancelled import/re-transcribe
     /// stops promptly even mid-hold. In-flight decodes finish naturally;
-    /// only new segments wait.
-    private static func waitWhileThermallyLimited() async throws {
+    /// only new segments wait. `onThermalPause` fires once when the hold
+    /// begins so the UI can say "cooling down" instead of freezing a bar
+    /// that reads as a hang; the next progress tick ends the state.
+    private static func waitWhileThermallyLimited(
+        onThermalPause: (@MainActor @Sendable () -> Void)?
+    ) async throws {
         guard shouldHoldForThermals(ProcessInfo.processInfo.thermalState) else { return }
         logger.notice("offline decode paused: thermal state serious")
+        await onThermalPause?()
         repeat {
             try await Task.sleep(for: thermalPollInterval)
         } while shouldHoldForThermals(ProcessInfo.processInfo.thermalState)
@@ -136,6 +141,7 @@ enum VADSegmentedTranscriber {
         decoders: [@Sendable ([Float]) async -> String],
         alreadyDecoded: [SessionRecord.ImportCheckpoint.Segment] = [],
         onSegmentComplete: (@MainActor @Sendable (SessionRecord.ImportCheckpoint.Segment) -> Void)? = nil,
+        onThermalPause: (@MainActor @Sendable () -> Void)? = nil,
         onProgress: @MainActor @Sendable (Double) -> Void
     ) async throws -> [Utterance] {
         precondition(!decoders.isEmpty, "need at least one decoder")
@@ -190,7 +196,7 @@ enum VADSegmentedTranscriber {
                     results[index] = [Utterance(text: text, start: s, end: e)]
                     return
                 }
-                try await waitWhileThermallyLimited()
+                try await waitWhileThermallyLimited(onThermalPause: onThermalPause)
                 if free.isEmpty { try await harvestOne() }
                 let slot = free.removeLast()
                 group.addTask {
@@ -219,7 +225,11 @@ enum VADSegmentedTranscriber {
                     try await dispatch(segmentSamples, start: segmentStart, index: discovered)
                     discovered += 1
                 }
-                await onProgress(Double(offset) / Double(total))
+                // Cap at 99%: this measures samples FED to the VAD, and the
+                // last in-flight decodes + the EOF-flush segment can run for
+                // minutes after the final feed — a full bar that isn't done
+                // reads as a hang. The drain below emits the real 1.
+                await onProgress(min(0.99, Double(offset) / Double(total)))
             }
             // Close any segment still open at EOF so the last words aren't lost.
             vad.flush()

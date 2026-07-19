@@ -1,12 +1,6 @@
 {
   "sourceLanguage" : "en",
   "strings" : {
-    "Replaces the transcript with a fresh transcription of the recording. AI features are off, so it skips cleanup and doesn't re-summarize." : {
-      "localizations" : {
-        "ja" : { "stringUnit" : { "state" : "translated", "value" : "録音を新しく文字起こしし直して置き換えます。AI機能はオフのため、クリーンアップは行わず、要約もし直しません。" } },
-        "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "用录音的全新转写替换文字稿。AI 功能已关闭，因此跳过清理，也不会重新生成摘要。" } }
-      }
-    },
     "· %@" : {
 
     },
@@ -495,6 +489,7 @@
       }
     },
     "Applies to this session and becomes the default for new recordings. If a summary exists, it's rewritten in the new style." : {
+      "extractionState" : "stale",
       "localizations" : {
         "ja" : {
           "stringUnit" : {
@@ -2318,6 +2313,9 @@
         }
       }
     },
+    "Finalizing summary…" : {
+
+    },
     "Finals model" : {
       "localizations" : {
         "ja" : {
@@ -2517,6 +2515,7 @@
       }
     },
     "How much detail the summary keeps. Applies to this session and becomes the default for new recordings." : {
+      "extractionState" : "stale",
       "localizations" : {
         "ja" : {
           "stringUnit" : {
@@ -3169,6 +3168,22 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "拾音范围"
+          }
+        }
+      }
+    },
+    "Mic pickup should match how the recording was made — pick a wider setting if distant speakers were missed. Runs much faster than the recording length. Everything stays on this iPhone." : {
+      "localizations" : {
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "マイクの拾い方は録音時の設定に合わせてください — 遠くの話者が抜けていた場合は広めの設定を選びます。録音の長さよりずっと速く完了し、すべてこの iPhone 上で処理されます。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "麦克风拾音应与录音时的设置一致 — 若漏掉了较远的说话人，请选择更广的档位。远快于录音时长，全部在这台 iPhone 上完成。"
           }
         }
       }
@@ -3959,6 +3974,9 @@
         }
       }
     },
+    "Preparing…" : {
+
+    },
     "Private on-device voice notes, transcripts and summaries — with live translation." : {
       "localizations" : {
         "ja" : {
@@ -4472,6 +4490,22 @@
         }
       }
     },
+    "Replaces the transcript with a fresh transcription of the recording. AI features are off, so it skips cleanup and doesn't re-summarize." : {
+      "localizations" : {
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "録音を新しく文字起こしし直して置き換えます。AI機能はオフのため、クリーンアップは行わず、要約もし直しません。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "用录音的全新转写替换文字稿。AI 功能已关闭，因此跳过清理，也不会重新生成摘要。"
+          }
+        }
+      }
+    },
     "Reset voice profiles" : {
       "extractionState" : "stale",
       "localizations" : {
@@ -4521,12 +4555,6 @@
             "value" : "会议室"
           }
         }
-      }
-    },
-    "Mic pickup should match how the recording was made — pick a wider setting if distant speakers were missed. Runs much faster than the recording length. Everything stays on this iPhone." : {
-      "localizations" : {
-        "ja" : { "stringUnit" : { "state" : "translated", "value" : "マイクの拾い方は録音時の設定に合わせてください — 遠くの話者が抜けていた場合は広めの設定を選びます。録音の長さよりずっと速く完了し、すべてこの iPhone 上で処理されます。" } },
-        "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "麦克风拾音应与录音时的设置一致 — 若漏掉了较远的说话人，请选择更广的档位。远快于录音时长，全部在这台 iPhone 上完成。" } }
       }
     },
     "Same language selected: the recording will be transcribed without translation." : {
@@ -5674,6 +5702,7 @@
       }
     },
     "Summary options" : {
+      "extractionState" : "stale",
       "localizations" : {
         "ja" : {
           "stringUnit" : {
@@ -6546,6 +6575,7 @@
       }
     },
     "Will be identified" : {
+      "extractionState" : "stale",
       "localizations" : {
         "ja" : {
           "stringUnit" : {
