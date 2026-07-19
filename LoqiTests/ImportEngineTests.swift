@@ -276,13 +276,30 @@ struct ImportEngineTests {
             segments: segments(20), speakerCount: 4))
     }
 
-    @Test func thermalHoldTriggersAtSeriousAndAbove() {
-        // Below .serious the batch pass runs; at .serious+ it holds so the
-        // SoC cools instead of grinding through OS throttling.
+    @Test func thermalHardHoldOnlyAtCritical() {
+        // .serious no longer hard-stops (it degrades to one decoder — see
+        // the cap test); only .critical, where iOS starts killing apps,
+        // holds the loop entirely.
         #expect(!VADSegmentedTranscriber.shouldHoldForThermals(.nominal))
         #expect(!VADSegmentedTranscriber.shouldHoldForThermals(.fair))
-        #expect(VADSegmentedTranscriber.shouldHoldForThermals(.serious))
+        #expect(!VADSegmentedTranscriber.shouldHoldForThermals(.serious))
         #expect(VADSegmentedTranscriber.shouldHoldForThermals(.critical))
+    }
+
+    @Test func thermalConcurrencyDegradesAtSerious() {
+        // Cool → full pool; warm (.serious) → a single decoder so decode
+        // still progresses at lower heat instead of stalling.
+        #expect(VADSegmentedTranscriber.thermalConcurrencyCap(
+            poolSize: 3, state: .nominal) == 3)
+        #expect(VADSegmentedTranscriber.thermalConcurrencyCap(
+            poolSize: 3, state: .fair) == 3)
+        #expect(VADSegmentedTranscriber.thermalConcurrencyCap(
+            poolSize: 3, state: .serious) == 1)
+        #expect(VADSegmentedTranscriber.thermalConcurrencyCap(
+            poolSize: 3, state: .critical) == 1)
+        // Never below one, even from a degenerate pool.
+        #expect(VADSegmentedTranscriber.thermalConcurrencyCap(
+            poolSize: 0, state: .nominal) == 1)
     }
 
     @Test func cachedTextMatchesOnlyExactRange() {

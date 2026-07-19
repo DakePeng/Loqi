@@ -75,17 +75,31 @@ enum VADSegmentedTranscriber {
     static let maxDecoderPool = 3
 
     /// True when the batch pass should hold before starting another
-    /// segment: at sustained `.serious` iOS throttles the whole SoC, so
-    /// pausing cools faster AND wastes less than grinding on. Pure for
-    /// testing.
+    /// HARD stop only at `.critical` — the level where iOS starts killing
+    /// apps and the device is close to a protective shutdown. At `.serious`
+    /// we DON'T stop; we degrade to a single decoder (see
+    /// `thermalConcurrencyCap`), which cuts heat while decode still makes
+    /// progress. Grinding the full pool at `.serious` buys little — the SoC
+    /// is already throttled — but a full stall there froze the bar. Pure
+    /// for testing.
     static func shouldHoldForThermals(_ state: ProcessInfo.ThermalState) -> Bool {
-        state >= .serious
+        state >= .critical
+    }
+
+    /// How many decoders may run in parallel at `state`: the full pool when
+    /// cool, but ONE at `.serious` (and above) — fewer parallel ONNX
+    /// sessions is the main heat lever, and running one keeps the transcript
+    /// advancing instead of freezing. Pure for testing.
+    static func thermalConcurrencyCap(
+        poolSize: Int, state: ProcessInfo.ThermalState
+    ) -> Int {
+        state >= .serious ? 1 : max(1, poolSize)
     }
 
     /// How often a held decode re-checks the thermal state.
     static let thermalPollInterval: Duration = .seconds(15)
 
-    /// Sleep-poll until the SoC cools below `.serious`. Cancellation
+    /// Sleep-poll until the SoC drops below `.critical`. Cancellation
     /// propagates through `Task.sleep`, so a cancelled import/re-transcribe
     /// stops promptly even mid-hold. In-flight decodes finish naturally;
     /// only new segments wait. `onThermalPause` fires once when the hold
@@ -95,7 +109,7 @@ enum VADSegmentedTranscriber {
         onThermalPause: (@MainActor @Sendable () -> Void)?
     ) async throws {
         guard shouldHoldForThermals(ProcessInfo.processInfo.thermalState) else { return }
-        logger.notice("offline decode paused: thermal state serious")
+        logger.notice("offline decode paused: thermal state critical")
         await onThermalPause?()
         repeat {
             try await Task.sleep(for: thermalPollInterval)
@@ -197,7 +211,13 @@ enum VADSegmentedTranscriber {
                     return
                 }
                 try await waitWhileThermallyLimited(onThermalPause: onThermalPause)
-                if free.isEmpty { try await harvestOne() }
+                // Cap in-flight decodes to the thermal budget: the full pool
+                // when cool, one at `.serious` (drain the rest first). Harvest
+                // down to the cap before taking a slot.
+                let cap = Self.thermalConcurrencyCap(
+                    poolSize: decoders.count,
+                    state: ProcessInfo.processInfo.thermalState)
+                while (decoders.count - free.count) >= cap { try await harvestOne() }
                 let slot = free.removeLast()
                 group.addTask {
                     let utterances = await decodeSegment(
