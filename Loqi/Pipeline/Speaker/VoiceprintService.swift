@@ -134,6 +134,13 @@ actor VoiceprintService {
         // value as ignored), so the practical bound is checking before
         // it starts.
         try Task.checkCancellation()
+        // The first sherpa pass (whole-file pyannote segmentation) reports
+        // NO progress before the embedding sweep begins, so a long file
+        // sits at 0% — worse under the thermal throttle that follows a
+        // transcription. Log the thermal state + duration so a "stuck at
+        // 0%" report is diagnosable as slow-vs-hung.
+        Self.logger.notice("diarize: analysis starting, thermal=\(String(describing: ProcessInfo.processInfo.thermalState), privacy: .public)")
+        let clock = ContinuousClock.now
         let raw = await withCheckedContinuation { continuation in
             DispatchQueue.global(qos: .userInitiated).async {
                 continuation.resume(returning: diarizer.process(samples: samples) { done, total in
@@ -142,6 +149,7 @@ actor VoiceprintService {
             }
         }
         try Task.checkCancellation()
+        Self.logger.notice("diarize: analysis took \(clock.duration(to: .now).components.seconds)s")
 
         var slotByID: [Int: Int] = [:]
         let segments = raw.map { segment in

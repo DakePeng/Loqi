@@ -386,6 +386,24 @@ struct SessionDetailView: View {
         }
     }
 
+    /// Speaker diarization reports NO progress during its first pass
+    /// (whole-file segmentation), only during the later embedding sweep —
+    /// so a 0% determinate bar sits frozen for the segmentation window
+    /// (minutes on a long/throttled file). Show it's working instead;
+    /// switch to a real bar once fractions arrive.
+    @ViewBuilder
+    private func speakerProgress(_ fraction: Double) -> some View {
+        if fraction <= 0 {
+            HStack(spacing: 8) {
+                ProgressView()
+                Text("Identifying speakers…").foregroundStyle(.secondary)
+            }
+        } else {
+            PercentProgressRow(
+                label: "Identifying speakers…", fraction: fraction, detail: remainingText)
+        }
+    }
+
     /// Progress row matching the job's current stage.
     @ViewBuilder
     private var jobProgressRow: some View {
@@ -399,8 +417,7 @@ struct SessionDetailView: View {
             PercentProgressRow(
                 label: "Cleaning up transcript…", fraction: fraction, detail: remainingText)
         case .retranscribing(.identifyingSpeakers(let fraction)):
-            PercentProgressRow(
-                label: "Identifying speakers…", fraction: fraction, detail: remainingText)
+            speakerProgress(fraction)
         case .retranscribing(.translating(let fraction)):
             PercentProgressRow(
                 label: "Translating…", fraction: fraction, detail: remainingText)
@@ -415,9 +432,7 @@ struct SessionDetailView: View {
                 label: "Downloading speaker model…", fraction: fraction,
                 detail: remainingText)
         case .importing(.identifyingSpeakers(let fraction)):
-            PercentProgressRow(
-                label: "Identifying speakers…", fraction: fraction,
-                detail: remainingText)
+            speakerProgress(fraction)
         case .importing(.translating(let fraction)):
             PercentProgressRow(
                 label: "Translating…", fraction: fraction, detail: remainingText)

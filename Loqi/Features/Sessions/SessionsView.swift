@@ -477,7 +477,9 @@ private struct SessionRowStatus: View {
         case .retranscribing(.cleaningUpTranscript(let f)):
             (String(localized: "Cleaning up transcript…"), f)
         case .retranscribing(.identifyingSpeakers(let f)):
-            (String(localized: "Identifying speakers…"), f)
+            // nil at 0: the segmentation pass reports no progress, so an
+            // indeterminate bar is honest where a stuck 0% reads as frozen.
+            (String(localized: "Identifying speakers…"), f > 0 ? f : nil)
         case .retranscribing(.translating(let f)):
             (String(localized: "Translating…"), f)
         case .importing(.transcribing(let f)):
@@ -487,7 +489,7 @@ private struct SessionRowStatus: View {
         case .importing(.fetchingSpeakerModel(let f)):
             (String(localized: "Downloading speaker model…"), f)
         case .importing(.identifyingSpeakers(let f)):
-            (String(localized: "Identifying speakers…"), f)
+            (String(localized: "Identifying speakers…"), f > 0 ? f : nil)
         case .importing(.translating(let f)):
             (String(localized: "Translating…"), f)
         case .downloadingSpeakerModel(let f):
