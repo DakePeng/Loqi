@@ -706,9 +706,14 @@ final class CaptionPipeline {
     private func endSession() async {
         guard phase != .idle else { return }
         await endTurn()
-        // In-flight re-translations of cleaned sentences are best-effort:
-        // cancel them so the archive below snapshots a store no task will
-        // mutate afterwards.
+        // Cancel BOTH stages of live cleanup so the archive below snapshots
+        // a store no task will mutate afterwards: the RefinementQueue's
+        // own generations (a queued/in-flight cleanup would otherwise
+        // apply to the store AFTER the snapshot, so the saved record kept
+        // raw text the screen had already upgraded) AND their downstream
+        // re-translations. Instant Stop by design — the post-hoc
+        // summarize/re-transcribe re-cleans everything anyway.
+        await refinement?.cancelAll()
         for task in refinementTranslateTasks.values { task.cancel() }
         refinementTranslateTasks.removeAll()
         phase = .idle

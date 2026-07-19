@@ -185,6 +185,15 @@ struct PipelineResourceTests {
             .retranscribing(.cleaningUpTranscript(0))))
         #expect(SummaryJobCenter.shouldSuspendForBackground(
             .importing(.transcribing(0))))
+        // The parked-but-started states must suspend too — a .preparing job
+        // is mid-setup and a speaker download reaches the ANE/Metal; leaving
+        // either running in the background risks the process abort.
+        #expect(SummaryJobCenter.shouldSuspendForBackground(.preparing))
+        #expect(SummaryJobCenter.shouldSuspendForBackground(.downloadingSpeakerModel(0)))
+        // Already-parked states are NOT re-suspended (nothing to cancel).
+        #expect(!SummaryJobCenter.shouldSuspendForBackground(.queuedRetranscribe))
+        #expect(!SummaryJobCenter.shouldSuspendForBackground(.pausedForRecording))
+        #expect(!SummaryJobCenter.shouldSuspendForBackground(.pausedForBackground))
     }
 
     @Test func recordingResumeLeavesLLMJobsPausedWhileBackgrounded() {
