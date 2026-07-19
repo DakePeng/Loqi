@@ -88,6 +88,12 @@ final class SummaryJobCenter {
     @ObservationIgnored private var activeRetranscribeRequest: [UUID: RetranscribeRequest] = [:]
     /// True while the scene is backgrounded; LLM-generation jobs must not run.
     @ObservationIgnored private var isBackgrounded = false
+    /// True while a BGProcessingTask window is running. It relaxes the
+    /// resume guards for the CPU ASR/diarization jobs ONLY (import,
+    /// re-transcribe, new-recording post-process) so a backgrounded decode
+    /// keeps advancing; the LLM cleanup/summary phases still park because
+    /// isBackgrounded stays true, so no Metal work runs in the background.
+    @ObservationIgnored private var backgroundProcessingActive = false
     /// The summarize params of a job currently in (or entering) its LLM phase,
     /// so backgrounding can cancel the in-flight generation and restart it on
     /// foreground. Covers both plain summarize and a re-transcribe's summary
@@ -352,6 +358,43 @@ final class SummaryJobCenter {
         guard value != isBackgrounded else { return }
         isBackgrounded = value
         if value { suspendBackgroundUnsafeJobs() } else { resumeBackgroundJobs() }
+    }
+
+    /// Is there CPU ASR/diarization work a background window could advance:
+    /// a checkpointed in-flight import, a queued/active re-transcribe, or a
+    /// pending new-recording post-process. The scheduler reads this on
+    /// background-enter to decide whether to submit a BGProcessingTask.
+    var hasResumableBackgroundASR: Bool {
+        let importPending = archive.sessions.contains {
+            $0.importing == true && $0.importCheckpoint != nil
+        }
+        let postProcessPending = archive.sessions.contains { $0.pendingPostProcess != nil }
+        let retranscribePending = !retranscribeQueue.isEmpty
+            || activities.values.contains { if case .retranscribing = $0 { true } else { false } }
+        return importPending || postProcessPending || retranscribePending
+    }
+
+    /// Run the CPU stages of any in-flight import/re-transcribe inside a
+    /// BGProcessingTask window. The scheduler cancels the surrounding task
+    /// (this call) when iOS reclaims the window; the per-segment checkpoints
+    /// mean an interrupted decode loses no audio, and the LLM cleanup/
+    /// summary phases park for foreground (isBackgrounded stays true).
+    func runBackgroundASRWindow() async {
+        guard isBackgrounded else { return }   // foreground handles it directly
+        backgroundProcessingActive = true
+        // Kick every ASR-first resume path — the relaxed guards let them run.
+        resumeUnfinishedImports()
+        resumePendingPostProcesses()
+        drainRetranscribeQueue()
+        // Hold the window: iOS bounds it and cancels us at expiration. The
+        // decode jobs advance and checkpoint meanwhile.
+        while !Task.isCancelled {
+            try? await Task.sleep(for: .seconds(2))
+        }
+        // Window over — stop the in-flight decodes the same way a normal
+        // background does (cancel + keep checkpoints), then clear the flag.
+        backgroundProcessingActive = false
+        suspendBackgroundUnsafeJobs()
     }
 
     nonisolated static func shouldSuspendForBackground(_ activity: Activity) -> Bool {
@@ -909,8 +952,8 @@ final class SummaryJobCenter {
             logger.info("retranscribe drain: worker already running")
             return
         }
-        guard !pausedForRecording, !isBackgrounded else {
-            logger.info("retranscribe drain held: pausedForRecording=\(self.pausedForRecording) backgrounded=\(self.isBackgrounded)")
+        guard !pausedForRecording, !isBackgrounded || backgroundProcessingActive else {
+            logger.info("retranscribe drain held: pausedForRecording=\(self.pausedForRecording) backgrounded=\(self.isBackgrounded) bgProcessing=\(self.backgroundProcessingActive)")
             return
         }
         // Snapshot the cancelled predecessors before the worker starts:
@@ -1192,12 +1235,21 @@ final class SummaryJobCenter {
     /// are skipped via the `tasks` check. Called after a cold launch
     /// (`SessionArchive.loadIfNeeded()` keeps resumable records instead of
     /// sweeping them) and after a recording that yielded one ends.
+    /// May an ASR-first job (import / re-transcribe / new-recording
+    /// post-process) resume now? Foreground always; backgrounded only
+    /// inside a BGProcessingTask window (the decode is CPU/sherpa, not
+    /// Metal, so it's safe there — the LLM phases park separately). Never
+    /// while a live recording owns the hardware.
+    private var asrResumeAllowed: Bool {
+        !isRecording() && (!isBackgrounded || backgroundProcessingActive)
+    }
+
     func resumeUnfinishedImports() {
         // The background guard lives HERE so every caller is safe:
         // resumeAfterRecording can fire while still backgrounded (recording
-        // stopped from the lock screen), and Metal-backed ASR must wait
-        // for handleForeground.
-        guard !isRecording(), !isBackgrounded else { return }
+        // stopped from the lock screen). ASR is CPU/sherpa, so a
+        // BGProcessing window may run it; a plain background may not.
+        guard asrResumeAllowed else { return }
         for session in archive.sessions
         where session.importing == true && tasks[session.id] == nil
             && activities[session.id] == nil {
@@ -1249,7 +1301,9 @@ final class SummaryJobCenter {
     func resumePendingPostProcesses() {
         guard archive.sessions.contains(where: { $0.pendingPostProcess != nil })
         else { return }
-        guard !isRecording(), !isBackgrounded else { return }
+        // ASR-first (re-transcribe of the recording), so a BGProcessing
+        // window may run it; the chained summary parks for foreground.
+        guard asrResumeAllowed else { return }
         for session in archive.sessions
         where session.pendingPostProcess != nil && session.importing != true
             && !isBusy(session.id) {
@@ -1966,3 +2020,80 @@ final class SerialGate {
         waiters.remove(at: index).continuation.resume(throwing: CancellationError())
     }
 }
+
+#if os(iOS)
+import BackgroundTasks
+
+/// Keeps a backgrounded import / re-transcribe decoding ASR (and running
+/// sherpa diarization) in a `BGProcessingTask`, so a long CPU pass keeps
+/// advancing after the app leaves the foreground instead of only resuming
+/// on the next launch. The LLM cleanup/summary phases are Metal-bound and
+/// stay parked for foreground. iOS schedules the task on its own idle
+/// windows, so this is "finish while the phone is idle", not "keep going
+/// the instant you background".
+///
+/// Hosted here (not its own file) to avoid an xcodegen pbxproj change.
+@MainActor
+enum BackgroundProcessingScheduler {
+    /// MUST match `BGTaskSchedulerPermittedIdentifiers` in Info.plist, or
+    /// `register` crashes the app at launch.
+    static let taskIdentifier = "com.kunzhipeng.loqi.background-asr"
+    private static let logger = Logger(
+        subsystem: "com.kunzhipeng.loqi", category: "bgprocessing")
+    private static weak var jobs: SummaryJobCenter?
+
+    /// Call ONCE, before the app finishes launching (LoqiApp.init) — a
+    /// later register, or an identifier missing from the plist, crashes.
+    static func register(jobs: SummaryJobCenter) {
+        self.jobs = jobs
+        BGTaskScheduler.shared.register(
+            forTaskWithIdentifier: taskIdentifier, using: nil
+        ) { task in
+            // The handler is delivered on the main queue; hop to the actor.
+            guard let task = task as? BGProcessingTask else {
+                task.setTaskCompleted(success: false)
+                return
+            }
+            MainActor.assumeIsolated { run(task) }
+        }
+    }
+
+    /// Submit a request when backgrounding with resumable CPU work. Best
+    /// effort — a full queue or Simulator (no BG support) just no-ops.
+    static func scheduleIfNeeded(jobs: SummaryJobCenter) {
+        guard jobs.hasResumableBackgroundASR else { return }
+        let request = BGProcessingTaskRequest(identifier: taskIdentifier)
+        // On-device, no network; run on any idle window, not only charging
+        // — the decode's own thermal degradation + checkpointing keep it
+        // safe off-charger (see VADSegmentedTranscriber).
+        request.requiresExternalPower = false
+        request.requiresNetworkConnectivity = false
+        do {
+            try BGTaskScheduler.shared.submit(request)
+            logger.notice("bg-asr: scheduled")
+        } catch {
+            logger.error("bg-asr: schedule failed \(error.localizedDescription, privacy: .public)")
+        }
+    }
+
+    private static func run(_ task: BGProcessingTask) {
+        guard let jobs else { task.setTaskCompleted(success: false); return }
+        logger.notice("bg-asr: window started")
+        let work = Task { @MainActor in await jobs.runBackgroundASRWindow() }
+        // iOS calls this shortly before the window ends; cancelling stops
+        // the decode at its next segment boundary (checkpoint persisted).
+        task.expirationHandler = {
+            logger.notice("bg-asr: window expiring")
+            work.cancel()
+        }
+        Task { @MainActor in
+            await work.value
+            // Re-arm if the window ended with work still pending, so the
+            // next idle window continues it.
+            scheduleIfNeeded(jobs: jobs)
+            task.setTaskCompleted(success: true)
+            logger.notice("bg-asr: window done")
+        }
+    }
+}
+#endif

@@ -979,6 +979,12 @@ final class CaptionPipeline {
         // Imports/summaries resume from their checkpoints on foreground.
         forwardLLMSceneState(backgrounded: true)
         jobs.setBackgrounded(true)
+        // Ask iOS for a background window to keep decoding an in-flight
+        // import/re-transcribe (CPU ASR + sherpa diarization; the LLM
+        // phases stay parked). Best effort — iOS runs it when it chooses.
+        #if os(iOS)
+        BackgroundProcessingScheduler.scheduleIfNeeded(jobs: jobs)
+        #endif
         // Persistence is asynchronous and coalesced; land whatever's queued
         // before a background jetsam can drop it. The grace keeps iOS from
         // suspending the process mid-flush — without it this Task races

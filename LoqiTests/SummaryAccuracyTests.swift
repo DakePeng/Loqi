@@ -434,6 +434,34 @@ struct ImportResumeTests {
         #expect(!jobs.hasRunningLLMJob)
     }
 
+    @Test func backgroundASRSchedulingTracksInFlightImports() {
+        let hotwordDirectory = makeTempDirectory()
+        defer { try? FileManager.default.removeItem(at: hotwordDirectory) }
+        let archive = SessionArchive()
+        let jobs = SummaryJobCenter(
+            llm: LLMService(), archive: archive,
+            hotwords: HotwordStore(directory: hotwordDirectory),
+            translator: TranslationCoordinator(), voiceprint: VoiceprintService(),
+            isRecording: { false })
+        // Nothing to do → no background window worth scheduling.
+        #expect(!jobs.hasResumableBackgroundASR)
+
+        // An importing session WITHOUT a checkpoint can't be resumed yet.
+        var importing = SessionRecord(
+            mode: .captions, startedAt: .now, endedAt: .now, entries: [])
+        importing.importing = true
+        archive.add(importing)
+        #expect(!jobs.hasResumableBackgroundASR)
+
+        // With a checkpoint, the CPU decode can continue in the background.
+        importing.importCheckpoint = SessionRecord.ImportCheckpoint(
+            direction: LanguagePair(source: .english, target: .english),
+            speakerCount: -1, engine: "dolphin", sensitivityRaw: "balanced",
+            recordedAt: .now, duration: 60)
+        archive.update(importing)
+        #expect(jobs.hasResumableBackgroundASR)
+    }
+
     @Test func cancelClearsThePendingSummaryMarker() {
         let hotwordDirectory = makeTempDirectory()
         defer { try? FileManager.default.removeItem(at: hotwordDirectory) }

@@ -72,9 +72,15 @@ targets:
         NSSpeechRecognitionUsageDescription: "Loqi transcribes speech entirely on-device to show live translated captions."
         NSCameraUsageDescription: "Loqi uses the camera to attach photos of slides and whiteboards to a session. Images never leave your device."
         # A running session keeps capturing when the screen locks or the
-        # app backgrounds; LLM work pauses there (CaptionPipeline).
+        # app backgrounds; LLM work pauses there (CaptionPipeline). The
+        # `processing` mode + the permitted identifier below let a
+        # backgrounded import/re-transcribe keep decoding ASR (CPU) in a
+        # BGProcessingTask (BackgroundProcessingScheduler).
         UIBackgroundModes:
           - audio
+          - processing
+        BGTaskSchedulerPermittedIdentifiers:
+          - com.kunzhipeng.loqi.background-asr
         # Recording Live Activity (lock screen + Dynamic Island), rendered
         # by the LoqiWidgets extension.
         NSSupportsLiveActivities: true
