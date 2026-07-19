@@ -86,14 +86,21 @@ enum VADSegmentedTranscriber {
         state >= .critical
     }
 
-    /// How many decoders may run in parallel at `state`: the full pool when
-    /// cool, but ONE at `.serious` (and above) — fewer parallel ONNX
-    /// sessions is the main heat lever, and running one keeps the transcript
-    /// advancing instead of freezing. Pure for testing.
+    /// True while a BGProcessingTask window is decoding. Set on the main
+    /// actor by the job center around the window; read off-main here in the
+    /// dispatch loop, so it's a lock, not a plain var. Caps the pool to one
+    /// decoder in the background — gentler on battery and less likely to
+    /// trip iOS's background energy monitor than a full parallel decode.
+    static let backgroundWindowActive = OSAllocatedUnfairLock(initialState: false)
+
+    /// How many decoders may run in parallel: the full pool when cool and
+    /// foreground, but ONE at `.serious`+ (fewer parallel ONNX sessions is
+    /// the main heat lever) OR in a background window (battery/energy).
+    /// Pure for testing.
     static func thermalConcurrencyCap(
-        poolSize: Int, state: ProcessInfo.ThermalState
+        poolSize: Int, state: ProcessInfo.ThermalState, background: Bool
     ) -> Int {
-        state >= .serious ? 1 : max(1, poolSize)
+        (state >= .serious || background) ? 1 : max(1, poolSize)
     }
 
     /// How often a held decode re-checks the thermal state.
@@ -216,7 +223,8 @@ enum VADSegmentedTranscriber {
                 // down to the cap before taking a slot.
                 let cap = Self.thermalConcurrencyCap(
                     poolSize: decoders.count,
-                    state: ProcessInfo.processInfo.thermalState)
+                    state: ProcessInfo.processInfo.thermalState,
+                    background: Self.backgroundWindowActive.withLock { $0 })
                 while (decoders.count - free.count) >= cap { try await harvestOne() }
                 let slot = free.removeLast()
                 group.addTask {
@@ -279,6 +287,8 @@ enum VADSegmentedTranscriber {
     }
 
     static let maxDecoderPool = 1
+    /// Present for cross-platform reference; macOS has no sherpa decode.
+    static let backgroundWindowActive = OSAllocatedUnfairLock(initialState: false)
 
     static func timeRange(
         start: Int, n: Int, sampleRate: Int

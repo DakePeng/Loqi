@@ -286,20 +286,23 @@ struct ImportEngineTests {
         #expect(VADSegmentedTranscriber.shouldHoldForThermals(.critical))
     }
 
-    @Test func thermalConcurrencyDegradesAtSerious() {
-        // Cool → full pool; warm (.serious) → a single decoder so decode
-        // still progresses at lower heat instead of stalling.
+    @Test func thermalConcurrencyDegradesAtSeriousOrInBackground() {
+        // Cool + foreground → full pool.
         #expect(VADSegmentedTranscriber.thermalConcurrencyCap(
-            poolSize: 3, state: .nominal) == 3)
+            poolSize: 3, state: .nominal, background: false) == 3)
         #expect(VADSegmentedTranscriber.thermalConcurrencyCap(
-            poolSize: 3, state: .fair) == 3)
+            poolSize: 3, state: .fair, background: false) == 3)
+        // .serious → a single decoder even in the foreground.
         #expect(VADSegmentedTranscriber.thermalConcurrencyCap(
-            poolSize: 3, state: .serious) == 1)
+            poolSize: 3, state: .serious, background: false) == 1)
         #expect(VADSegmentedTranscriber.thermalConcurrencyCap(
-            poolSize: 3, state: .critical) == 1)
+            poolSize: 3, state: .critical, background: false) == 1)
+        // A background window caps to one decoder even when cool.
+        #expect(VADSegmentedTranscriber.thermalConcurrencyCap(
+            poolSize: 3, state: .nominal, background: true) == 1)
         // Never below one, even from a degenerate pool.
         #expect(VADSegmentedTranscriber.thermalConcurrencyCap(
-            poolSize: 0, state: .nominal) == 1)
+            poolSize: 0, state: .nominal, background: false) == 1)
     }
 
     @Test func cachedTextMatchesOnlyExactRange() {

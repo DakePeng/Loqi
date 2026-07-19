@@ -389,6 +389,11 @@ final class SummaryJobCenter {
     func runBackgroundASRWindow() async {
         guard isBackgrounded, !isRecording() else { return }
         backgroundProcessingActive = true
+        // Cap the decode to a single decoder for the window — gentler on
+        // battery/energy than a full parallel pass. The decode loop reads
+        // this off-main, so it's a lock; cleared below when the window ends
+        // (and the pool lifts back to full for the foreground continuation).
+        VADSegmentedTranscriber.backgroundWindowActive.withLock { $0 = true }
         // Un-pause the ASR-first jobs the background suspend parked, exactly
         // as resumeBackgroundJobs does on foreground — otherwise
         // resumeUnfinishedImports (which needs a nil badge) skips them and
@@ -411,6 +416,7 @@ final class SummaryJobCenter {
             try? await Task.sleep(for: .seconds(2))
         }
         backgroundProcessingActive = false
+        VADSegmentedTranscriber.backgroundWindowActive.withLock { $0 = false }
         // Only re-suspend if we're STILL backgrounded (OS expiry). If the
         // app foregrounded, resumeBackgroundJobs already owns these jobs —
         // suspending them here would cancel a foreground-running import.
