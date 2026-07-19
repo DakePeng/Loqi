@@ -41,16 +41,19 @@ struct OfflineTranscriptPolisherTests {
         #expect(!capturedUser.contains("Quen"))
         // Accepted cleanup, then pass 2 corrected the drift.
         #expect(output.texts == ["Qwen ships MLX models"])
-        // rawSourceText feed: the pre-cleanup (post-fixup-1) sentence.
-        #expect(output.originals == [0: "Qwen ships MLX"])
+        // rawSourceText feed: the true pre-fixup ASR ("Quen"), so the
+        // provenance survives all the way from what the recognizer heard.
+        #expect(output.originals == [0: "Quen ships MLX"])
     }
 
-    @Test func rejectedCleanupKeepsTheFixedSentence() async throws {
+    @Test func rejectedCleanupKeepsTheFixedSentenceAndRawOriginal() async throws {
         let output = try await polisher.polish(
             ["Quen ships MLX"], language: .english, runLLMCleanup: true,
             generate: { _, _, _ in "a totally unrelated reply about weather" })
         #expect(output.texts == ["Qwen ships MLX"])
-        #expect(output.originals.isEmpty)
+        // Cleanup was rejected, but fixup still changed the line, so the
+        // raw ASR is preserved as the original (was lost before).
+        #expect(output.originals == [0: "Quen ships MLX"])
     }
 
     @Test func unchangedAcceptedCleanupRecordsNoOriginal() async throws {
@@ -119,7 +122,9 @@ struct OfflineTranscriptPolisherTests {
         #expect(calls == 1)
         // Fixup-1 output survives; no cleanup applied anywhere.
         #expect(output.texts == ["Qwen line one", "Beta line two", "Gamma line three"])
-        #expect(output.originals.isEmpty)
+        // The one line fixup changed keeps its raw ASR original even though
+        // cleanup aborted before running (the codex-flagged loss).
+        #expect(output.originals == [0: "Quen line one"])
     }
 
     @Test func cancellationRethrows() async {

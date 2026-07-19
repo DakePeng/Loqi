@@ -258,6 +258,24 @@ struct ImportEngineTests {
             entriesHaveSpeakers: false, diarizerDownloaded: true, speakerCount: 0))
     }
 
+    /// An over-split Auto result is refused before it shreds the transcript
+    /// — the same bound the standalone retry applies, now shared so the
+    /// re-transcribe path can't diverge.
+    @Test func autoDiarizationRefusesImplausibleResults() {
+        func segments(_ count: Int) -> [SpeakerAttribution.Segment] {
+            (0..<count).map { .init(slot: $0, start: Double($0), end: Double($0) + 1) }
+        }
+        // Auto claiming more than the bound → refused.
+        #expect(SessionRetranscriber.isImplausibleAutoResult(
+            segments: segments(9), speakerCount: -1))
+        // Auto within the bound → accepted.
+        #expect(!SessionRetranscriber.isImplausibleAutoResult(
+            segments: segments(8), speakerCount: -1))
+        // A fixed count the user asked for is never second-guessed.
+        #expect(!SessionRetranscriber.isImplausibleAutoResult(
+            segments: segments(20), speakerCount: 4))
+    }
+
     @Test func thermalHoldTriggersAtSeriousAndAbove() {
         // Below .serious the batch pass runs; at .serious+ it holds so the
         // SoC cools instead of grinding through OS throttling.

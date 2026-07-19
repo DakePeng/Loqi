@@ -728,12 +728,6 @@ final class SummaryJobCenter {
     /// action for sessions that never got labels or need a re-cluster.
     /// Tapping is implied download consent — the offline diarizer is tens
     /// of MB, not the multi-GB LLM.
-    /// Auto results claiming more speakers than a real meeting are
-    /// clustering failures — applying them would shred the transcript
-    /// into dozens of phantom voices. Phone recordings realistically top
-    /// out well under this.
-    nonisolated static let maxPlausibleAutoSpeakers = 8
-
     func retryDiarization(sessionID: UUID, speakerCount: Int? = nil) {
         guard !isRecording(), !isBusy(sessionID),
               let session = archive.sessions.first(where: { $0.id == sessionID }),
@@ -782,10 +776,11 @@ final class SummaryJobCenter {
                 else { return }
                 // Refuse an implausible Auto result instead of shredding
                 // the transcript into dozens of phantom voices — the user
-                // can set an exact count and rerun.
-                let distinctSpeakers = Set(segments.map(\.slot)).count
-                if speakerCount == -1, distinctSpeakers > Self.maxPlausibleAutoSpeakers {
-                    logger.warning("diarize rejected result: \(distinctSpeakers) auto speakers")
+                // can set an exact count and rerun. Same bound the
+                // re-transcribe path applies (SessionRetranscriber).
+                if SessionRetranscriber.isImplausibleAutoResult(
+                    segments: segments, speakerCount: speakerCount) {
+                    logger.warning("diarize rejected result: \(Set(segments.map(\.slot)).count) auto speakers")
                     errors[sessionID] = String(localized:
                         "Too many speakers were detected. Set an exact speaker count and try again.")
                     return
@@ -858,7 +853,7 @@ final class SummaryJobCenter {
         // checkpoint makes that restart cheap.
         markPendingPostProcess(
             sessionID: sessionID, style: style, length: length,
-            suggestVocabulary: suggestVocabulary)
+            suggestVocabulary: suggestVocabulary, allowDownload: allowDownload)
 
         errors[sessionID] = nil
         activities[sessionID] = .queuedRetranscribe
@@ -1269,18 +1264,19 @@ final class SummaryJobCenter {
             logger.info("pending accuracy pass: starting \(session.id, privacy: .public)")
             postProcessAndSummarizeNewSession(
                 sessionID: session.id, style: style, length: length,
+                allowDownload: pending.allowDownload ?? false,
                 suggestVocabulary: pending.suggestVocabulary ?? false)
         }
     }
 
     private func markPendingPostProcess(
         sessionID: UUID, style: SummaryStyle, length: SummaryLength,
-        suggestVocabulary: Bool
+        suggestVocabulary: Bool, allowDownload: Bool
     ) {
         guard var record = archive.sessions.first(where: { $0.id == sessionID }) else { return }
         record.pendingPostProcess = SessionRecord.PendingPostProcess(
             styleRaw: style.rawValue, lengthRaw: length.rawValue,
-            suggestVocabulary: suggestVocabulary)
+            suggestVocabulary: suggestVocabulary, allowDownload: allowDownload)
         archive.update(record)
     }
 

@@ -102,9 +102,15 @@ struct OfflineTranscriptPolisher {
         onProgress: (Double) -> Void = { _ in }
     ) async throws -> Output {
         let fixed = texts.map { fixup($0, language: language) }
-        guard runLLMCleanup, !fixed.isEmpty else { return Output(texts: fixed) }
-
         var output = Output(texts: fixed)
+        // Preserve the true pre-fixup ASR as the original wherever the
+        // deterministic hotword fixup already changed a line — it must
+        // survive even when LLM cleanup is skipped (AI off), aborted
+        // (missing weights / low memory), or leaves the sentence
+        // unchanged. Cleanup below may edit the text further, but the
+        // original stays the raw ASR.
+        for i in fixed.indices where fixed[i] != texts[i] { output.originals[i] = texts[i] }
+        guard runLLMCleanup, !fixed.isEmpty else { return output }
         // Outcome tally for the summary line below — the one number that
         // says whether the cleanup pass is earning its keep.
         var cleaned = 0, unchanged = 0, failed = 0
@@ -129,7 +135,12 @@ struct OfflineTranscriptPolisher {
                     let final = fixup(text, language: language)
                     if final != sentence {
                         output.texts[index] = final
-                        output.originals[index] = sentence
+                        // Keep the raw ASR if the pre-guard pass already
+                        // captured it (fixup changed this line); otherwise
+                        // `sentence` IS the raw text (fixup left it alone).
+                        if output.originals[index] == nil {
+                            output.originals[index] = sentence
+                        }
                     }
                 case .unchanged:
                     unchanged += 1   // the model found no errors

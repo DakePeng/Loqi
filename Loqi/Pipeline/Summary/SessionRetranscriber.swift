@@ -235,6 +235,19 @@ struct SessionRetranscriber {
             && VoiceprintService.separationEnabled(forPickerValue: speakerCount)
     }
 
+    /// The largest number of distinct voices an Auto (count == -1) result
+    /// is allowed to claim before we refuse it — an over-split Auto pass
+    /// shreds the transcript into phantom speakers. Shared with the
+    /// standalone retry so the two paths can't drift. Pure for testing.
+    nonisolated static let maxPlausibleAutoSpeakers = 8
+
+    nonisolated static func isImplausibleAutoResult(
+        segments: [SpeakerAttribution.Segment], speakerCount: Int
+    ) -> Bool {
+        speakerCount == -1
+            && Set(segments.map(\.slot)).count > maxPlausibleAutoSpeakers
+    }
+
     /// Diarize `updated`'s saved audio and stamp the slots onto its
     /// entries. Best-effort: success clears `speakerSeparationFailed` and
     /// the caches anchored to the old labels; failure sets the flag (the
@@ -264,6 +277,15 @@ struct SessionRetranscriber {
                         onPhase(.identifyingSpeakers(fraction))
                     }
                 }
+            }
+            // Refuse an over-split Auto result instead of shredding the
+            // transcript into phantom voices — mirrors the standalone
+            // retry. The transcript stands; the flag drives the Retry UI.
+            guard !Self.isImplausibleAutoResult(
+                segments: segments, speakerCount: speakerCount) else {
+                updated.speakerSeparationFailed = true
+                logger.warning("diarize rejected result: \(Set(segments.map(\.slot)).count) auto speakers")
+                return
             }
             Self.applyDiarizationSegments(segments, to: &updated)
             updated.speakerSeparationFailed = nil

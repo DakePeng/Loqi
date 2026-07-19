@@ -263,6 +263,11 @@ struct SessionRecord: Identifiable, Codable, Sendable {
         var styleRaw: String
         var lengthRaw: String
         var suggestVocabulary: Bool?
+        /// Download consent the user gave — a resume after a kill during
+        /// the ASR/diarization part (before the summary's own marker
+        /// records it) must keep pulling the approved weights, not fail
+        /// with "model not downloaded". Optional: legacy markers = nil.
+        var allowDownload: Bool?
     }
     /// True when speaker separation was requested for this session but the
     /// diarizer failed (model download or analysis) — the transcript is
