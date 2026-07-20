@@ -1250,8 +1250,10 @@ struct SessionDetailView: View {
                     limit: budget)
                 let raw = try await pipeline.llm.generate(
                     system: prompt.system, user: prompt.user, maxTokens: 200)
-                suggestions = builder.parseHotwordSuggestions(
+                let parsed = builder.parseHotwordSuggestions(
                     raw, limit: budget, targetLanguage: direction?.target)
+                suggestions = builder.vetTranscriptSuggestions(
+                    parsed, transcript: transcript, sourceLanguage: direction?.source)
                     .filter { !pipeline.hotwords.isKnown($0.term) }
                 if suggestions.isEmpty {
                     actionError = String(localized: "No new terms found.")

@@ -1,4 +1,5 @@
 import Foundation
+import NaturalLanguage
 
 /// Builds the live LLM prompts. During recording the LLM *cleans the
 /// source sentence* (Apple's Translation framework does all translating);
@@ -1248,6 +1249,7 @@ struct PromptBuilder: Sendable {
         everyday words, famous names, brands and places every recognizer \
         already knows, numbers, and anything longer than a few words. \
         \(renderingClause)\
+        Copy each term exactly as it appears in the transcript. \
         Fewer is better — if nothing qualifies, output nothing. \
         Output at most \(limit) lines, each exactly: \
         source term | target rendering or blank | short note (e.g. person name). \
@@ -1317,6 +1319,71 @@ struct PromptBuilder: Sendable {
                     term: term, renderings: renderings, note: note)
             }
         return Array(parsed.prefix(limit))
+    }
+
+    /// Objective gate for transcript-mined suggestions. The prompt asks for
+    /// recognition-hard terms only, but small models fill the quota with
+    /// everyday words and one-off ASR garbles anyway — so enforce it here,
+    /// the same way the parser enforces the count. Keep a term only if it
+    ///   1. recurs in the transcript — a string the recognizer emitted once
+    ///      is more likely a mis-transcription than vocabulary, and
+    ///   2. has at least one word outside the system word-embedding lexicon
+    ///      — a term made only of common words is one any recognizer
+    ///      already gets right.
+    /// Not applied to summary-edit mining: text the user typed is ground
+    /// truth and needn't appear in the (possibly garbled) transcript.
+    func vetTranscriptSuggestions(
+        _ suggestions: [HotwordSuggestion],
+        transcript: String,
+        sourceLanguage: AppLanguage?
+    ) -> [HotwordSuggestion] {
+        suggestions.filter {
+            // ponytail: fixed thresholds; tune only if real sessions demand it
+            Self.occurrenceCount(of: $0.term, in: transcript) >= 2
+                && Self.hasWordOutsideLexicon($0.term, source: sourceLanguage)
+        }
+    }
+
+    /// Count of standalone occurrences, case-insensitive. Latin terms bind
+    /// to word boundaries so "ai" can't count inside "said"; CJK terms
+    /// match as substrings — their neighbors are letters by nature.
+    static func occurrenceCount(of term: String, in transcript: String) -> Int {
+        let escaped = NSRegularExpression.escapedPattern(for: term)
+        // NSRegularExpression, not Swift Regex: the boundary needs
+        // lookbehind, which the Swift engine doesn't support.
+        let pattern = term.contains(where: \.isCJK)
+            ? escaped
+            : "(?<!\\p{L})\(escaped)(?!\\p{L})"
+        guard let regex = try? NSRegularExpression(
+            pattern: pattern, options: .caseInsensitive) else { return 0 }
+        return regex.numberOfMatches(
+            in: transcript,
+            range: NSRange(transcript.startIndex..., in: transcript))
+    }
+
+    /// True when at least one word of `term` is absent from the system word
+    /// embedding for its script — a cheap proxy for "outside a recognizer's
+    /// lexicon". Languages without a word embedding (ja/ko) have no lexicon
+    /// to judge with, so every term passes; the recurrence gate still holds.
+    private static func hasWordOutsideLexicon(
+        _ term: String, source: AppLanguage?
+    ) -> Bool {
+        let tokenizer = NLTokenizer(unit: .word)
+        tokenizer.string = term
+        var verdict = false
+        tokenizer.enumerateTokens(in: term.startIndex..<term.endIndex) { range, _ in
+            let token = String(term[range]).lowercased()
+            let language: NLLanguage = token.contains(where: \.isCJK)
+                ? (source == .japanese ? .japanese : .simplifiedChinese)
+                : .english
+            guard let lexicon = NLEmbedding.wordEmbedding(for: language),
+                  lexicon.contains(token) else {
+                verdict = true
+                return false
+            }
+            return true
+        }
+        return verdict
     }
 
     /// Q&A over one saved session ("chat with a session"). The context —

@@ -1,3 +1,4 @@
+import NaturalLanguage
 import Testing
 @testable import Loqi
 
@@ -254,6 +255,35 @@ struct PromptBuilderTests {
         #expect(prompt.system.contains("Chinese"))
         #expect(prompt.system.contains("English"))
         #expect(prompt.system.contains("source term | target rendering or blank | short note"))
+    }
+
+    @Test func vetKeepsRecurringRareTermsOnly() {
+        let transcript = """
+        We synced with Xyloq about the rollout. Xyloq wants weekly updates. \
+        The quarterly meeting covered the rollout, and the quarterly meeting \
+        notes went out.
+        """
+        let vetted = builder.vetTranscriptSuggestions(
+            [
+                HotwordSuggestion(term: "Xyloq"),             // rare, recurs → keep
+                HotwordSuggestion(term: "quarterly meeting"), // common words → drop
+                HotwordSuggestion(term: "rollout"),           // common word → drop
+                HotwordSuggestion(term: "Glorp"),             // hallucinated → drop
+            ],
+            transcript: transcript, sourceLanguage: .english)
+        #expect(vetted.map(\.term).contains("Xyloq"))
+        #expect(!vetted.map(\.term).contains("Glorp"))
+        // Lexicon judgments need the on-device word embedding.
+        if NLEmbedding.wordEmbedding(for: .english) != nil {
+            #expect(vetted.map(\.term) == ["Xyloq"])
+        }
+    }
+
+    @Test func occurrenceCountBindsLatinToWordBoundaries() {
+        #expect(PromptBuilder.occurrenceCount(of: "ai", in: "he said rain again") == 0)
+        #expect(PromptBuilder.occurrenceCount(of: "AI", in: "AI is ai.") == 2)
+        // CJK counts as substring — neighbors are letters by nature.
+        #expect(PromptBuilder.occurrenceCount(of: "供应链", in: "今天讲供应链，供应链很重要") == 2)
     }
 
     @Test func qaPromptNamesLanguageAndCarriesQuestion() {

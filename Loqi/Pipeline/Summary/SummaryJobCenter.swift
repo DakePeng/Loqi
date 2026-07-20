@@ -1885,8 +1885,10 @@ final class SummaryJobCenter {
             limit: budget)
         guard let raw = try? await llm.generate(
             system: prompt.system, user: prompt.user, maxTokens: 200) else { return }
-        let suggestions = builder.parseHotwordSuggestions(
+        let parsed = builder.parseHotwordSuggestions(
             raw, limit: budget, targetLanguage: direction?.target)
+        let suggestions = builder.vetTranscriptSuggestions(
+            parsed, transcript: transcript, sourceLanguage: direction?.source)
             .filter { !hotwords.isKnown($0.term) }
         hotwords.enqueueSuggestions(
             suggestions, sessionID: record.id, sessionTitle: record.title)
